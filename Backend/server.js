@@ -1519,83 +1519,180 @@ app.get('/api/auth/verify', authenticateToken, async (req, res) => {
 // ENDPOINTS BLOG
 // ============================================
 
-// Obtenir tous les articles
+// Obtenir tous les articles publiés
 app.get('/api/blog/posts', async (req, res) => {
-  try {
-    const posts = await query(`
-      SELECT * FROM blog_posts 
-      ORDER BY created_at DESC
-    `)
-    res.json(posts || [])
-  } catch (error) {
-    console.error('Erreur récupération articles:', error)
-    res.json([])
-  }
+    const { limit = 12, offset = 0, category, search } = req.query
+    
+    try {
+        let sql = `
+            SELECT bp.*, u.fullname as author_fullname
+            FROM blog_posts bp
+            LEFT JOIN users u ON bp.author_id = u.id
+            WHERE bp.status = 'published'
+        `
+        const params = []
+        
+        if (category && category !== 'all') {
+            sql += ' AND bp.category = ?'
+            params.push(category)
+        }
+        
+        if (search) {
+            sql += ' AND (bp.title LIKE ? OR bp.content LIKE ? OR bp.excerpt LIKE ?)'
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`)
+        }
+        
+        sql += ' ORDER BY bp.published_at DESC LIMIT ? OFFSET ?'
+        params.push(parseInt(limit), parseInt(offset))
+        
+        const posts = await query(sql, params)
+        
+        // Compter le total
+        let countSql = 'SELECT COUNT(*) as total FROM blog_posts WHERE status = "published"'
+        const countParams = []
+        
+        if (category && category !== 'all') {
+            countSql += ' AND category = ?'
+            countParams.push(category)
+        }
+        
+        if (search) {
+            countSql += ' AND (title LIKE ? OR content LIKE ? OR excerpt LIKE ?)'
+            countParams.push(`%${search}%`, `%${search}%`, `%${search}%`)
+        }
+        
+        const total = await get(countSql, countParams)
+        
+        res.json({
+            posts,
+            total: total.total,
+            limit: parseInt(limit),
+            offset: parseInt(offset)
+        })
+    } catch (error) {
+        console.error('Erreur chargement articles:', error)
+        res.status(500).json({ error: 'Erreur lors du chargement des articles' })
+    }
 })
 
-// Obtenir un article par ID
-app.get('/api/blog/posts/:id', async (req, res) => {
-  const { id } = req.params
-  try {
-    const post = await get('SELECT * FROM blog_posts WHERE id = ?', [id])
-    if (!post) {
-      return res.status(404).json({ error: 'Article non trouvé' })
+// Obtenir un article par son slug
+app.get('/api/blog/posts/:slug', async (req, res) => {
+    const { slug } = req.params
+    
+    try {
+        const post = await get(`
+            SELECT bp.*, u.fullname as author_fullname
+            FROM blog_posts bp
+            LEFT JOIN users u ON bp.author_id = u.id
+            WHERE bp.slug = ? AND bp.status = 'published'
+        `, [slug])
+        
+        if (!post) {
+            return res.status(404).json({ error: 'Article non trouvé' })
+        }
+        
+        // Incrémenter le compteur de vues
+        await run('UPDATE blog_posts SET views = views + 1 WHERE id = ?', [post.id])
+        
+        res.json(post)
+    } catch (error) {
+        console.error('Erreur chargement article:', error)
+        res.status(500).json({ error: 'Erreur lors du chargement de l\'article' })
     }
-    res.json(post)
-  } catch (error) {
-    res.status(500).json({ error: 'Erreur lors de la récupération' })
-  }
 })
 
 // Créer un article (admin uniquement)
 app.post('/api/blog/posts', authenticateToken, requireAdmin, async (req, res) => {
-  const { title, excerpt, content, category, tags, image, published } = req.body
-  
-  try {
-    const result = await run(`
-      INSERT INTO blog_posts (title, excerpt, content, category, tags, image, published, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [title, excerpt, content, category, JSON.stringify(tags), image, published ? 1 : 0, req.user.userId])
+    const { title, content, excerpt, category, tags, image_url, status } = req.body
     
-    res.status(201).json({ id: result.lastID, success: true })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ error: 'Erreur lors de la création' })
-  }
+    if (!title || !content) {
+        return res.status(400).json({ error: 'Titre et contenu requis' })
+    }
+    
+    try {
+        // Générer le slug
+        const slug = title
+            .toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+        
+        // Vérifier si le slug existe déjà
+        const existing = await get('SELECT id FROM blog_posts WHERE slug = ?', [slug])
+        if (existing) {
+            slug = `${slug}-${Date.now()}`
+        }
+        
+        const author = await get('SELECT fullname FROM users WHERE id = ?', [req.user.userId])
+        
+        const result = await run(`
+            INSERT INTO blog_posts 
+            (title, slug, content, excerpt, category, tags, image_url, author_id, author_name, status, published_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+            title, slug, content, excerpt || content.substring(0, 200),
+            category || 'actualite', tags || null, image_url || null,
+            req.user.userId, author.fullname, status || 'published',
+            status === 'published' ? new Date().toISOString() : null
+        ])
+        
+        res.status(201).json({
+            success: true,
+            post: { id: result.lastID, slug }
+        })
+    } catch (error) {
+        console.error('Erreur création article:', error)
+        res.status(500).json({ error: 'Erreur lors de la création de l\'article' })
+    }
 })
 
-// Modifier un article (admin uniquement)
+// Mettre à jour un article (admin uniquement)
 app.put('/api/blog/posts/:id', authenticateToken, requireAdmin, async (req, res) => {
-  const { id } = req.params
-  const { title, excerpt, content, category, tags, image, published } = req.body
-  
-  try {
-    await run(`
-      UPDATE blog_posts 
-      SET title = ?, excerpt = ?, content = ?, category = ?, tags = ?, image = ?, published = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [title, excerpt, content, category, JSON.stringify(tags), image, published ? 1 : 0, id])
+    const { id } = req.params
+    const { title, content, excerpt, category, tags, image_url, status } = req.body
     
-    res.json({ success: true })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ error: 'Erreur lors de la modification' })
-  }
+    try {
+        await run(`
+            UPDATE blog_posts 
+            SET title = ?, content = ?, excerpt = ?, category = ?, 
+                tags = ?, image_url = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [title, content, excerpt, category, tags, image_url, status, id])
+        
+        res.json({ success: true })
+    } catch (error) {
+        console.error('Erreur mise à jour article:', error)
+        res.status(500).json({ error: 'Erreur lors de la mise à jour' })
+    }
 })
 
 // Supprimer un article (admin uniquement)
 app.delete('/api/blog/posts/:id', authenticateToken, requireAdmin, async (req, res) => {
-  const { id } = req.params
-  
-  try {
-    await run('DELETE FROM blog_posts WHERE id = ?', [id])
-    res.json({ success: true })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ error: 'Erreur lors de la suppression' })
-  }
+    const { id } = req.params
+    
+    try {
+        await run('DELETE FROM blog_posts WHERE id = ?', [id])
+        res.json({ success: true })
+    } catch (error) {
+        console.error('Erreur suppression article:', error)
+        res.status(500).json({ error: 'Erreur lors de la suppression' })
+    }
 })
 
+// Obtenir les catégories
+app.get('/api/blog/categories', async (req, res) => {
+    try {
+        const categories = await query(`
+            SELECT category, COUNT(*) as count 
+            FROM blog_posts 
+            WHERE status = 'published'
+            GROUP BY category
+        `)
+        res.json(categories)
+    } catch (error) {
+        res.status(500).json({ error: 'Erreur lors du chargement des catégories' })
+    }
+})
 // ============================================
 // DÉMARRAGE DU SERVEUR
 // ============================================

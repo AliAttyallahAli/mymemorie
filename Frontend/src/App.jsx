@@ -26,6 +26,7 @@ import FAQ from './pages/FAQ'
 import Blog from './pages/Blog'
 import Agents from './pages/Agents'
 import Licenses from './pages/Licenses'
+import BlogPost from './pages/BlogPost'
 
 
 
@@ -141,6 +142,8 @@ function App() {
         <Route path="/licenses" element={<Licenses user={user} />} />
         
         <Route element={<PrivateRoute user={user} />}>
+          <Route path="/blog" element={<Blog user={user} />} />
+          <Route path="/blog/:slug" element={<BlogPost user={user} />} />
           <Route path="/dashboard" element={<Dashboard user={user} socket={socket} />} />
           <Route path="/transfer" element={<Transfer user={user} />} />
           <Route path="/history" element={<History user={user} />} />

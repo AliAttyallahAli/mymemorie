@@ -133,23 +133,28 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS blog_posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
     excerpt TEXT,
     content TEXT NOT NULL,
-    category TEXT,
+    category TEXT DEFAULT 'actualite',
     tags TEXT,
-    image TEXT,
-    published INTEGER DEFAULT 1,
+    image_url TEXT,
+    author_id INTEGER,
+    author_name TEXT,
+    status TEXT DEFAULT 'published' CHECK(status IN ('draft', 'published', 'archived')),
     views INTEGER DEFAULT 0,
-    created_by INTEGER,
+    likes INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES users(id)
+    published_at DATETIME,
+    FOREIGN KEY (author_id) REFERENCES users(id)
 );
 
--- Index pour le blog
-CREATE INDEX IF NOT EXISTS idx_blog_posts_published ON blog_posts(published);
-CREATE INDEX IF NOT EXISTS idx_blog_posts_category ON blog_posts(category);
-CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at ON blog_posts(created_at);
+-- Index pour les performances
+CREATE INDEX idx_blog_posts_slug ON blog_posts(slug);
+CREATE INDEX idx_blog_posts_status ON blog_posts(status);
+CREATE INDEX idx_blog_posts_created_at ON blog_posts(created_at);
+CREATE INDEX idx_blog_posts_category ON blog_posts(category);
 -- ============================================
 -- INDEXES pour performances
 -- ============================================

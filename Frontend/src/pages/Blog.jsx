@@ -1,91 +1,82 @@
 // src/pages/Blog.jsx
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import axios from 'axios'
 import { 
-  FaNewspaper, FaCalendarAlt, FaUser, FaTag, FaSearch,
-  FaArrowRight, FaShare, FaHeart, FaComment
+  FaNewspaper, FaSearch, FaCalendarAlt, FaUser, 
+  FaTag, FaEye, FaHeart, FaShare, FaArrowRight,
+  FaSpinner, FaFilter
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
+import BlogPostCard from '../components/BlogPostCard'
 
 function Blog({ user }) {
+  const [posts, setPosts] = useState([])
+  const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [selectedTag, setSelectedTag] = useState('all')
+  const [selectedCategory, setSelectedCategory] = useState('all')
+  const [categories, setCategories] = useState([])
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalPosts, setTotalPosts] = useState(0)
+  const postsPerPage = 9
 
-  const posts = [
-    {
-      id: 1,
-      title: 'Comment envoyer de l\'argent avec CashPays',
-      excerpt: 'Découvrez comment envoyer de l\'argent en quelques secondes avec CashPays...',
-      date: '2026-04-15',
-      author: 'Jean NDOUMBE',
-      category: 'Tutoriel',
-      tags: ['transfert', 'tutoriel'],
-      image: 'https://placehold.co/600x400/1e3a8a/white?text=CashPays',
-      readTime: '3 min'
-    },
-    {
-      id: 2,
-      title: 'Les avantages de devenir agent CashPays',
-      excerpt: 'Rejoignez notre réseau d\'agents et développez votre activité...',
-      date: '2026-04-10',
-      author: 'Marie MBALLA',
-      category: 'Opportunité',
-      tags: ['agent', 'carrière'],
-      image: 'https://placehold.co/600x400/1e3a8a/white?text=Agent',
-      readTime: '5 min'
-    },
-    {
-      id: 3,
-      title: 'Sécurité des transactions : tout ce qu\'il faut savoir',
-      excerpt: 'CashPays protège vos transactions avec un chiffrement de bout en bout...',
-      date: '2026-04-05',
-      author: 'Pierre MADJI',
-      category: 'Sécurité',
-      tags: ['sécurité', 'protection'],
-      image: 'https://placehold.co/600x400/1e3a8a/white?text=Security',
-      readTime: '4 min'
-    },
-    {
-      id: 4,
-      title: '1000 FCFA offerts à l\'inscription',
-      excerpt: 'Créez votre compte CashPays et recevez 1000 FCFA gratuitement...',
-      date: '2026-04-01',
-      author: 'Admin CashPays',
-      category: 'Promotion',
-      tags: ['promo', 'bonus'],
-      image: 'https://placehold.co/600x400/1e3a8a/white?text=Bonus',
-      readTime: '2 min'
-    },
-    {
-      id: 5,
-      title: 'CashPays s\'étend dans les 23 provinces',
-      excerpt: 'Notre réseau d\'agents couvre désormais tout le territoire tchadien...',
-      date: '2026-03-25',
-      author: 'Aïssa MAHAMAT',
-      category: 'Actualité',
-      tags: ['expansion', 'actualité'],
-      image: 'https://placehold.co/600x400/1e3a8a/white?text=Tchad',
-      readTime: '3 min'
+  useEffect(() => {
+    fetchPosts()
+    fetchCategories()
+  }, [currentPage, selectedCategory, searchTerm])
+
+  const fetchPosts = async () => {
+    setLoading(true)
+    try {
+      const params = {
+        limit: postsPerPage,
+        offset: (currentPage - 1) * postsPerPage
+      }
+      
+      if (selectedCategory !== 'all') {
+        params.category = selectedCategory
+      }
+      
+      if (searchTerm) {
+        params.search = searchTerm
+      }
+      
+      const response = await axios.get('/api/blog/posts', { params })
+      setPosts(response.data.posts || [])
+      setTotalPages(Math.ceil(response.data.total / postsPerPage))
+      setTotalPosts(response.data.total)
+    } catch (error) {
+      console.error('Erreur chargement articles:', error)
+      setPosts([])
+    } finally {
+      setLoading(false)
     }
-  ]
-
-  const categories = ['Tous', 'Tutoriel', 'Actualité', 'Sécurité', 'Promotion', 'Opportunité']
-  const tags = ['transfert', 'tutoriel', 'agent', 'carrière', 'sécurité', 'protection', 'promo', 'bonus', 'expansion', 'actualité']
-
-  const filteredPosts = posts.filter(post => {
-    const matchesSearch = post.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          post.excerpt.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesTag = selectedTag === 'all' || post.tags.includes(selectedTag)
-    return matchesSearch && matchesTag
-  })
-
-  const formatDate = (date) => {
-    return new Date(date).toLocaleDateString('fr-FR', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric'
-    })
   }
+
+  const fetchCategories = async () => {
+    try {
+      const response = await axios.get('/api/blog/categories')
+      setCategories(response.data || [])
+    } catch (error) {
+      console.error('Erreur chargement catégories:', error)
+    }
+  }
+
+  const handleSearch = (e) => {
+    e.preventDefault()
+    setCurrentPage(1)
+    fetchPosts()
+  }
+
+  const categoriesList = [
+    { name: 'Tous', value: 'all', count: totalPosts },
+    { name: 'Tutoriels', value: 'tutoriel', icon: '📚' },
+    { name: 'Actualités', value: 'actualite', icon: '📰' },
+    { name: 'Sécurité', value: 'securite', icon: '🔒' },
+    { name: 'Promotions', value: 'promotion', icon: '🎉' },
+    { name: 'Opportunités', value: 'opportunite', icon: '💼' }
+  ]
 
   return (
     <Layout user={user}>
@@ -98,13 +89,13 @@ function Blog({ user }) {
           Blog CashPays
         </h1>
         <p className="text-white/60 max-w-2xl mx-auto">
-          Actualités, conseils et tutoriels sur CashPays
+          Actualités, conseils et tutoriels pour mieux utiliser CashPays
         </p>
       </div>
 
-      {/* Search and filters */}
-      <div className="flex flex-col md:flex-row gap-4 mb-8">
-        <div className="flex-1 relative">
+      {/* Search Bar */}
+      <form onSubmit={handleSearch} className="max-w-xl mx-auto mb-8">
+        <div className="relative">
           <FaSearch className="absolute left-4 top-1/2 transform -translate-y-1/2 text-white/40" />
           <input
             type="text"
@@ -113,92 +104,123 @@ function Blog({ user }) {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="input-field pl-10"
           />
+          <button type="submit" className="absolute right-2 top-1/2 transform -translate-y-1/2 btn-primary py-1 px-3 text-sm">
+            Rechercher
+          </button>
         </div>
-        <div className="flex gap-2 overflow-x-auto pb-2">
-          {tags.map(tag => (
-            <button
-              key={tag}
-              onClick={() => setSelectedTag(selectedTag === tag ? 'all' : tag)}
-              className={`px-3 py-1 rounded-full text-sm whitespace-nowrap transition-all ${
-                selectedTag === tag
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white/10 text-white/60 hover:bg-white/20'
-              }`}
-            >
-              {tag}
-            </button>
-          ))}
-        </div>
+      </form>
+
+      {/* Categories */}
+      <div className="flex flex-wrap gap-2 mb-8 justify-center">
+        {categoriesList.map(cat => (
+          <button
+            key={cat.value}
+            onClick={() => {
+              setSelectedCategory(cat.value)
+              setCurrentPage(1)
+            }}
+            className={`px-4 py-2 rounded-full text-sm transition-all ${
+              selectedCategory === cat.value
+                ? 'bg-blue-600 text-white'
+                : 'bg-white/10 text-white/70 hover:bg-white/20'
+            }`}
+          >
+            {cat.icon && <span className="mr-1">{cat.icon}</span>}
+            {cat.name}
+            {cat.count !== undefined && (
+              <span className="ml-1 text-xs opacity-70">({cat.count})</span>
+            )}
+          </button>
+        ))}
       </div>
 
-      {/* Blog posts */}
-      {filteredPosts.length === 0 ? (
+      {/* Articles count */}
+      <div className="mb-4">
+        <p className="text-white/50 text-sm">
+          {totalPosts} article{totalPosts > 1 ? 's' : ''} trouvé{totalPosts > 1 ? 's' : ''}
+        </p>
+      </div>
+
+      {/* Loading state */}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <FaSpinner className="text-white text-4xl animate-spin" />
+        </div>
+      ) : posts.length === 0 ? (
         <div className="text-center py-12">
+          <div className="text-white/20 text-5xl mb-3">📭</div>
           <p className="text-white/50">Aucun article trouvé</p>
+          {searchTerm && (
+            <button
+              onClick={() => {
+                setSearchTerm('')
+                setSelectedCategory('all')
+              }}
+              className="text-blue-400 text-sm mt-2"
+            >
+              Réinitialiser la recherche
+            </button>
+          )}
         </div>
       ) : (
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredPosts.map(post => (
-            <div key={post.id} className="card group hover:transform hover:-translate-y-2 transition-all duration-300 overflow-hidden">
-              <div className="relative h-48 overflow-hidden -m-6 mb-4">
-                <img
-                  src={post.image}
-                  alt={post.title}
-                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
-                />
-                <span className="absolute top-4 left-4 bg-blue-600 text-white text-xs px-2 py-1 rounded-full">
-                  {post.category}
-                </span>
+        <>
+          {/* Articles grid */}
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {posts.map((post) => (
+              <BlogPostCard key={post.id} post={post} />
+            ))}
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex justify-center gap-2 mt-8">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-4 py-2 rounded-lg bg-white/10 text-white disabled:opacity-50 hover:bg-white/20 transition-all"
+              >
+                ← Précédent
+              </button>
+              
+              <div className="flex gap-2">
+                {[...Array(totalPages)].map((_, i) => {
+                  const page = i + 1
+                  // Afficher un nombre limité de pages
+                  if (
+                    page === 1 ||
+                    page === totalPages ||
+                    (page >= currentPage - 1 && page <= currentPage + 1)
+                  ) {
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`w-10 h-10 rounded-lg transition-all ${
+                          currentPage === page
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white/10 text-white/60 hover:bg-white/20'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    )
+                  } else if (page === currentPage - 2 || page === currentPage + 2) {
+                    return <span key={page} className="text-white/40">...</span>
+                  }
+                  return null
+                })}
               </div>
               
-              <div className="p-4">
-                <div className="flex items-center gap-4 text-white/40 text-xs mb-3">
-                  <span className="flex items-center gap-1">
-                    <FaCalendarAlt size={10} /> {formatDate(post.date)}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <FaUser size={10} /> {post.author}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <FaNewspaper size={10} /> {post.readTime}
-                  </span>
-                </div>
-                
-                <h3 className="text-white font-bold text-lg mb-2 line-clamp-2">
-                  {post.title}
-                </h3>
-                <p className="text-white/60 text-sm mb-4 line-clamp-3">
-                  {post.excerpt}
-                </p>
-                
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {post.tags.map(tag => (
-                    <span key={tag} className="text-white/30 text-xs bg-white/5 px-2 py-1 rounded-full">
-                      #{tag}
-                    </span>
-                  ))}
-                </div>
-                
-                <div className="flex items-center justify-between pt-3 border-t border-white/10">
-                  <button className="text-blue-400 text-sm flex items-center gap-1 hover:gap-2 transition-all">
-                    Lire la suite <FaArrowRight size={12} />
-                  </button>
-                  <div className="flex gap-2">
-                    <button className="text-white/30 hover:text-red-400 transition-colors">
-                      <FaHeart size={14} />
-                    </button>
-                    <button className="text-white/30 hover:text-blue-400 transition-colors">
-                      <FaComment size={14} />
-                    </button>
-                    <button className="text-white/30 hover:text-green-400 transition-colors">
-                      <FaShare size={14} />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-4 py-2 rounded-lg bg-white/10 text-white disabled:opacity-50 hover:bg-white/20 transition-all"
+              >
+                Suivant →
+              </button>
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
 
       {/* Newsletter */}
