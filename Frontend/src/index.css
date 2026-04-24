@@ -1,0 +1,355 @@
+/* src/index.css - Version corrigée pour Tailwind CSS v4 */
+
+/* 1. Définition du thème et des couleurs personnalisées */
+@import "tailwindcss";
+
+@theme {
+  /* Définition de votre palette de couleurs "marine" */
+  --color-marine-50: #e6f0ff;
+  --color-marine-100: #b3d4ff;
+  --color-marine-200: #80b8ff;
+  --color-marine-300: #4d9cff;
+  --color-marine-400: #1a80ff;
+  --color-marine-500: #0A2F6C;
+  --color-marine-600: #082456;
+  --color-marine-700: #061a40;
+  --color-marine-800: #040f2a;
+  --color-marine-900: #020515;
+
+  /* Alias pour les couleurs de l'application */
+  --color-cashpays-primary: #0A2F6C;
+  --color-cashpays-secondary: #1A4A8B;
+  --color-cashpays-accent: #2E6EB5;
+
+  /* Définition des breakpoints si nécessaire (optionnel) */
+  --breakpoint-xs: 475px;
+  /* --breakpoint-sm: 640px; déjà présent par défaut */
+}
+
+/* 2. Vos styles de base et composants */
+@layer base {
+  body {
+    /* Utilisation des variables CSS que vous venez de définir */
+    background: linear-gradient(to bottom right, var(--color-marine-900), var(--color-marine-800), var(--color-marine-900));
+    min-height: 100vh;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  
+  /* ... vos autres styles de base ... */
+}
+
+@layer components {
+  .btn-primary {
+    /* Utilisation des variables CSS */
+    background: linear-gradient(to right, var(--color-marine-500), var(--color-marine-600));
+    color: white;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    transition: all 0.2s ease;
+  }
+  
+  .btn-primary:hover {
+    background: linear-gradient(to right, var(--color-marine-600), var(--color-marine-700));
+    transform: scale(1.02);
+  }
+  
+  /* ... le reste de vos composants ... */
+}
+
+@layer utilities {
+  .text-gradient {
+    /* Utilisation des variables CSS */
+    background: linear-gradient(to right, var(--color-marine-300), var(--color-marine-100));
+    background-clip: text;
+    color: transparent;
+  }
+  /* ... autres utilitaires ... */
+}
+/* src/index.css - Ajouter ces animations */
+@keyframes slide-left {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-left {
+  animation: slide-left 0.3s ease-out;
+}
+
+/* Scrollbar personnalisée pour les notifications */
+.overflow-y-auto::-webkit-scrollbar {
+  width: 4px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+}
+
+/* Desktop sidebar adjustment */
+@media (min-width: 768px) {
+  .ml-64 {
+    margin-left: 16rem;
+  }
+}
+:root {
+  --transition-theme: 0.3s ease;
+}
+
+/* Thème sombre (par défaut) */
+:root,
+.dark {
+  --bg-gradient-start: #0A2F6C;
+  --bg-gradient-mid: #1A3A6B;
+  --bg-gradient-end: #0A2F6C;
+  --card-bg: rgba(255, 255, 255, 0.1);
+  --card-bg-hover: rgba(255, 255, 255, 0.15);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.7);
+  --text-muted: rgba(255, 255, 255, 0.5);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --input-bg: rgba(255, 255, 255, 0.1);
+  --shadow-color: rgba(0, 0, 0, 0.3);
+}
+
+/* Thème clair */
+.light {
+  --bg-gradient-start: #f3f4f6;
+  --bg-gradient-mid: #e5e7eb;
+  --bg-gradient-end: #f9fafb;
+  --card-bg: #ffffff;
+  --card-bg-hover: #f9fafb;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --border-color: #e5e7eb;
+  --input-bg: #f9fafb;
+  --shadow-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Applications des variables */
+body {
+  background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-mid), var(--bg-gradient-end));
+  color: var(--text-primary);
+  transition: background var(--transition-theme), color var(--transition-theme);
+  font-family: 'Poppins', 'Roboto', sans-serif;
+  min-height: 100vh;
+}
+
+/* Scrollbar personnalisée */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+.light ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.light ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* Animations */
+@keyframes slide-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-left {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-slide-down {
+  animation: slide-down 0.3s ease-out;
+}
+
+.animate-slide-left {
+  animation: slide-left 0.3s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Classes utilitaires pour les thèmes */
+.theme-transition {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Card styling */
+.card {
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border-radius: 1rem;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 10px 15px -3px var(--shadow-color);
+  transition: all 0.2s ease;
+}
+
+.light .card {
+  backdrop-filter: none;
+  box-shadow: 0 1px 3px 0 var(--shadow-color);
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 25px -5px var(--shadow-color);
+}
+
+/* Input styling */
+.input-field {
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  width: 100%;
+  transition: all 0.2s ease;
+}
+
+.input-field:focus {
+  outline: none;
+  ring: 2px solid #3b82f6;
+  border-color: transparent;
+}
+
+.input-field::placeholder {
+  color: var(--text-muted);
+}
+
+/* Button styling */
+.btn-primary {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.btn-primary:hover {
+  transform: scale(1.02);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+.btn-secondary {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: var(--card-bg-hover);
+  color: var(--text-primary);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .card {
+    border-radius: 0.75rem;
+  }
+  
+  .btn-primary, .btn-secondary {
+    padding: 0.625rem 1.25rem;
+  }
+}
+/* Styles pour le scanner QR */
+#qr-reader-container {
+  width: 100%;
+  max-width: 350px;
+  margin: 0 auto;
+  border-radius: 1rem;
+  overflow: hidden;
+  position: relative;
+}
+
+#qr-reader-container video {
+  width: 100%;
+  height: auto;
+  border-radius: 1rem;
+}
+
+#qr-reader-container__dashboard_section_csr {
+  display: none !important;
+}
+
+#qr-reader-container__dashboard_section {
+  display: none !important;
+}
+
+/* Animation pour le cadre de scan */
+@keyframes scanLine {
+  0% {
+    top: 0;
+  }
+  100% {
+    top: 100%;
+  }
+}
+
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+  animation: scanLine 2s linear infinite;
+}
