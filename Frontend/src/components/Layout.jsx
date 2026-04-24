@@ -20,9 +20,15 @@ import {
   FaMoneyBillWave,
   FaPhone,
   FaEnvelope,
+  FaMapMarkerAlt,
   FaFacebook,
   FaWhatsapp,
-  FaTelegram
+  FaTelegram,
+  FaGlobe,
+  FaCopy,        // AJOUTER CETTE LIGNE
+  FaCheck,
+  FaEye,
+  FaEyeSlash
 } from 'react-icons/fa'
 import { IoMdClose } from 'react-icons/io'
 import axios from 'axios'
@@ -33,7 +39,7 @@ import ThemeToggle from './ThemeToggle'
 function Layout({ user, children, socket }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const { theme, isDark } = useTheme()
+  const { theme, themeClasses, isDark } = useTheme()
   
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [notifications, setNotifications] = useState([])
@@ -41,6 +47,7 @@ function Layout({ user, children, socket }) {
   const [unreadCount, setUnreadCount] = useState(0)
   const [balance, setBalance] = useState(null)
   const [showQR, setShowQR] = useState(false)
+  const [copied, setCopied] = useState(false)
   const notificationsRef = useRef(null)
 
   // Navigation items
@@ -57,6 +64,21 @@ function Layout({ user, children, socket }) {
   if (user?.role === 'admin') {
     navItems.push({ path: '/admin', icon: FaUserCircle, label: 'Admin' })
   }
+
+  // Footer links
+  const footerLinks = [
+    { path: '/terms', label: 'Conditions' },
+    { path: '/privacy', label: 'Confidentialité' },
+    { path: '/contact', label: 'Contact' },
+    { path: '/faq', label: 'FAQ' },
+  ]
+
+  const socialLinks = [
+    { icon: FaFacebook, href: 'https://facebook.com/cashpays', color: 'hover:bg-[#1877f2]' },
+    { icon: FaWhatsapp, href: 'https://wa.me/23562787307', color: 'hover:bg-[#25d366]' },
+    { icon: FaTelegram, href: 'https://t.me/cashpays', color: 'hover:bg-[#0088cc]' },
+    { icon: FaGlobe, href: 'https://cashpays.td', color: 'hover:bg-blue-500' },
+  ]
 
   // Récupérer le solde
   useEffect(() => {
@@ -257,6 +279,13 @@ function Layout({ user, children, socket }) {
     return date.toLocaleDateString('fr-FR')
   }
 
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    toast.success('Numéro copié !')
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   const isActiveLink = (path) => {
     if (path === '/admin') return location.pathname.startsWith('/admin')
     return location.pathname === path
@@ -268,8 +297,8 @@ function Layout({ user, children, socket }) {
       <header className={`sticky top-0 z-40 border-b ${isDark ? 'bg-blue-900/80 border-white/10' : 'bg-white/90 border-gray-200'} backdrop-blur-md`}>
         <div className="container mx-auto px-4 py-3">
           <div className="flex justify-between items-center">
-            {/* Logo et titre - Lien vers la page d'accueil */}
-            <Link to="/" className="flex items-center gap-2 group">
+            {/* Logo et titre */}
+            <Link to="/home" className="flex items-center gap-2 group">
               <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-2 rounded-xl group-hover:scale-105 transition-transform">
                 <FaMoneyBillWave className="text-white text-xl" />
               </div>
@@ -422,51 +451,32 @@ function Layout({ user, children, socket }) {
               </p>
             </div>
 
-            {/* Liens footer - Utilisation de Link de react-router-dom */}
+            {/* Liens footer */}
             <div className="flex flex-wrap justify-center gap-6">
-              <Link to="/terms" className={`text-sm transition-colors ${isDark ? 'text-white/50 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}>
-                Conditions
-              </Link>
-              <Link to="/privacy" className={`text-sm transition-colors ${isDark ? 'text-white/50 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}>
-                Confidentialité
-              </Link>
-              <Link to="/contact" className={`text-sm transition-colors ${isDark ? 'text-white/50 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}>
-                Contact
-              </Link>
-              <Link to="/faq" className={`text-sm transition-colors ${isDark ? 'text-white/50 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}>
-                FAQ
-              </Link>
+              {footerLinks.map((link) => (
+                <Link
+                  key={link.path}
+                  to={link.path}
+                  className={`text-sm transition-colors ${isDark ? 'text-white/50 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}
+                >
+                  {link.label}
+                </Link>
+              ))}
             </div>
 
-            {/* Réseaux sociaux - Utilisation de <a> pour les liens externes */}
+            {/* Réseaux sociaux */}
             <div className="flex gap-3">
-              <a 
-                href="https://www.facebook.com/cashpays" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className={`p-2 rounded-full transition-all ${isDark ? 'bg-white/10 text-white/70 hover:text-white hover:bg-white/20' : 'bg-gray-100 text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
-                aria-label="Facebook"
-              >
-                <FaFacebook size={14} />
-              </a>
-              <a 
-                href="https://wa.me/23562787307" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className={`p-2 rounded-full transition-all ${isDark ? 'bg-white/10 text-white/70 hover:text-white hover:bg-white/20' : 'bg-gray-100 text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
-                aria-label="WhatsApp"
-              >
-                <FaWhatsapp size={14} />
-              </a>
-              <a 
-                href="https://t.me/cashpays" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className={`p-2 rounded-full transition-all ${isDark ? 'bg-white/10 text-white/70 hover:text-white hover:bg-white/20' : 'bg-gray-100 text-gray-600 hover:text-gray-900 hover:bg-gray-200'}`}
-                aria-label="Telegram"
-              >
-                <FaTelegram size={14} />
-              </a>
+              {socialLinks.map((social, index) => (
+                <a
+                  key={index}
+                  href={social.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`p-2 rounded-full transition-all ${isDark ? 'bg-white/10 text-white/70 hover:text-white' : 'bg-gray-100 text-gray-600 hover:text-gray-900'} ${social.color}`}
+                >
+                  <social.icon size={16} />
+                </a>
+              ))}
             </div>
           </div>
 
@@ -477,6 +487,8 @@ function Layout({ user, children, socket }) {
               <FaPhone className="inline mr-1" size={10} /> Service client: 62 78 73 07
               <span className="mx-2">•</span>
               <FaEnvelope className="inline mr-1" size={10} /> support@cashpays.td
+              <span className="mx-2">•</span>
+              <FaMapMarkerAlt className="inline mr-1" size={10} /> N'Djaména, Tchad
             </p>
           </div>
         </div>
@@ -641,16 +653,13 @@ function Layout({ user, children, socket }) {
 
       {/* QR Code Modal */}
       {showQR && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
-          <div className={`relative max-w-sm w-full rounded-2xl shadow-2xl p-6 ${isDark ? 'bg-gradient-to-br from-blue-900 to-blue-800' : 'bg-white'}`}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className={`max-w-sm w-full rounded-2xl p-6 text-center ${isDark ? 'bg-blue-900' : 'bg-white'} shadow-2xl`}>
             <div className="flex justify-between items-center mb-4">
-              <h3 className={`text-xl font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+              <h3 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>
                 Mon QR Code
               </h3>
-              <button 
-                onClick={() => setShowQR(false)} 
-                className={`p-2 rounded-lg transition-all ${isDark ? 'text-white/60 hover:bg-white/10' : 'text-gray-500 hover:bg-gray-100'}`}
-              >
+              <button onClick={() => setShowQR(false)} className={isDark ? 'text-white/60' : 'text-gray-500'}>
                 <FaTimes size={20} />
               </button>
             </div>
@@ -661,8 +670,7 @@ function Layout({ user, children, socket }) {
                   JSON.stringify({
                     type: 'payment',
                     recipient: user?.phone,
-                    name: user?.fullname,
-                    currency: 'XAF'
+                    name: user?.fullname
                   })
                 )}`}
                 alt="QR Code"
@@ -670,35 +678,36 @@ function Layout({ user, children, socket }) {
               />
             </div>
             
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                <p className={`font-mono text-xl tracking-wider ${isDark ? 'text-white' : 'text-gray-900'}`}>
-                  {user?.phone}
-                </p>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(user?.phone || '')
-                    toast.success('Numéro copié !')
-                  }}
-                  className={`transition-all ${isDark ? 'text-white/40 hover:text-white' : 'text-gray-400 hover:text-gray-600'}`}
-                >
-                  <FaCopy />
-                </button>
-              </div>
-              <p className={`text-sm mb-4 ${isDark ? 'text-white/50' : 'text-gray-500'}`}>
-                Scannez ce code pour me payer
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <p className={`font-mono text-lg tracking-wider ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                {user?.phone}
               </p>
+              <button
+                onClick={() => copyToClipboard(user?.phone || '')}
+                className={`transition-all ${isDark ? 'text-white/40 hover:text-white' : 'text-gray-400 hover:text-gray-600'}`}
+                title="Copier le numéro"
+              >
+                {copied ? <FaCheck className="text-green-400" /> : <FaCopy />}
+              </button>
             </div>
             
+            <p className={`text-sm mb-4 ${isDark ? 'text-white/50' : 'text-gray-500'}`}>
+              Scannez ce code pour me payer
+            </p>
+            
             <button
-              onClick={() => setShowQR(false)}
-              className={`w-full py-3 rounded-xl font-semibold transition-all ${
-                isDark 
-                  ? 'bg-white/20 hover:bg-white/30 text-white' 
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-900'
-              }`}
+              onClick={() => {
+                const canvas = document.querySelector('canvas')
+                if (canvas) {
+                  const link = document.createElement('a')
+                  link.download = 'cashpays-qrcode.png'
+                  link.href = canvas.toDataURL()
+                  link.click()
+                }
+              }}
+              className="btn-secondary text-sm w-full"
             >
-              Fermer
+              📥 Télécharger
             </button>
           </div>
         </div>

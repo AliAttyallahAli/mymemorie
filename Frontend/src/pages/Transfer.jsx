@@ -1,6 +1,6 @@
-// src/pages/Transfer.jsx (version complète avec caméra)
+// src/pages/Transfer.jsx
 import React, { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { 
@@ -8,13 +8,17 @@ import {
   FaCamera, FaTimes, FaUpload, FaCopy, FaCheckCircle,
   FaArrowRight, FaHistory, FaHome, FaReceipt,
   FaWhatsapp, FaEnvelope, FaDownload, FaPrint,
-  FaInfoCircle, FaSpinner, FaUserPlus, FaTrash
+  FaInfoCircle, FaSpinner, FaUserPlus, FaTrash,
+  FaRegClock, FaShieldAlt, FaExclamationTriangle
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 import CameraQRScanner from '../components/CameraQRScanner'
 
 function Transfer({ user }) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  
+  // États du formulaire
   const [receiverPhone, setReceiverPhone] = useState('')
   const [amount, setAmount] = useState('')
   const [description, setDescription] = useState('')
@@ -23,12 +27,34 @@ function Transfer({ user }) {
   const [copied, setCopied] = useState(false)
   const [recentContacts, setRecentContacts] = useState([])
   const [favorites, setFavorites] = useState([])
-
+  
   // États pour la notification
   const [showNotification, setShowNotification] = useState(false)
   const [notificationType, setNotificationType] = useState('success')
   const [transactionData, setTransactionData] = useState(null)
   const [countdown, setCountdown] = useState(5)
+  const [kycLimit, setKycLimit] = useState(null)
+
+  // Traiter les paramètres URL (QR code dynamique)
+  useEffect(() => {
+    const phoneParam = searchParams.get('phone')
+    const amountParam = searchParams.get('amount')
+    const tokenParam = searchParams.get('token')
+    
+    if (phoneParam) {
+      setReceiverPhone(phoneParam)
+      toast.success(`Destinataire pré-rempli: ${phoneParam}`)
+    }
+    
+    if (amountParam && !isNaN(amountParam)) {
+      setAmount(amountParam)
+      toast.success(`Montant pré-rempli: ${parseInt(amountParam).toLocaleString()} FCFA`)
+    }
+    
+    if (tokenParam) {
+      verifyPaymentToken(tokenParam)
+    }
+  }, [searchParams])
 
   // Auto-fermeture de la notification
   useEffect(() => {
@@ -46,10 +72,11 @@ function Transfer({ user }) {
     }
   }, [showNotification, notificationType])
 
-  // Charger les contacts récents
+  // Charger les contacts et limites KYC
   useEffect(() => {
     fetchRecentContacts()
     loadFavorites()
+    fetchKycLimits()
   }, [])
 
   const fetchRecentContacts = async () => {
@@ -75,6 +102,18 @@ function Transfer({ user }) {
     }
   }
 
+  const fetchKycLimits = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/kyc/limits', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setKycLimit(response.data)
+    } catch (error) {
+      console.error('Erreur chargement limites KYC:', error)
+    }
+  }
+
   const loadFavorites = () => {
     try {
       const saved = localStorage.getItem('cashpays_favorites')
@@ -87,7 +126,7 @@ function Transfer({ user }) {
   }
 
   const saveFavorite = (phone, name) => {
-    const newFavorites = [...favorites, { phone, name, date: new Date().toISOString() }]
+    const newFavorites = [{ phone, name, date: new Date().toISOString() }, ...favorites]
       .filter((v, i, a) => a.findIndex(t => t.phone === v.phone) === i)
       .slice(0, 10)
     setFavorites(newFavorites)
@@ -102,9 +141,19 @@ function Transfer({ user }) {
     toast.success('Retiré des favoris')
   }
 
+  const verifyPaymentToken = async (token) => {
+    try {
+      const decoded = JSON.parse(atob(token))
+      if (decoded.type === 'payment_request') {
+        toast.info(`Demande de paiement de ${decoded.name || decoded.phone}`)
+      }
+    } catch (e) {
+      console.error('Token invalide')
+    }
+  }
+
   const handleQRScan = (qrData) => {
     try {
-      // Essayer de parser le QR code
       let data
       if (qrData.startsWith('{')) {
         data = JSON.parse(qrData)
@@ -112,6 +161,9 @@ function Transfer({ user }) {
           setReceiverPhone(data.recipient)
           if (data.amount) setAmount(data.amount.toString())
           toast.success(`Destinataire: ${data.recipient}`)
+        } else if (data.phone) {
+          setReceiverPhone(data.phone)
+          toast.success(`Destinataire: ${data.phone}`)
         } else {
           throw new Error('Format invalide')
         }
@@ -124,6 +176,16 @@ function Transfer({ user }) {
     } catch (e) {
       toast.error('Erreur lors de la lecture du QR code')
     }
+  }
+
+  const checkKycLimit = async (amountValue) => {
+    if (!kycLimit) return true
+    
+    if (amountValue > kycLimit.limits?.single_transaction_limit) {
+      toast.error(`La limite par transaction est de ${kycLimit.limits.single_transaction_limit.toLocaleString()} FCFA`)
+      return false
+    }
+    return true
   }
 
   const handleSubmit = async (e) => {
@@ -144,6 +206,10 @@ function Transfer({ user }) {
       toast.error('Le numéro du destinataire doit contenir 8 chiffres')
       return
     }
+    
+    // Vérifier les limites KYC
+    const withinLimit = await checkKycLimit(amountNum)
+    if (!withinLimit) return
 
     setLoading(true)
     
@@ -186,10 +252,21 @@ function Transfer({ user }) {
       fetchRecentContacts()
       
     } catch (error) {
+      let errorMessage = error.response?.data?.error || 'Erreur lors du transfert'
+      let suggestion = 'Vérifiez votre solde ou réessayez plus tard.'
+      
+      if (error.response?.data?.code === 'INSUFFICIENT_BALANCE') {
+        errorMessage = 'Solde insuffisant'
+        suggestion = 'Rechargez votre compte ou réduisez le montant'
+      } else if (error.response?.data?.code === 'USER_NOT_FOUND') {
+        errorMessage = 'Destinataire non trouvé'
+        suggestion = 'Vérifiez le numéro de téléphone du destinataire'
+      }
+      
       setTransactionData({
-        error: error.response?.data?.error || 'Erreur lors du transfert',
-        errorCode: 'ERR_001',
-        suggestion: 'Vérifiez votre solde ou réessayez plus tard.'
+        error: errorMessage,
+        errorCode: error.response?.data?.code || 'ERR_001',
+        suggestion: suggestion
       })
       setNotificationType('error')
       setShowNotification(true)
@@ -237,7 +314,7 @@ function Transfer({ user }) {
 ╠══════════════════════════════════════════════════════════════╣
 ║  Référence: ${transactionData?.reference}                    ║
 ║  Date: ${formatDate()}                                       ║
-║  Statut: ✓ COMPLÉTÉ                                          ║
+║  Statut: ✓ COMPLETÉ                                          ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  DE: ${transactionData?.sender_name} (${transactionData?.sender_phone}) ║
 ║  À: ${transactionData?.receiver_name} (${transactionData?.receiver_phone}) ║
@@ -258,7 +335,7 @@ function Transfer({ user }) {
     }
 
     const shareViaWhatsApp = () => {
-      const message = `🏦 *CASHPAYS - Transaction réussie* ✅\n\n📋 Référence: ${transactionData?.reference}\n💰 Montant: ${formatAmount(transactionData?.amount)}\n📊 Frais: ${formatAmount(transactionData?.fee)}\n📅 Date: ${formatDate()}\n👤 Destinataire: ${transactionData?.receiver_name}\n\n✅ Statut: COMPLÉTÉ\n\n---\nCashPays - Transfert d'argent instantané au Tchad`
+      const message = `🏦 *CASHPAYS - Transaction réussie* ✅\n\n📋 Référence: ${transactionData?.reference}\n💰 Montant: ${formatAmount(transactionData?.amount)}\n📊 Frais: ${formatAmount(transactionData?.fee)}\n📅 Date: ${formatDate()}\n👤 Destinataire: ${transactionData?.receiver_name}\n\n✅ Statut: COMPLETÉ\n\n---\nCashPays - Transfert d'argent instantané au Tchad`
       window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
     }
 
@@ -324,7 +401,7 @@ function Transfer({ user }) {
                 <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
                   <FaHome size={14} /> Accueil
                 </button>
-                <button onClick={() => { setShowNotification(false); navigate('/transfer') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
+                <button onClick={() => { setShowNotification(false); setAmount(''); setReceiverPhone('') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
                   <FaArrowRight size={14} /> Nouveau
                 </button>
                 <button onClick={() => { setShowNotification(false); navigate('/history') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
@@ -351,7 +428,7 @@ function Transfer({ user }) {
           <div className="relative max-w-md w-full bg-gradient-to-br from-red-900 to-red-800 rounded-2xl shadow-2xl overflow-hidden">
             <div className="text-center pt-6 pb-2">
               <div className="inline-flex p-3 bg-red-500/20 rounded-full mb-3">
-                <FaTimes className="text-red-400 text-5xl" />
+                <FaExclamationTriangle className="text-red-400 text-5xl" />
               </div>
               <h2 className="text-2xl font-bold text-white">Transfert échoué</h2>
               <p className="text-red-200 text-sm mt-1">{transactionData?.error}</p>
@@ -406,6 +483,7 @@ function Transfer({ user }) {
                 placeholder="Ex: 66345678"
                 maxLength="8"
                 required
+                autoFocus
               />
               <button
                 type="button"
@@ -479,7 +557,15 @@ function Transfer({ user }) {
               min="25"
               required
             />
-            <p className="text-white/40 text-xs mt-1">Minimum: 25 FCFA</p>
+            <div className="flex justify-between items-center mt-1">
+              <p className="text-white/40 text-xs">Minimum: 25 FCFA</p>
+              {kycLimit && (
+                <p className="text-white/40 text-xs">
+                  <FaShieldAlt className="inline mr-1" size={10} />
+                  Limite: {kycLimit.limits?.single_transaction_limit.toLocaleString()} FCFA
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Description */}

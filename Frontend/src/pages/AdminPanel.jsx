@@ -1,13 +1,15 @@
+// src/pages/AdminPanel.jsx
 import React, { useState, useEffect } from 'react'
 import { Routes, Route, Link, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { 
   FaUsers, FaUserTie, FaMoneyBillWave, FaChartLine, FaBell, 
-  FaCog, FaKey, FaUserPlus, FaTimes, FaEye, FaEyeSlash,
+  FaCog, FaKey, FaUserPlus, FaTimes, FaEye, FaEyeSlash, FaClock,
   FaBuilding, FaPhone, FaMapMarkerAlt, FaCheckCircle, FaShieldAlt,
   FaCopy, FaBan, FaCheck, FaTrashAlt, FaEdit, FaPlus, FaNewspaper,
-  FaSave, FaArrowLeft, FaImage, FaTag, FaCalendarAlt
+  FaSave, FaArrowLeft, FaImage, FaIdCard, FaTag, FaCalendarAlt, FaSpinner,
+  FaDownload, FaEnvelope, FaUserCheck, FaUserTimes, FaInfoCircle
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 
@@ -21,17 +23,27 @@ function AdminPanel({ user }) {
   
   // États pour le blog
   const [blogPosts, setBlogPosts] = useState([])
+  const [blogLoading, setBlogLoading] = useState(false)
   const [showBlogForm, setShowBlogForm] = useState(false)
   const [editingPost, setEditingPost] = useState(null)
+  const [savingPost, setSavingPost] = useState(false)
   const [blogForm, setBlogForm] = useState({
     title: '',
     excerpt: '',
     content: '',
-    category: '',
+    category: 'actualite',
     tags: '',
-    image: '',
-    published: true
+    image_url: '',
+    status: 'published'
   })
+  
+  // États pour KYC
+  const [kycRequests, setKycRequests] = useState([])
+  const [kycLoading, setKycLoading] = useState(false)
+  const [selectedKyc, setSelectedKyc] = useState(null)
+  const [showKycDetailModal, setShowKycDetailModal] = useState(false)
+  const [kycFilter, setKycFilter] = useState('all')
+  const [processingKyc, setProcessingKyc] = useState(false)
   
   // États pour le modal de création d'agent
   const [showAgentModal, setShowAgentModal] = useState(false)
@@ -58,7 +70,15 @@ function AdminPanel({ user }) {
     if (user?.role === 'admin') {
       fetchAdminData()
       fetchProvinces()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'blog') {
       fetchBlogPosts()
+    }
+    if (activeTab === 'kyc') {
+      fetchKycRequests()
     }
   }, [activeTab])
 
@@ -88,15 +108,37 @@ function AdminPanel({ user }) {
   }
 
   const fetchBlogPosts = async () => {
+    setBlogLoading(true)
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/blog/posts', {
+      const response = await axios.get('/api/blog/posts?status=all', {
         headers: { Authorization: `Bearer ${token}` }
       })
-      setBlogPosts(response.data || [])
+      const posts = Array.isArray(response.data.posts) ? response.data.posts : []
+      setBlogPosts(posts)
     } catch (error) {
       console.error('Erreur chargement blog:', error)
       setBlogPosts([])
+      toast.error('Erreur lors du chargement des articles')
+    } finally {
+      setBlogLoading(false)
+    }
+  }
+
+  const fetchKycRequests = async () => {
+    setKycLoading(true)
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get(`/api/admin/kyc/requests?status=${kycFilter}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setKycRequests(response.data.requests || [])
+    } catch (error) {
+      console.error('Erreur chargement KYC:', error)
+      setKycRequests([])
+      toast.error('Erreur lors du chargement des demandes KYC')
+    } finally {
+      setKycLoading(false)
     }
   }
 
@@ -226,20 +268,25 @@ function AdminPanel({ user }) {
 
   const handleCreateBlogPost = async (e) => {
     e.preventDefault()
-    setLoading(true)
+    setSavingPost(true)
     
     try {
       const token = localStorage.getItem('accessToken')
       const data = {
-        ...blogForm,
-        tags: blogForm.tags.split(',').map(tag => tag.trim()).filter(tag => tag)
+        title: blogForm.title,
+        content: blogForm.content,
+        excerpt: blogForm.excerpt,
+        category: blogForm.category,
+        tags: blogForm.tags,
+        image_url: blogForm.image_url,
+        status: blogForm.status
       }
       
       if (editingPost) {
         await axios.put(`/api/blog/posts/${editingPost.id}`, data, {
           headers: { Authorization: `Bearer ${token}` }
         })
-        toast.success('Article mis à jour avec succès')
+        toast.success('Article modifié avec succès')
       } else {
         await axios.post('/api/blog/posts', data, {
           headers: { Authorization: `Bearer ${token}` }
@@ -253,17 +300,18 @@ function AdminPanel({ user }) {
         title: '',
         excerpt: '',
         content: '',
-        category: '',
+        category: 'actualite',
         tags: '',
-        image: '',
-        published: true
+        image_url: '',
+        status: 'published'
       })
       fetchBlogPosts()
       
     } catch (error) {
+      console.error('Erreur:', error)
       toast.error(error.response?.data?.error || 'Erreur lors de l\'enregistrement')
     } finally {
-      setLoading(false)
+      setSavingPost(false)
     }
   }
 
@@ -288,12 +336,61 @@ function AdminPanel({ user }) {
       title: post.title || '',
       excerpt: post.excerpt || '',
       content: post.content || '',
-      category: post.category || '',
-      tags: Array.isArray(post.tags) ? post.tags.join(', ') : (post.tags || ''),
-      image: post.image || '',
-      published: post.published === 1 || post.published === true
+      category: post.category || 'actualite',
+      tags: post.tags || '',
+      image_url: post.image_url || '',
+      status: post.status || 'published'
     })
     setShowBlogForm(true)
+  }
+
+  const handleKycAction = async (requestId, action, rejectionReason = '') => {
+    if (!window.confirm(`Êtes-vous sûr de vouloir ${action === 'approve' ? 'approuver' : 'rejeter'} cette demande KYC ?`)) return
+    
+    setProcessingKyc(true)
+    try {
+      const token = localStorage.getItem('accessToken')
+      await axios.post(`/api/admin/kyc/verify/${requestId}`, {
+        action,
+        rejectionReason: rejectionReason || null,
+        level: 1
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      toast.success(`Demande ${action === 'approve' ? 'approuvée' : 'rejetée'} avec succès`)
+      fetchKycRequests()
+      setShowKycDetailModal(false)
+      setSelectedKyc(null)
+      
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erreur lors du traitement')
+    } finally {
+      setProcessingKyc(false)
+    }
+  }
+
+  const downloadKycDocument = async (documentId, filename) => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get(`/api/kyc/download/${documentId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      })
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', filename)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      
+      toast.success('Document téléchargé')
+    } catch (error) {
+      toast.error('Erreur lors du téléchargement')
+    }
   }
 
   const toggleUserStatus = async (userId, currentStatus) => {
@@ -329,13 +426,28 @@ function AdminPanel({ user }) {
     toast.success(`${label} copié !`)
   }
 
+  const getStatusBadge = (status) => {
+    switch(status) {
+      case 'verified':
+        return { color: 'bg-green-500/20 text-green-400', text: 'Vérifié', icon: FaCheckCircle }
+      case 'pending':
+        return { color: 'bg-yellow-500/20 text-yellow-400', text: 'En attente', icon: FaClock }
+      case 'rejected':
+        return { color: 'bg-red-500/20 text-red-400', text: 'Rejeté', icon: FaTimes }
+      default:
+        return { color: 'bg-gray-500/20 text-gray-400', text: 'Non soumis', icon: FaIdCard }
+    }
+  }
+
   const tabs = [
     { id: 'dashboard', label: 'Dashboard', icon: FaChartLine },
     { id: 'users', label: 'Utilisateurs', icon: FaUsers },
     { id: 'agents', label: 'Agents', icon: FaUserTie },
     { id: 'wallet', label: 'Wallet Principal', icon: FaMoneyBillWave },
     { id: 'announce', label: 'Annonces', icon: FaBell },
-    { id: 'blog', label: 'Blog', icon: FaNewspaper }
+    { id: 'blog', label: 'Blog', icon: FaNewspaper },
+    { id: 'kyc', label: 'KYC', icon: FaIdCard },
+    { id: 'settings', label: 'Paramètres', icon: FaCog }
   ]
 
   if (user?.role !== 'admin') {
@@ -445,7 +557,7 @@ function AdminPanel({ user }) {
                         </button>
                       </div>
                     </td>
-                  </tr>
+                   </tr>
                 ))}
               </tbody>
             </table>
@@ -576,10 +688,10 @@ function AdminPanel({ user }) {
                       title: '',
                       excerpt: '',
                       content: '',
-                      category: '',
+                      category: 'actualite',
                       tags: '',
-                      image: '',
-                      published: true
+                      image_url: '',
+                      status: 'published'
                     })
                     setShowBlogForm(true)
                   }}
@@ -588,59 +700,90 @@ function AdminPanel({ user }) {
                   <FaPlus /> Nouvel article
                 </button>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-white">
-                    <thead className="border-b border-white/20">
-                      <tr className="text-left text-white/60">
-                        <th className="pb-3">Titre</th>
-                        <th className="pb-3">Catégorie</th>
-                        <th className="pb-3">Date</th>
-                        <th className="pb-3">Statut</th>
-                        <th className="pb-3">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {blogPosts.map(post => (
-                        <tr key={post.id} className="border-b border-white/10">
-                          <td className="py-3">{post.title}</td>
-                          <td className="py-3">
-                            <span className="px-2 py-1 rounded-full text-xs bg-blue-500/20 text-blue-400">
-                              {post.category}
-                            </span>
-                          </td>
-                          <td className="py-3 text-white/60 text-sm">
-                            {post.created_at ? new Date(post.created_at).toLocaleDateString('fr-FR') : '-'}
-                          </td>
-                          <td className="py-3">
-                            <span className={`px-2 py-1 rounded-full text-xs ${
-                              post.published 
-                                ? 'bg-green-500/20 text-green-400' 
-                                : 'bg-yellow-500/20 text-yellow-400'
-                            }`}>
-                              {post.published ? 'Publié' : 'Brouillon'}
-                            </span>
-                          </td>
-                          <td className="py-3">
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => handleEditBlogPost(post)}
-                                className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1"
-                              >
-                                <FaEdit size={10} /> Modifier
-                              </button>
-                              <button
-                                onClick={() => handleDeleteBlogPost(post.id, post.title)}
-                                className="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 flex items-center gap-1"
-                              >
-                                <FaTrashAlt size={10} /> Supprimer
-                              </button>
-                            </div>
-                          </td>
+                {blogLoading ? (
+                  <div className="flex justify-center py-12">
+                    <FaSpinner className="text-white text-4xl animate-spin" />
+                  </div>
+                ) : blogPosts.length === 0 ? (
+                  <div className="text-center py-12 bg-white/5 rounded-xl">
+                    <FaNewspaper className="text-white/20 text-5xl mx-auto mb-3" />
+                    <p className="text-white/50">Aucun article de blog</p>
+                    <button
+                      onClick={() => {
+                        setEditingPost(null)
+                        setBlogForm({
+                          title: '',
+                          excerpt: '',
+                          content: '',
+                          category: 'actualite',
+                          tags: '',
+                          image_url: '',
+                          status: 'published'
+                        })
+                        setShowBlogForm(true)
+                      }}
+                      className="text-blue-400 text-sm mt-2 hover:underline"
+                    >
+                      Créer le premier article
+                    </button>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-white">
+                      <thead className="border-b border-white/20">
+                        <tr className="text-left text-white/60">
+                          <th className="pb-3">Titre</th>
+                          <th className="pb-3">Catégorie</th>
+                          <th className="pb-3">Date</th>
+                          <th className="pb-3">Statut</th>
+                          <th className="pb-3">Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {blogPosts.map((post) => (
+                          <tr key={post.id} className="border-b border-white/10 hover:bg-white/5">
+                            <td className="py-3 max-w-xs">
+                              <p className="truncate">{post.title}</p>
+                            </td>
+                            <td className="py-3">
+                              <span className="px-2 py-1 rounded-full text-xs bg-blue-500/20 text-blue-400">
+                                {post.category || 'actualite'}
+                              </span>
+                            </td>
+                            <td className="py-3 text-white/60 text-sm">
+                              {post.created_at ? new Date(post.created_at).toLocaleDateString('fr-FR') : '-'}
+                            </td>
+                            <td className="py-3">
+                              <span className={`px-2 py-1 rounded-full text-xs ${
+                                post.status === 'published'
+                                  ? 'bg-green-500/20 text-green-400'
+                                  : 'bg-yellow-500/20 text-yellow-400'
+                              }`}>
+                                {post.status === 'published' ? 'Publié' : 'Brouillon'}
+                              </span>
+                            </td>
+                            <td className="py-3">
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleEditBlogPost(post)}
+                                  className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1 hover:bg-blue-500/30"
+                                >
+                                  <FaEdit size={10} /> Modifier
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteBlogPost(post.id, post.title)}
+                                  className="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 flex items-center gap-1 hover:bg-red-500/30"
+                                >
+                                  <FaTrashAlt size={10} /> Supprimer
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </>
             ) : (
               <div>
@@ -704,24 +847,23 @@ function AdminPanel({ user }) {
                         onChange={handleBlogFormChange}
                         className="input-field"
                       >
-                        <option value="">Sélectionner</option>
-                        <option value="Tutoriel">Tutoriel</option>
-                        <option value="Actualité">Actualité</option>
-                        <option value="Sécurité">Sécurité</option>
-                        <option value="Promotion">Promotion</option>
-                        <option value="Opportunité">Opportunité</option>
+                        <option value="tutoriel">Tutoriel</option>
+                        <option value="actualite">Actualité</option>
+                        <option value="securite">Sécurité</option>
+                        <option value="promotion">Promotion</option>
+                        <option value="opportunite">Opportunité</option>
                       </select>
                     </div>
 
                     <div>
-                      <label className="label">Tags</label>
+                      <label className="label">Tags (séparés par des virgules)</label>
                       <input
                         type="text"
                         name="tags"
                         value={blogForm.tags}
                         onChange={handleBlogFormChange}
                         className="input-field"
-                        placeholder="tag1, tag2, tag3"
+                        placeholder="ex: transfert, argent, tchad"
                       />
                     </div>
                   </div>
@@ -731,48 +873,313 @@ function AdminPanel({ user }) {
                       <label className="label">URL de l'image</label>
                       <input
                         type="text"
-                        name="image"
-                        value={blogForm.image}
+                        name="image_url"
+                        value={blogForm.image_url}
                         onChange={handleBlogFormChange}
                         className="input-field"
+                        placeholder="https://..."
                       />
                     </div>
 
-                    <div className="flex items-center gap-4 pt-6">
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          name="published"
-                          checked={blogForm.published}
-                          onChange={(e) => setBlogForm(prev => ({ ...prev, published: e.target.checked }))}
-                          className="w-4 h-4 text-blue-500"
-                        />
-                        <span className="text-white">Publier immédiatement</span>
-                      </label>
+                    <div>
+                      <label className="label">Statut</label>
+                      <select
+                        name="status"
+                        value={blogForm.status}
+                        onChange={handleBlogFormChange}
+                        className="input-field"
+                      >
+                        <option value="published">Publié</option>
+                        <option value="draft">Brouillon</option>
+                      </select>
                     </div>
                   </div>
 
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={savingPost}
                     className="btn-primary w-full flex items-center justify-center gap-2"
                   >
-                    {loading ? (
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    {savingPost ? (
+                      <FaSpinner className="animate-spin" />
                     ) : (
-                      <>
-                        <FaSave /> {editingPost ? 'Mettre à jour' : 'Publier'}
-                      </>
+                      <FaSave />
                     )}
+                    {editingPost ? 'Mettre à jour' : 'Publier'}
                   </button>
                 </form>
               </div>
             )}
           </div>
         )}
+
+        {/* KYC Tab */}
+        {activeTab === 'kyc' && (
+          <div>
+            <div className="flex justify-between items-center mb-4">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setKycFilter('all')}
+                  className={`px-3 py-1 rounded-lg text-sm transition-all ${
+                    kycFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  }`}
+                >
+                  Toutes
+                </button>
+                <button
+                  onClick={() => setKycFilter('pending')}
+                  className={`px-3 py-1 rounded-lg text-sm transition-all ${
+                    kycFilter === 'pending' ? 'bg-yellow-600 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  }`}
+                >
+                  En attente
+                </button>
+                <button
+                  onClick={() => setKycFilter('verified')}
+                  className={`px-3 py-1 rounded-lg text-sm transition-all ${
+                    kycFilter === 'verified' ? 'bg-green-600 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  }`}
+                >
+                  Vérifiés
+                </button>
+                <button
+                  onClick={() => setKycFilter('rejected')}
+                  className={`px-3 py-1 rounded-lg text-sm transition-all ${
+                    kycFilter === 'rejected' ? 'bg-red-600 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  }`}
+                >
+                  Rejetés
+                </button>
+              </div>
+              <button
+                onClick={fetchKycRequests}
+                className="text-blue-400 hover:text-blue-300 text-sm"
+              >
+                <FaSpinner className={`inline mr-1 ${kycLoading ? 'animate-spin' : ''}`} />
+                Rafraîchir
+              </button>
+            </div>
+
+            {kycLoading ? (
+              <div className="flex justify-center py-12">
+                <FaSpinner className="text-white text-4xl animate-spin" />
+              </div>
+            ) : kycRequests.length === 0 ? (
+              <div className="text-center py-12 bg-white/5 rounded-xl">
+                <FaIdCard className="text-white/20 text-5xl mx-auto mb-3" />
+                <p className="text-white/50">Aucune demande KYC</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-white">
+                  <thead className="border-b border-white/20">
+                    <tr className="text-left text-white/60">
+                      <th className="pb-3">Utilisateur</th>
+                      <th className="pb-3">Contact</th>
+                      <th className="pb-3">Date</th>
+                      <th className="pb-3">Statut</th>
+                      <th className="pb-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {kycRequests.map(req => {
+                      const status = getStatusBadge(req.status)
+                      const StatusIcon = status.icon
+                      return (
+                        <tr key={req.id} className="border-b border-white/10 hover:bg-white/5">
+                          <td className="py-3">
+                            <p className="font-medium">{req.fullname}</p>
+                            <p className="text-xs text-white/40">{req.id_type?.toUpperCase()} - {req.id_number}</p>
+                           </td>
+                          <td className="py-3">
+                            <p className="text-sm">{req.user_phone}</p>
+                            {req.user_email && <p className="text-xs text-white/40">{req.user_email}</p>}
+                           </td>
+                          <td className="py-3 text-sm">
+                            {new Date(req.submitted_at).toLocaleDateString('fr-FR', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric'
+                            })}
+                           </td>
+                          <td className="py-3">
+                            <span className={`px-2 py-1 rounded-full text-xs flex items-center gap-1 w-fit ${status.color}`}>
+                              <StatusIcon size={10} /> {status.text}
+                            </span>
+                           </td>
+                          <td className="py-3">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  setSelectedKyc(req)
+                                  setShowKycDetailModal(true)
+                                }}
+                                className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1 hover:bg-blue-500/30"
+                              >
+                                <FaEye size={10} /> Détails
+                              </button>
+                              {req.status === 'pending' && (
+                                <>
+                                  <button
+                                    onClick={() => handleKycAction(req.id, 'approve')}
+                                    disabled={processingKyc}
+                                    className="px-2 py-1 rounded text-xs bg-green-500/20 text-green-400 flex items-center gap-1 hover:bg-green-500/30"
+                                  >
+                                    <FaCheck size={10} /> Valider
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      const reason = prompt('Raison du rejet:')
+                                      if (reason) handleKycAction(req.id, 'reject', reason)
+                                    }}
+                                    disabled={processingKyc}
+                                    className="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 flex items-center gap-1 hover:bg-red-500/30"
+                                  >
+                                    <FaTimes size={10} /> Rejeter
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                           </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Settings Tab */}
+        {activeTab === 'settings' && (
+          <div className="text-center py-12">
+            <FaCog className="text-white/20 text-5xl mx-auto mb-3 animate-spin-slow" />
+            <p className="text-white/50">Paramètres système en cours de développement</p>
+          </div>
+        )}
       </div>
 
-      {/* MODAL DE CRÉATION D'AGENT */}
+      {/* MODAL DÉTAILS KYC */}
+      {showKycDetailModal && selectedKyc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto">
+          <div className="relative max-w-2xl w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl">
+            <div className="sticky top-0 bg-blue-900/95 backdrop-blur-sm p-4 border-b border-white/10 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                <FaIdCard className="text-blue-400" />
+                Détails de la demande KYC
+              </h3>
+              <button
+                onClick={() => {
+                  setShowKycDetailModal(false)
+                  setSelectedKyc(null)
+                }}
+                className="text-white/60 hover:text-white p-2 rounded-lg hover:bg-white/10"
+              >
+                <FaTimes size={20} />
+              </button>
+            </div>
+
+            <div className="p-6">
+              <div className="grid md:grid-cols-2 gap-4 mb-6">
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Nom complet</p>
+                  <p className="text-white font-medium">{selectedKyc.fullname}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Téléphone</p>
+                  <p className="text-white font-medium">{selectedKyc.user_phone}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Date de naissance</p>
+                  <p className="text-white">{selectedKyc.birth_date || '-'}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Lieu de naissance</p>
+                  <p className="text-white">{selectedKyc.birth_place || '-'}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Nationalité</p>
+                  <p className="text-white">{selectedKyc.nationality || 'Tchadienne'}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Profession</p>
+                  <p className="text-white">{selectedKyc.occupation || '-'}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Type de pièce</p>
+                  <p className="text-white">{selectedKyc.id_type?.toUpperCase() || 'CNI'}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Numéro de pièce</p>
+                  <p className="text-white font-mono">{selectedKyc.id_number}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Date de délivrance</p>
+                  <p className="text-white">{selectedKyc.id_issue_date || '-'}</p>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Date d'expiration</p>
+                  <p className="text-white">{selectedKyc.id_expiry_date || '-'}</p>
+                </div>
+                <div className="col-span-2 bg-white/5 rounded-xl p-3">
+                  <p className="text-white/50 text-xs">Adresse</p>
+                  <p className="text-white">{selectedKyc.address}</p>
+                </div>
+                {selectedKyc.rejection_reason && (
+                  <div className="col-span-2 bg-red-500/20 rounded-xl p-3">
+                    <p className="text-red-400 text-xs">Raison du rejet</p>
+                    <p className="text-red-300">{selectedKyc.rejection_reason}</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-white/10 pt-4">
+                <h4 className="text-white font-semibold mb-3">Documents soumis</h4>
+                <div className="grid md:grid-cols-2 gap-3">
+                  {selectedKyc.documents && selectedKyc.documents.map((doc, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => downloadKycDocument(doc.id, doc.filename)}
+                      className="flex items-center gap-2 p-2 bg-white/5 rounded-lg hover:bg-white/10 transition-all"
+                    >
+                      <FaFilePdf className="text-red-400" />
+                      <span className="text-white/70 text-sm flex-1 text-left">{doc.document_type}</span>
+                      <FaDownload className="text-white/40 text-xs" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {selectedKyc.status === 'pending' && (
+                <div className="flex gap-3 mt-6 pt-4 border-t border-white/10">
+                  <button
+                    onClick={() => handleKycAction(selectedKyc.id, 'approve')}
+                    disabled={processingKyc}
+                    className="flex-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 py-2 rounded-lg flex items-center justify-center gap-2"
+                  >
+                    {processingKyc ? <FaSpinner className="animate-spin" /> : <FaCheck />}
+                    Approuver
+                  </button>
+                  <button
+                    onClick={() => {
+                      const reason = prompt('Raison du rejet:')
+                      if (reason) handleKycAction(selectedKyc.id, 'reject', reason)
+                    }}
+                    disabled={processingKyc}
+                    className="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 py-2 rounded-lg flex items-center justify-center gap-2"
+                  >
+                    {processingKyc ? <FaSpinner className="animate-spin" /> : <FaTimes />}
+                    Rejeter
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CRÉATION D'AGENT (existant) */}
       {showAgentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto">
           <div className="relative max-w-2xl w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -882,6 +1289,7 @@ function AdminPanel({ user }) {
                 </div>
               ) : (
                 <form onSubmit={handleCreateAgent} className="space-y-5">
+                  {/* Formulaire agent - identique à avant */}
                   <div>
                     <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                       <FaUserTie className="text-blue-400" /> Informations personnelles
@@ -1006,7 +1414,7 @@ function AdminPanel({ user }) {
                       </div>
 
                       <div>
-                        <label className="label">Téléphone de l'agence</label>
+                        <label className="label">Téléphone de l'agence (optionnel)</label>
                         <input
                           type="tel"
                           name="agency_phone"

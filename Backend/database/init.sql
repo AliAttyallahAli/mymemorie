@@ -4,13 +4,17 @@
 
 PRAGMA foreign_keys = ON;
 
--- Table des utilisateurs
+-- ============================================
+-- TABLE DES UTILISATEURS
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     phone TEXT(8) UNIQUE NOT NULL,
     fullname TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     private_key_6 TEXT NOT NULL,
+    email TEXT,
     country TEXT DEFAULT 'Tchad',
     province TEXT NOT NULL,
     city TEXT,
@@ -18,12 +22,15 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT DEFAULT 'user' CHECK(role IN ('user', 'agent', 'admin')),
     is_active INTEGER DEFAULT 1,
     is_verified INTEGER DEFAULT 0,
+    preferences TEXT DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-ALTER TABLE users ADD COLUMN preferences TEXT DEFAULT '{}';
 
--- Table des wallets
+-- ============================================
+-- TABLE DES WALLETS
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS wallets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER UNIQUE NOT NULL,
@@ -34,7 +41,10 @@ CREATE TABLE IF NOT EXISTS wallets (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
--- Table des agents (informations supplémentaires)
+-- ============================================
+-- TABLE DES AGENTS
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS agents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER UNIQUE NOT NULL,
@@ -51,7 +61,10 @@ CREATE TABLE IF NOT EXISTS agents (
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
--- Table des transactions
+-- ============================================
+-- TABLE DES TRANSACTIONS
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reference TEXT UNIQUE NOT NULL,
@@ -71,7 +84,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     FOREIGN KEY (created_by_agent) REFERENCES agents(id)
 );
 
--- Table des notifications
+-- ============================================
+-- TABLE DES NOTIFICATIONS
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -84,7 +100,10 @@ CREATE TABLE IF NOT EXISTS notifications (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
--- Table des annonces (page d'accueil)
+-- ============================================
+-- TABLE DES ANNONCES
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS announcements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -100,14 +119,20 @@ CREATE TABLE IF NOT EXISTS announcements (
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
--- Table des provinces du Tchad
+-- ============================================
+-- TABLE DES PROVINCES
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS provinces (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     region TEXT
 );
 
--- Table des logs système
+-- ============================================
+-- TABLE DES LOGS SYSTEME
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS system_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -119,7 +144,10 @@ CREATE TABLE IF NOT EXISTS system_logs (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- Table des sessions
+-- ============================================
+-- TABLE DES SESSIONS
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -129,7 +157,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
--- Table des articles de blog
+
+-- ============================================
+-- TABLE DES ARTICLES DE BLOG
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS blog_posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -150,31 +182,130 @@ CREATE TABLE IF NOT EXISTS blog_posts (
     FOREIGN KEY (author_id) REFERENCES users(id)
 );
 
--- Index pour les performances
-CREATE INDEX idx_blog_posts_slug ON blog_posts(slug);
-CREATE INDEX idx_blog_posts_status ON blog_posts(status);
-CREATE INDEX idx_blog_posts_created_at ON blog_posts(created_at);
-CREATE INDEX idx_blog_posts_category ON blog_posts(category);
 -- ============================================
--- INDEXES pour performances
+-- TABLES KYC (KNOW YOUR CUSTOMER)
 -- ============================================
 
-CREATE INDEX idx_users_phone ON users(phone);
-CREATE INDEX idx_users_role ON users(role);
-CREATE INDEX idx_wallets_user_id ON wallets(user_id);
-CREATE INDEX idx_transactions_sender ON transactions(sender_phone);
-CREATE INDEX idx_transactions_receiver ON transactions(receiver_phone);
-CREATE INDEX idx_transactions_reference ON transactions(reference);
-CREATE INDEX idx_transactions_status ON transactions(status);
-CREATE INDEX idx_transactions_created_at ON transactions(created_at);
-CREATE INDEX idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX idx_notifications_is_read ON notifications(is_read);
-CREATE INDEX idx_sessions_token ON sessions(token);
-CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+-- Table des demandes KYC
+CREATE TABLE IF NOT EXISTS kyc_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'verified', 'rejected', 'cancelled')),
+    level INTEGER DEFAULT 1,
+    fullname TEXT NOT NULL,
+    birth_date TEXT,
+    birth_place TEXT,
+    nationality TEXT DEFAULT 'Tchadienne',
+    id_type TEXT CHECK(id_type IN ('cni', 'passeport', 'permis')),
+    id_number TEXT,
+    id_issue_date TEXT,
+    id_expiry_date TEXT,
+    address TEXT,
+    occupation TEXT,
+    phone_number TEXT,
+    submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    verified_at DATETIME,
+    verified_by INTEGER,
+    rejection_reason TEXT,
+    notes TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (verified_by) REFERENCES users(id)
+);
 
+-- Table des documents KYC
+CREATE TABLE IF NOT EXISTS kyc_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kyc_request_id INTEGER NOT NULL,
+    document_type TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_size INTEGER,
+    mime_type TEXT,
+    uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (kyc_request_id) REFERENCES kyc_requests(id) ON DELETE CASCADE
+);
+
+-- Table de l'historique KYC
+CREATE TABLE IF NOT EXISTS kyc_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    status_from TEXT,
+    status_to TEXT,
+    description TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Table des limites KYC
+CREATE TABLE IF NOT EXISTS kyc_limits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level INTEGER DEFAULT 1,
+    daily_transaction_limit INTEGER DEFAULT 100000,
+    monthly_transaction_limit INTEGER DEFAULT 500000,
+    single_transaction_limit INTEGER DEFAULT 50000,
+    withdrawal_limit INTEGER DEFAULT 100000,
+    description TEXT
+);
 
 -- ============================================
--- DONNÉES INITIALES
+-- TABLE DES PARAMETRES APPLICATION
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setting_key TEXT UNIQUE NOT NULL,
+    setting_value TEXT,
+    setting_type TEXT DEFAULT 'string',
+    description TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- TABLE DES MESSAGES DE CONTACT
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS contact_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    subject TEXT,
+    message TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- INDEXES POUR PERFORMANCES
+-- ============================================
+
+CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_sender ON transactions(sender_phone);
+CREATE INDEX IF NOT EXISTS idx_transactions_receiver ON transactions(receiver_phone);
+CREATE INDEX IF NOT EXISTS idx_transactions_reference ON transactions(reference);
+CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
+CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_slug ON blog_posts(slug);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_status ON blog_posts(status);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at ON blog_posts(created_at);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_category ON blog_posts(category);
+CREATE INDEX IF NOT EXISTS idx_kyc_requests_user_id ON kyc_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_kyc_requests_status ON kyc_requests(status);
+CREATE INDEX IF NOT EXISTS idx_kyc_documents_kyc_request_id ON kyc_documents(kyc_request_id);
+CREATE INDEX IF NOT EXISTS idx_kyc_history_user_id ON kyc_history(user_id);
+
+-- ============================================
+-- DONNEES INITIALES
 -- ============================================
 
 -- Insertion des 23 provinces du Tchad
@@ -187,7 +318,7 @@ INSERT OR IGNORE INTO provinces (name, region) VALUES
 ('Borkou', 'Nord'),
 ('Ennedi Est', 'Nord-Est'),
 ('Ennedi Ouest', 'Nord-Est'),
-('Guéra', 'Centre'),
+('Guera', 'Centre'),
 ('Kanem', 'Ouest'),
 ('Lac', 'Ouest'),
 ('Logone Occidental', 'Sud-Ouest'),
@@ -196,19 +327,39 @@ INSERT OR IGNORE INTO provinces (name, region) VALUES
 ('Mayo-Kebbi Est', 'Sud-Ouest'),
 ('Mayo-Kebbi Ouest', 'Sud-Ouest'),
 ('Moyen-Chari', 'Sud'),
-('Ouaddaï', 'Est'),
+('Ouaddai', 'Est'),
 ('Salamat', 'Sud-Est'),
 ('Sila', 'Est'),
-('Tandjilé', 'Sud'),
+('Tandjile', 'Sud'),
 ('Tibesti', 'Nord'),
-('N''Djaména', 'Centre');
+('NDjamena', 'Centre');
 
--- Création de l'admin principal (phone: 62787307, password: 08093Ali)
--- Note: Le mot de passe sera hashé par l'application, ici c'est un placeholder
-INSERT OR IGNORE INTO users (phone, fullname, password_hash, private_key_6, province, role, is_active, is_verified)
-VALUES ('62787307', 'Admin Core Team - CashPays', 'PLACEHOLDER_HASH', 'PLACEHOLDER_KEY', 'N''Djaména', 'admin', 1, 1);
+-- Insertion des limites KYC par defaut
+INSERT OR IGNORE INTO kyc_limits (level, daily_transaction_limit, monthly_transaction_limit, single_transaction_limit, withdrawal_limit, description)
+VALUES 
+    (0, 25000, 100000, 25000, 50000, 'Non verifie - Limites reduites'),
+    (1, 100000, 500000, 50000, 100000, 'Niveau 1 - Verification de base'),
+    (2, 500000, 2000000, 200000, 500000, 'Niveau 2 - Verification complete');
 
--- Création du wallet principal pour l'admin (90 000 000 FCFA)
+-- Insertion des parametres par defaut
+INSERT OR IGNORE INTO app_settings (setting_key, setting_value, setting_type, description) VALUES
+    ('min_transaction', '25', 'integer', 'Montant minimum de transaction'),
+    ('max_transaction', '10000000', 'integer', 'Montant maximum de transaction'),
+    ('transfer_fee', '2', 'integer', 'Frais de transfert en pourcentage'),
+    ('deposit_fee', '0', 'integer', 'Frais de depot en pourcentage'),
+    ('withdrawal_fee', '2', 'integer', 'Frais de retrait en pourcentage'),
+    ('referral_bonus', '500', 'integer', 'Bonus de parrainage en FCFA'),
+    ('maintenance_mode', 'false', 'boolean', 'Mode maintenance'),
+    ('app_version', '1.0.0', 'string', 'Version de l''application');
+
+-- ============================================
+-- ADMIN PAR DEFAUT
+-- ============================================
+
+INSERT OR IGNORE INTO users (phone, fullname, password_hash, private_key_6, province, role, is_active, is_verified, email)
+VALUES ('62787307', 'Admin Core Team - CashPays', 'PLACEHOLDER_HASH', 'PLACEHOLDER_KEY', 'NDjamena', 'admin', 1, 1, 'admin@cashpays.td');
+
+-- Creation du wallet principal pour l'admin
 INSERT OR IGNORE INTO wallets (user_id, balance, is_principal)
 SELECT id, 90000000, 1 FROM users WHERE phone = '62787307';
 
@@ -216,20 +367,21 @@ SELECT id, 90000000, 1 FROM users WHERE phone = '62787307';
 -- TRIGGERS
 -- ============================================
 
--- Trigger pour mettre à jour updated_at
+-- Trigger pour mettre a jour updated_at users
 CREATE TRIGGER IF NOT EXISTS update_users_timestamp 
 AFTER UPDATE ON users
 BEGIN
     UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
+-- Trigger pour mettre a jour updated_at wallets
 CREATE TRIGGER IF NOT EXISTS update_wallets_timestamp 
 AFTER UPDATE ON wallets
 BEGIN
     UPDATE wallets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
--- Trigger pour créer automatiquement un wallet lors de l'inscription d'un user
+-- Trigger pour creer automatiquement un wallet lors de l'inscription d'un user
 CREATE TRIGGER IF NOT EXISTS create_wallet_on_user_insert
 AFTER INSERT ON users
 WHEN NEW.role = 'user'
@@ -237,12 +389,19 @@ BEGIN
     INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 1000);
 END;
 
--- Trigger pour créer automatiquement un wallet agent lors de l'inscription
+-- Trigger pour creer automatiquement un wallet agent lors de l'inscription
 CREATE TRIGGER IF NOT EXISTS create_wallet_on_agent_insert
 AFTER INSERT ON users
 WHEN NEW.role = 'agent'
 BEGIN
     INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 0);
+END;
+
+-- Trigger pour mettre a jour updated_at blog_posts
+CREATE TRIGGER IF NOT EXISTS update_blog_posts_timestamp 
+AFTER UPDATE ON blog_posts
+BEGIN
+    UPDATE blog_posts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
 -- ============================================
@@ -257,14 +416,14 @@ SELECT
     r.fullname as receiver_name,
     CASE 
         WHEN t.type = 'transfer' THEN 'Transfert'
-        WHEN t.type = 'deposit' THEN 'Dépôt'
+        WHEN t.type = 'deposit' THEN 'Depot'
         WHEN t.type = 'withdraw' THEN 'Retrait'
         ELSE t.type
     END as type_label,
     CASE 
         WHEN t.status = 'pending' THEN 'En attente'
-        WHEN t.status = 'completed' THEN 'Complété'
-        WHEN t.status = 'failed' THEN 'Échoué'
+        WHEN t.status = 'completed' THEN 'Complete'
+        WHEN t.status = 'failed' THEN 'Echoue'
         ELSE t.status
     END as status_label
 FROM transactions t
@@ -280,3 +439,21 @@ SELECT
     (SELECT SUM(balance) FROM wallets w4 JOIN users u4 ON w4.user_id = u4.id WHERE u4.role = 'agent') as agents_total_balance
 FROM wallets w
 JOIN users u ON w.user_id = u.id;
+
+-- Vue des statistiques KYC
+CREATE VIEW IF NOT EXISTS v_kyc_stats AS
+SELECT 
+    COUNT(*) as total_requests,
+    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+    SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified_count,
+    SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
+FROM kyc_requests;
+
+-- Vue des articles de blog avec auteurs
+CREATE VIEW IF NOT EXISTS v_blog_posts AS
+SELECT 
+    bp.*,
+    u.fullname as author_fullname,
+    u.phone as author_phone
+FROM blog_posts bp
+LEFT JOIN users u ON bp.author_id = u.id;

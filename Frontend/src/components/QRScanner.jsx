@@ -149,7 +149,7 @@ function QRScanner({ onScan, onClose }) {
         {hasPermission && !error && (
           <div className="absolute inset-0 pointer-events-none">
             <div className="absolute inset-0 bg-black/50"></div>
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+            <div className="absolute top-2/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
               <div className="w-64 h-64 border-2 border-blue-400 rounded-lg shadow-lg">
                 <div className="absolute -top-1 -left-1 w-8 h-8 border-t-2 border-l-2 border-blue-400"></div>
                 <div className="absolute -top-1 -right-1 w-8 h-8 border-t-2 border-r-2 border-blue-400"></div>

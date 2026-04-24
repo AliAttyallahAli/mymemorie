@@ -216,16 +216,6 @@ function Login({ setUser }) {
           </Link>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-white/10">
-          <button
-            onClick={handleDemoLogin}
-            className="w-full bg-white/10 hover:bg-white/20 text-white/80 text-sm py-2 rounded-lg transition-all duration-200 flex items-center justify-center gap-2"
-          >
-            <FaShieldAlt className="text-yellow-400" />
-            Connexion admin: 62787307 / 08093Ali
-          </button>
-        </div>
-
         <div className="text-center text-white/30 text-xs mt-6">
           CashPays v1.0.0 - © 2026 GOUROUSDJA
         </div>
