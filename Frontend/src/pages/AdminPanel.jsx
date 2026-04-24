@@ -6,7 +6,8 @@ import {
   FaUsers, FaUserTie, FaMoneyBillWave, FaChartLine, FaBell, 
   FaCog, FaKey, FaUserPlus, FaTimes, FaEye, FaEyeSlash,
   FaBuilding, FaPhone, FaMapMarkerAlt, FaCheckCircle, FaShieldAlt,
-  FaCopy, FaBan, FaCheck
+  FaCopy, FaBan, FaCheck, FaTrashAlt, FaEdit, FaPlus, FaNewspaper,
+  FaSave, FaArrowLeft, FaImage, FaTag, FaCalendarAlt
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 
@@ -17,6 +18,20 @@ function AdminPanel({ user }) {
   const [agents, setAgents] = useState([])
   const [stats, setStats] = useState({})
   const [loading, setLoading] = useState(true)
+  
+  // États pour le blog
+  const [blogPosts, setBlogPosts] = useState([])
+  const [showBlogForm, setShowBlogForm] = useState(false)
+  const [editingPost, setEditingPost] = useState(null)
+  const [blogForm, setBlogForm] = useState({
+    title: '',
+    excerpt: '',
+    content: '',
+    category: '',
+    tags: '',
+    image: '',
+    published: true
+  })
   
   // États pour le modal de création d'agent
   const [showAgentModal, setShowAgentModal] = useState(false)
@@ -43,6 +58,7 @@ function AdminPanel({ user }) {
     if (user?.role === 'admin') {
       fetchAdminData()
       fetchProvinces()
+      fetchBlogPosts()
     }
   }, [activeTab])
 
@@ -53,16 +69,15 @@ function AdminPanel({ user }) {
         axios.get('/api/admin/users', { headers: { Authorization: `Bearer ${token}` } }),
         axios.get('/api/admin/users?role=agent', { headers: { Authorization: `Bearer ${token}` } })
       ])
-      setUsers(usersRes.data.users)
-      setAgents(agentsRes.data.users)
+      setUsers(usersRes.data.users || [])
+      setAgents(agentsRes.data.users || [])
       
-      // Stats simplifiées
-      const totalBalance = usersRes.data.users.reduce((sum, u) => sum + (u.balance || 0), 0)
+      const totalBalance = (usersRes.data.users || []).reduce((sum, u) => sum + (u.balance || 0), 0)
       setStats({
-        totalUsers: usersRes.data.total,
-        totalAgents: agentsRes.data.total,
+        totalUsers: usersRes.data.total || 0,
+        totalAgents: agentsRes.data.total || 0,
         totalBalance,
-        totalTransactions: 0 // À implémenter
+        totalTransactions: 0
       })
     } catch (error) {
       console.error('Erreur chargement admin:', error)
@@ -72,14 +87,30 @@ function AdminPanel({ user }) {
     }
   }
 
+  const fetchBlogPosts = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/blog/posts', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setBlogPosts(response.data || [])
+    } catch (error) {
+      console.error('Erreur chargement blog:', error)
+      setBlogPosts([])
+    }
+  }
+
   const fetchProvinces = async () => {
     try {
       const response = await axios.get('/api/provinces')
       if (Array.isArray(response.data)) {
         setProvinces(response.data)
+      } else {
+        setProvinces([])
       }
     } catch (error) {
       console.error('Erreur chargement provinces:', error)
+      setProvinces([])
     }
   }
 
@@ -90,7 +121,6 @@ function AdminPanel({ user }) {
   const handleCreateAgent = async (e) => {
     e.preventDefault()
     
-    // Validations
     if (agentForm.password !== agentForm.confirmPassword) {
       toast.error('Les mots de passe ne correspondent pas')
       return
@@ -147,7 +177,6 @@ function AdminPanel({ user }) {
       setCreatedAgent(response.data.agent)
       toast.success('Agent créé avec succès !')
       
-      // Réinitialiser le formulaire
       setAgentForm({
         phone: '',
         fullname: '',
@@ -160,7 +189,6 @@ function AdminPanel({ user }) {
         agency_type: 'secondaire'
       })
       
-      // Rafraîchir les listes
       fetchAdminData()
       
     } catch (error) {
@@ -186,6 +214,86 @@ function AdminPanel({ user }) {
     })
     setShowPassword(false)
     setShowPrivateKey(false)
+  }
+
+  const handleBlogFormChange = (e) => {
+    const { name, value, type, checked } = e.target
+    setBlogForm(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }))
+  }
+
+  const handleCreateBlogPost = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    
+    try {
+      const token = localStorage.getItem('accessToken')
+      const data = {
+        ...blogForm,
+        tags: blogForm.tags.split(',').map(tag => tag.trim()).filter(tag => tag)
+      }
+      
+      if (editingPost) {
+        await axios.put(`/api/blog/posts/${editingPost.id}`, data, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        toast.success('Article mis à jour avec succès')
+      } else {
+        await axios.post('/api/blog/posts', data, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        toast.success('Article créé avec succès')
+      }
+      
+      setShowBlogForm(false)
+      setEditingPost(null)
+      setBlogForm({
+        title: '',
+        excerpt: '',
+        content: '',
+        category: '',
+        tags: '',
+        image: '',
+        published: true
+      })
+      fetchBlogPosts()
+      
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erreur lors de l\'enregistrement')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDeleteBlogPost = async (postId, postTitle) => {
+    if (!window.confirm(`Supprimer l'article "${postTitle}" ?`)) return
+    
+    try {
+      const token = localStorage.getItem('accessToken')
+      await axios.delete(`/api/blog/posts/${postId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      toast.success('Article supprimé')
+      fetchBlogPosts()
+    } catch (error) {
+      toast.error('Erreur lors de la suppression')
+    }
+  }
+
+  const handleEditBlogPost = (post) => {
+    setEditingPost(post)
+    setBlogForm({
+      title: post.title || '',
+      excerpt: post.excerpt || '',
+      content: post.content || '',
+      category: post.category || '',
+      tags: Array.isArray(post.tags) ? post.tags.join(', ') : (post.tags || ''),
+      image: post.image || '',
+      published: post.published === 1 || post.published === true
+    })
+    setShowBlogForm(true)
   }
 
   const toggleUserStatus = async (userId, currentStatus) => {
@@ -226,7 +334,8 @@ function AdminPanel({ user }) {
     { id: 'users', label: 'Utilisateurs', icon: FaUsers },
     { id: 'agents', label: 'Agents', icon: FaUserTie },
     { id: 'wallet', label: 'Wallet Principal', icon: FaMoneyBillWave },
-    { id: 'announce', label: 'Annonces', icon: FaBell }
+    { id: 'announce', label: 'Annonces', icon: FaBell },
+    { id: 'blog', label: 'Blog', icon: FaNewspaper }
   ]
 
   if (user?.role !== 'admin') {
@@ -251,7 +360,11 @@ function AdminPanel({ user }) {
           {tabs.map(tab => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                setActiveTab(tab.id)
+                setShowBlogForm(false)
+                setEditingPost(null)
+              }}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
                 activeTab === tab.id
                   ? 'bg-blue-600 text-white'
@@ -287,64 +400,61 @@ function AdminPanel({ user }) {
 
         {/* Users Tab */}
         {activeTab === 'users' && (
-          <div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-white">
-                <thead className="border-b border-white/20">
-                  <tr className="text-left text-white/60">
-                    <th className="pb-3">Nom</th>
-                    <th className="pb-3">Téléphone</th>
-                    <th className="pb-3">Province</th>
-                    <th className="pb-3">Solde</th>
-                    <th className="pb-3">Statut</th>
-                    <th className="pb-3">Actions</th>
+          <div className="overflow-x-auto">
+            <table className="w-full text-white">
+              <thead className="border-b border-white/20">
+                <tr className="text-left text-white/60">
+                  <th className="pb-3">Nom</th>
+                  <th className="pb-3">Téléphone</th>
+                  <th className="pb-3">Province</th>
+                  <th className="pb-3">Solde</th>
+                  <th className="pb-3">Statut</th>
+                  <th className="pb-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.filter(u => u.role === 'user').map(u => (
+                  <tr key={u.id} className="border-b border-white/10">
+                    <td className="py-3">{u.fullname}</td>
+                    <td className="py-3">{u.phone}</td>
+                    <td className="py-3">{u.province}</td>
+                    <td className="py-3">{(u.balance || 0).toLocaleString()} FCFA</td>
+                    <td className="py-3">
+                      <span className={`px-2 py-1 rounded-full text-xs ${
+                        u.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                      }`}>
+                        {u.is_active ? 'Actif' : 'Inactif'}
+                      </span>
+                    </td>
+                    <td className="py-3">
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => toggleUserStatus(u.id, u.is_active)}
+                          className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${
+                            u.is_active ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
+                          }`}
+                        >
+                          {u.is_active ? <FaBan size={10} /> : <FaCheck size={10} />}
+                          {u.is_active ? 'Bloquer' : 'Débloquer'}
+                        </button>
+                        <button
+                          onClick={() => recoverUserKey(u.id, u.fullname)}
+                          className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1"
+                        >
+                          <FaKey size={10} /> Clé
+                        </button>
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {users.map(u => (
-                    <tr key={u.id} className="border-b border-white/10">
-                      <td className="py-3">{u.fullname}</td>
-                      <td className="py-3">{u.phone}</td>
-                      <td className="py-3">{u.province}</td>
-                      <td className="py-3">{(u.balance || 0).toLocaleString()} FCFA</td>
-                      <td className="py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs ${
-                          u.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                        }`}>
-                          {u.is_active ? 'Actif' : 'Inactif'}
-                        </span>
-                      </td>
-                      <td className="py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => toggleUserStatus(u.id, u.is_active)}
-                            className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${
-                              u.is_active ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
-                            }`}
-                          >
-                            {u.is_active ? <FaBan size={10} /> : <FaCheck size={10} />}
-                            {u.is_active ? 'Bloquer' : 'Débloquer'}
-                          </button>
-                          <button
-                            onClick={() => recoverUserKey(u.id, u.fullname)}
-                            className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1"
-                          >
-                            <FaKey size={10} /> Clé
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
         {/* Agents Tab */}
         {activeTab === 'agents' && (
           <div>
-            {/* Bouton pour ouvrir le modal */}
             <button
               onClick={() => setShowAgentModal(true)}
               className="btn-primary mb-4 inline-flex items-center gap-2"
@@ -422,37 +532,242 @@ function AdminPanel({ user }) {
 
         {/* Announce Tab */}
         {activeTab === 'announce' && (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault()
+              const formData = new FormData(e.target)
+              try {
+                const token = localStorage.getItem('accessToken')
+                await axios.post('/api/admin/announce', {
+                  title: formData.get('title'),
+                  content: formData.get('content'),
+                  facebook_link: formData.get('facebook'),
+                  whatsapp_link: formData.get('whatsapp'),
+                  telegram_link: formData.get('telegram'),
+                  website_link: formData.get('website')
+                }, { headers: { Authorization: `Bearer ${token}` } })
+                toast.success('Annonce publiée')
+                e.target.reset()
+              } catch (error) {
+                toast.error('Erreur lors de la publication')
+              }
+            }}
+            className="space-y-4"
+          >
+            <input name="title" className="input-field" placeholder="Titre de l'annonce" required />
+            <textarea name="content" className="input-field" rows="4" placeholder="Contenu de l'annonce" required />
+            <input name="facebook" className="input-field" placeholder="Lien Facebook" />
+            <input name="whatsapp" className="input-field" placeholder="Lien WhatsApp" />
+            <input name="telegram" className="input-field" placeholder="Lien Telegram" />
+            <input name="website" className="input-field" placeholder="Lien Site web" />
+            <button type="submit" className="btn-primary w-full">Publier l'annonce</button>
+          </form>
+        )}
+
+        {/* Blog Tab */}
+        {activeTab === 'blog' && (
           <div>
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault()
-                const formData = new FormData(e.target)
-                try {
-                  const token = localStorage.getItem('accessToken')
-                  await axios.post('/api/admin/announce', {
-                    title: formData.get('title'),
-                    content: formData.get('content'),
-                    facebook_link: formData.get('facebook'),
-                    whatsapp_link: formData.get('whatsapp'),
-                    telegram_link: formData.get('telegram'),
-                    website_link: formData.get('website')
-                  }, { headers: { Authorization: `Bearer ${token}` } })
-                  toast.success('Annonce publiée')
-                  e.target.reset()
-                } catch (error) {
-                  toast.error('Erreur lors de la publication')
-                }
-              }}
-              className="space-y-4"
-            >
-              <input name="title" className="input-field" placeholder="Titre de l'annonce" required />
-              <textarea name="content" className="input-field" rows="4" placeholder="Contenu de l'annonce" required />
-              <input name="facebook" className="input-field" placeholder="Lien Facebook" />
-              <input name="whatsapp" className="input-field" placeholder="Lien WhatsApp" />
-              <input name="telegram" className="input-field" placeholder="Lien Telegram" />
-              <input name="website" className="input-field" placeholder="Lien Site web" />
-              <button type="submit" className="btn-primary w-full">Publier l'annonce</button>
-            </form>
+            {!showBlogForm ? (
+              <>
+                <button
+                  onClick={() => {
+                    setEditingPost(null)
+                    setBlogForm({
+                      title: '',
+                      excerpt: '',
+                      content: '',
+                      category: '',
+                      tags: '',
+                      image: '',
+                      published: true
+                    })
+                    setShowBlogForm(true)
+                  }}
+                  className="btn-primary mb-4 inline-flex items-center gap-2"
+                >
+                  <FaPlus /> Nouvel article
+                </button>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-white">
+                    <thead className="border-b border-white/20">
+                      <tr className="text-left text-white/60">
+                        <th className="pb-3">Titre</th>
+                        <th className="pb-3">Catégorie</th>
+                        <th className="pb-3">Date</th>
+                        <th className="pb-3">Statut</th>
+                        <th className="pb-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {blogPosts.map(post => (
+                        <tr key={post.id} className="border-b border-white/10">
+                          <td className="py-3">{post.title}</td>
+                          <td className="py-3">
+                            <span className="px-2 py-1 rounded-full text-xs bg-blue-500/20 text-blue-400">
+                              {post.category}
+                            </span>
+                          </td>
+                          <td className="py-3 text-white/60 text-sm">
+                            {post.created_at ? new Date(post.created_at).toLocaleDateString('fr-FR') : '-'}
+                          </td>
+                          <td className="py-3">
+                            <span className={`px-2 py-1 rounded-full text-xs ${
+                              post.published 
+                                ? 'bg-green-500/20 text-green-400' 
+                                : 'bg-yellow-500/20 text-yellow-400'
+                            }`}>
+                              {post.published ? 'Publié' : 'Brouillon'}
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleEditBlogPost(post)}
+                                className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1"
+                              >
+                                <FaEdit size={10} /> Modifier
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBlogPost(post.id, post.title)}
+                                className="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 flex items-center gap-1"
+                              >
+                                <FaTrashAlt size={10} /> Supprimer
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div>
+                <button
+                  onClick={() => {
+                    setShowBlogForm(false)
+                    setEditingPost(null)
+                  }}
+                  className="btn-secondary mb-4 inline-flex items-center gap-2"
+                >
+                  <FaArrowLeft /> Retour à la liste
+                </button>
+
+                <form onSubmit={handleCreateBlogPost} className="space-y-4">
+                  <h3 className="text-white text-xl font-semibold mb-4">
+                    {editingPost ? 'Modifier l\'article' : 'Nouvel article'}
+                  </h3>
+
+                  <div>
+                    <label className="label">Titre *</label>
+                    <input
+                      type="text"
+                      name="title"
+                      value={blogForm.title}
+                      onChange={handleBlogFormChange}
+                      className="input-field"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label">Extrait *</label>
+                    <textarea
+                      name="excerpt"
+                      value={blogForm.excerpt}
+                      onChange={handleBlogFormChange}
+                      className="input-field"
+                      rows="2"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="label">Contenu *</label>
+                    <textarea
+                      name="content"
+                      value={blogForm.content}
+                      onChange={handleBlogFormChange}
+                      className="input-field"
+                      rows="8"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="label">Catégorie</label>
+                      <select
+                        name="category"
+                        value={blogForm.category}
+                        onChange={handleBlogFormChange}
+                        className="input-field"
+                      >
+                        <option value="">Sélectionner</option>
+                        <option value="Tutoriel">Tutoriel</option>
+                        <option value="Actualité">Actualité</option>
+                        <option value="Sécurité">Sécurité</option>
+                        <option value="Promotion">Promotion</option>
+                        <option value="Opportunité">Opportunité</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="label">Tags</label>
+                      <input
+                        type="text"
+                        name="tags"
+                        value={blogForm.tags}
+                        onChange={handleBlogFormChange}
+                        className="input-field"
+                        placeholder="tag1, tag2, tag3"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="label">URL de l'image</label>
+                      <input
+                        type="text"
+                        name="image"
+                        value={blogForm.image}
+                        onChange={handleBlogFormChange}
+                        className="input-field"
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-4 pt-6">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          name="published"
+                          checked={blogForm.published}
+                          onChange={(e) => setBlogForm(prev => ({ ...prev, published: e.target.checked }))}
+                          className="w-4 h-4 text-blue-500"
+                        />
+                        <span className="text-white">Publier immédiatement</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="btn-primary w-full flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    ) : (
+                      <>
+                        <FaSave /> {editingPost ? 'Mettre à jour' : 'Publier'}
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -461,7 +776,6 @@ function AdminPanel({ user }) {
       {showAgentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto">
           <div className="relative max-w-2xl w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
-            {/* Header modal */}
             <div className="sticky top-0 bg-blue-900/95 backdrop-blur-sm p-4 border-b border-white/10 flex justify-between items-center">
               <h3 className="text-xl font-bold text-white flex items-center gap-2">
                 <FaUserPlus className="text-blue-400" />
@@ -475,9 +789,7 @@ function AdminPanel({ user }) {
               </button>
             </div>
 
-            {/* Contenu modal */}
             <div className="p-6">
-              {/* Affichage après création */}
               {createdAgent ? (
                 <div>
                   <div className="text-center mb-6">
@@ -569,9 +881,7 @@ function AdminPanel({ user }) {
                   </div>
                 </div>
               ) : (
-                /* Formulaire de création */
                 <form onSubmit={handleCreateAgent} className="space-y-5">
-                  {/* Informations personnelles */}
                   <div>
                     <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                       <FaUserTie className="text-blue-400" /> Informations personnelles
@@ -622,7 +932,6 @@ function AdminPanel({ user }) {
                     </div>
                   </div>
 
-                  {/* Sécurité */}
                   <div className="border-t border-white/10 pt-4">
                     <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                       <FaKey className="text-blue-400" /> Sécurité
@@ -665,7 +974,6 @@ function AdminPanel({ user }) {
                     </div>
                   </div>
 
-                  {/* Informations agence */}
                   <div className="border-t border-white/10 pt-4">
                     <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                       <FaBuilding className="text-blue-400" /> Informations de l'agence
@@ -698,7 +1006,7 @@ function AdminPanel({ user }) {
                       </div>
 
                       <div>
-                        <label className="label">Téléphone de l'agence (optionnel)</label>
+                        <label className="label">Téléphone de l'agence</label>
                         <input
                           type="tel"
                           name="agency_phone"
@@ -720,7 +1028,7 @@ function AdminPanel({ user }) {
                               value="principale"
                               checked={agentForm.agency_type === 'principale'}
                               onChange={handleAgentFormChange}
-                              className="w-4 h-4 text-blue-500"
+                              className="w-4 h-4"
                             />
                             <span className="text-white">Principale</span>
                           </label>
@@ -731,7 +1039,7 @@ function AdminPanel({ user }) {
                               value="secondaire"
                               checked={agentForm.agency_type === 'secondaire'}
                               onChange={handleAgentFormChange}
-                              className="w-4 h-4 text-blue-500"
+                              className="w-4 h-4"
                             />
                             <span className="text-white">Secondaire</span>
                           </label>
@@ -740,20 +1048,11 @@ function AdminPanel({ user }) {
                     </div>
                   </div>
 
-                  {/* Boutons formulaire */}
                   <div className="flex gap-4 pt-4">
-                    <button
-                      type="button"
-                      onClick={resetAgentModal}
-                      className="btn-secondary flex-1"
-                    >
+                    <button type="button" onClick={resetAgentModal} className="btn-secondary flex-1">
                       Annuler
                     </button>
-                    <button
-                      type="submit"
-                      disabled={creatingAgent}
-                      className="btn-primary flex-1 flex items-center justify-center gap-2"
-                    >
+                    <button type="submit" disabled={creatingAgent} className="btn-primary flex-1 flex items-center justify-center gap-2">
                       {creatingAgent ? (
                         <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                       ) : (

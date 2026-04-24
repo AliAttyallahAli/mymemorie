@@ -1498,6 +1498,103 @@ app.get('/api/provinces', async (req, res) => {
     res.json([])
   }
 })
+// backend/server.js - Ajouter cet endpoint
+app.get('/api/auth/verify', authenticateToken, async (req, res) => {
+  try {
+    // Vérifier si l'utilisateur existe toujours
+    const user = await get('SELECT id, phone, fullname, role, is_active FROM users WHERE id = ?', [req.user.userId])
+    
+    if (!user || !user.is_active) {
+      return res.json({ valid: false })
+    }
+    
+    res.json({ valid: true, user })
+  } catch (error) {
+    res.json({ valid: false })
+  }
+})
+// backend/server.js - Ajouter ces endpoints
+
+// ============================================
+// ENDPOINTS BLOG
+// ============================================
+
+// Obtenir tous les articles
+app.get('/api/blog/posts', async (req, res) => {
+  try {
+    const posts = await query(`
+      SELECT * FROM blog_posts 
+      ORDER BY created_at DESC
+    `)
+    res.json(posts || [])
+  } catch (error) {
+    console.error('Erreur récupération articles:', error)
+    res.json([])
+  }
+})
+
+// Obtenir un article par ID
+app.get('/api/blog/posts/:id', async (req, res) => {
+  const { id } = req.params
+  try {
+    const post = await get('SELECT * FROM blog_posts WHERE id = ?', [id])
+    if (!post) {
+      return res.status(404).json({ error: 'Article non trouvé' })
+    }
+    res.json(post)
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur lors de la récupération' })
+  }
+})
+
+// Créer un article (admin uniquement)
+app.post('/api/blog/posts', authenticateToken, requireAdmin, async (req, res) => {
+  const { title, excerpt, content, category, tags, image, published } = req.body
+  
+  try {
+    const result = await run(`
+      INSERT INTO blog_posts (title, excerpt, content, category, tags, image, published, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [title, excerpt, content, category, JSON.stringify(tags), image, published ? 1 : 0, req.user.userId])
+    
+    res.status(201).json({ id: result.lastID, success: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Erreur lors de la création' })
+  }
+})
+
+// Modifier un article (admin uniquement)
+app.put('/api/blog/posts/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params
+  const { title, excerpt, content, category, tags, image, published } = req.body
+  
+  try {
+    await run(`
+      UPDATE blog_posts 
+      SET title = ?, excerpt = ?, content = ?, category = ?, tags = ?, image = ?, published = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [title, excerpt, content, category, JSON.stringify(tags), image, published ? 1 : 0, id])
+    
+    res.json({ success: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Erreur lors de la modification' })
+  }
+})
+
+// Supprimer un article (admin uniquement)
+app.delete('/api/blog/posts/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params
+  
+  try {
+    await run('DELETE FROM blog_posts WHERE id = ?', [id])
+    res.json({ success: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Erreur lors de la suppression' })
+  }
+})
 
 // ============================================
 // DÉMARRAGE DU SERVEUR

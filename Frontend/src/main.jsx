@@ -7,6 +7,7 @@ import { Toaster } from 'react-hot-toast'
 import App from './App'
 import { ThemeProvider } from './context/ThemeContext'
 import './index.css'
+import './styles/animations.css'
 
 const queryClient = new QueryClient()
 
