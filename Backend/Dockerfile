@@ -1,17 +1,18 @@
-# Dockerfile
-FROM node:18-alpine
+FROM node:18-slim
 
-# Créer le répertoire de travail
 WORKDIR /app
 
-# Copier les fichiers de dépendances
+# Copier package.json d'abord (meilleur cache)
 COPY package*.json ./
 
 # Installer les dépendances
-RUN npm ci --only=production
+RUN npm ci --production
 
-# Copier le reste du code source
+# Copier le code source
 COPY . .
+
+# Créer le dossier uploads
+RUN mkdir -p uploads/kyc uploads/agent_applications
 
 # Exposer le port
 EXPOSE 5000

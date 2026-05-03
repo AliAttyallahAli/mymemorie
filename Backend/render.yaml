@@ -2,17 +2,15 @@ services:
   - type: web
     name: cashpays-backend
     runtime: node
-    repo: https://github.com/AliAttyallahAli/mymemorie
-    branch: GOUROUSDJA
+    plan: free
     buildCommand: npm install
     startCommand: node server.js
-    rootDir: backend  # Si votre backend est dans un dossier backend
     envVars:
       - key: NODE_VERSION
-        value: 20.11.0
+        value: 18
+      - key: PORT
+        value: 5000
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
-      - key: PORT
-        value: 10000
