@@ -93,10 +93,13 @@ CREATE TABLE IF NOT EXISTS notifications (
     user_id INTEGER,
     title TEXT NOT NULL,
     message TEXT NOT NULL,
-    type TEXT DEFAULT 'info' CHECK(type IN ('info', 'alert', 'transaction', 'promo')),
+    type TEXT DEFAULT 'info' CHECK(type IN ('info', 'alert', 'transaction', 'kyc')),
+    category TEXT DEFAULT 'info' CHECK(category IN ('info', 'transaction', 'kyc', 'alert', 'security')),
     is_read INTEGER DEFAULT 0,
+    metadata TEXT,
     link TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    read_at DATETIME,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -278,6 +281,7 @@ CREATE TABLE IF NOT EXISTS contact_messages (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+
 -- ============================================
 -- INDEXES POUR PERFORMANCES
 -- ============================================
@@ -293,6 +297,7 @@ CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
 CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
+CREATE INDEX IF NOT EXISTS idx_notifications_category ON notifications(category);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_blog_posts_slug ON blog_posts(slug);

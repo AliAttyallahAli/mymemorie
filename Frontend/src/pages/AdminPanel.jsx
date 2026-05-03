@@ -12,6 +12,8 @@ import {
   FaDownload, FaEnvelope, FaUserCheck, FaUserTimes, FaInfoCircle
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
+import AgentApplicationsManager from '../components/AgentApplicationsManager'
+
 
 function AdminPanel({ user }) {
   const navigate = useNavigate()
@@ -447,7 +449,8 @@ function AdminPanel({ user }) {
     { id: 'announce', label: 'Annonces', icon: FaBell },
     { id: 'blog', label: 'Blog', icon: FaNewspaper },
     { id: 'kyc', label: 'KYC', icon: FaIdCard },
-    { id: 'settings', label: 'Paramètres', icon: FaCog }
+    { id: 'settings', label: 'Paramètres', icon: FaCog },
+    { id: 'agent-applications', label: 'Candidatures Agents', icon: FaUserCheck }
   ]
 
   if (user?.role !== 'admin') {
@@ -1058,6 +1061,9 @@ function AdminPanel({ user }) {
             <p className="text-white/50">Paramètres système en cours de développement</p>
           </div>
         )}
+        {activeTab === 'agent-applications' && (
+         <AgentApplicationsManager />
+          )}
       </div>
 
       {/* MODAL DÉTAILS KYC */}

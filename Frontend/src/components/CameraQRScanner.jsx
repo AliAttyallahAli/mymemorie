@@ -1,40 +1,63 @@
-// src/components/CameraQRScanner.jsx
-import React, { useEffect, useRef, useState } from 'react'
+// src/components/CameraQRScanner.jsx - Version corrigée avec création dynamique de l'élément
+import React, { useState, useEffect, useRef } from 'react'
+import { FaTimes, FaCamera, FaUpload, FaSpinner, FaQrcode, FaCopy } from 'react-icons/fa'
 import { Html5Qrcode } from 'html5-qrcode'
-import { 
-  FaTimes, FaCamera, FaExchangeAlt, FaLightbulb 
-} from 'react-icons/fa'
 
 function CameraQRScanner({ onScan, onClose }) {
   const [error, setError] = useState(null)
-  const [torchOn, setTorchOn] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [hasPermission, setHasPermission] = useState(false)
+  const [manualInput, setManualInput] = useState('')
+  const [showManualInput, setShowManualInput] = useState(false)
   const scannerRef = useRef(null)
+  const containerRef = useRef(null)
   const isMounted = useRef(true)
 
   useEffect(() => {
     isMounted.current = true
-    startScanner()
+    
+    // Vérifier si le navigateur supporte la caméra
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError("Votre navigateur ne supporte pas l'accès à la caméra")
+      setShowManualInput(true)
+      return
+    }
+    
+    // Attendre que le DOM soit prêt
+    const timer = setTimeout(() => {
+      startScanner()
+    }, 500)
     
     return () => {
+      clearTimeout(timer)
       isMounted.current = false
       stopScanner()
     }
   }, [])
 
   const startScanner = async () => {
-    // Nettoyer l'ancien scanner s'il existe
-    if (scannerRef.current) {
-      await stopScanner()
-    }
+    setError(null)
+    setScanning(true)
     
     try {
-      // Vérifier si l'élément existe déjà et le nettoyer
-      const readerElement = document.getElementById('qr-reader')
-      if (readerElement) {
-        // Vider l'élément
-        while (readerElement.firstChild) {
-          readerElement.removeChild(readerElement.firstChild)
-        }
+      // Nettoyer l'ancien scanner s'il existe
+      if (scannerRef.current) {
+        await stopScanner()
+      }
+      
+      // Créer l'élément s'il n'existe pas
+      let readerElement = document.getElementById('qr-reader')
+      if (!readerElement && containerRef.current) {
+        readerElement = document.createElement('div')
+        readerElement.id = 'qr-reader'
+        readerElement.style.width = '100%'
+        readerElement.style.minHeight = '300px'
+        containerRef.current.innerHTML = ''
+        containerRef.current.appendChild(readerElement)
+      }
+      
+      if (!readerElement) {
+        throw new Error("Impossible de créer l'élément de scan")
       }
       
       // Créer une nouvelle instance
@@ -61,15 +84,28 @@ function CameraQRScanner({ onScan, onClose }) {
           }
         },
         (errorMessage) => {
-          // Ignorer les erreurs normales de scan
+          // Ignorer les erreurs de scan normales
           console.debug("Scan en cours...")
         }
       )
       
+      if (isMounted.current) {
+        setHasPermission(true)
+        setScanning(false)
+      }
+      
     } catch (err) {
       console.error("Erreur démarrage scanner:", err)
       if (isMounted.current) {
-        setError("Impossible d'accéder à la caméra. Vérifiez les permissions.")
+        if (err.name === 'NotAllowedError') {
+          setError("Permission refusée. Veuillez autoriser l'accès à la caméra.")
+        } else if (err.name === 'NotFoundError') {
+          setError("Aucune caméra trouvée sur cet appareil.")
+        } else {
+          setError("Erreur d'accès à la caméra. Utilisez la saisie manuelle.")
+        }
+        setShowManualInput(true)
+        setScanning(false)
       }
     }
   }
@@ -87,175 +123,205 @@ function CameraQRScanner({ onScan, onClose }) {
       scannerRef.current = null
     }
     
-    // Nettoyer l'élément DOM
-    const readerElement = document.getElementById('qr-reader')
-    if (readerElement) {
-      while (readerElement.firstChild) {
-        readerElement.removeChild(readerElement.firstChild)
-      }
+    // Nettoyer l'élément
+    if (containerRef.current) {
+      containerRef.current.innerHTML = ''
     }
   }
 
-  const toggleTorch = () => {
-    const newState = !torchOn
-    setTorchOn(newState)
-    
-    // Gestion de la lampe torche
-    try {
-      const videoElement = document.querySelector('#qr-reader video')
-      if (videoElement && videoElement.srcObject) {
-        const track = videoElement.srcObject.getVideoTracks()[0]
-        if (track && track.applyConstraints) {
-          track.applyConstraints({
-            advanced: [{ torch: newState }]
-          }).catch(e => console.warn("Lampe torche non supportée"))
-        }
-      }
-    } catch (e) {
-      console.warn("Lampe torche non supportée")
-    }
-  }
-
-  const handleManualInput = () => {
-    const code = prompt("Entrez le code QR manuellement:")
-    if (code && code.trim()) {
-      onScan(code.trim())
+  const handleManualSubmit = () => {
+    if (manualInput.trim()) {
+      onScan(manualInput.trim())
       onClose()
+    } else {
+      setError("Veuillez saisir un code QR ou un numéro de téléphone")
+    }
+  }
+
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0]
+    if (!file) return
+    
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const content = e.target?.result
+      if (content) {
+        onScan(content)
+        onClose()
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  const retryScanner = () => {
+    setShowManualInput(false)
+    setError(null)
+    setManualInput('')
+    setTimeout(() => {
+      startScanner()
+    }, 100)
+  }
+
+  const pasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      setManualInput(text)
+      toast.success('Contenu collé')
+    } catch (err) {
+      setError("Impossible de lire le presse-papier")
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black/95 animate-fade-in">
+    <div className="fixed inset-0 z-50 flex flex-col bg-black/95">
       {/* Header */}
       <div className="flex justify-between items-center p-4 bg-gradient-to-r from-blue-900 to-blue-800">
         <div className="flex items-center gap-2">
-          <div className="p-2 bg-blue-500/20 rounded-lg">
-            <FaCamera className="text-blue-400 text-xl" />
-          </div>
-          <div>
-            <h3 className="text-white font-semibold">Scanner un QR code</h3>
-            <p className="text-white/50 text-xs">Placez le QR code dans le cadre</p>
-          </div>
+          {!showManualInput && hasPermission ? (
+            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+          ) : (
+            <FaCamera className="text-blue-400" />
+          )}
+          <h3 className="text-white font-semibold">
+            {!showManualInput && hasPermission ? 'Scanner un QR code' : 'Saisie QR code'}
+          </h3>
         </div>
-        <button 
-          onClick={() => { stopScanner(); onClose() }} 
-          className="text-white/60 hover:text-white p-2 rounded-lg hover:bg-white/10 transition-all"
-        >
+        <button onClick={() => { stopScanner(); onClose() }} className="text-white/60 hover:text-white">
           <FaTimes size={20} />
         </button>
       </div>
       
-      {/* Zone de scan */}
-      <div className="flex-1 relative">
-        {error ? (
-          <div className="absolute inset-0 flex items-center justify-center p-4">
-            <div className="text-center">
-              <div className="text-red-400 text-5xl mb-4">📷</div>
-              <p className="text-red-300 mb-4">{error}</p>
-              <div className="flex gap-3 justify-center">
-                <button onClick={startScanner} className="btn-primary">
-                  Réessayer
-                </button>
-                <button onClick={handleManualInput} className="btn-secondary">
-                  Saisie manuelle
-                </button>
+      {/* Contenu */}
+      <div className="flex-1 p-4">
+        {!showManualInput && !error ? (
+          <div className="relative">
+            {/* Conteneur pour le scanner */}
+            <div 
+              ref={containerRef}
+              className="w-full rounded-xl overflow-hidden bg-black"
+              style={{ minHeight: '350px' }}
+            />
+            
+            {/* Indicateur de scan */}
+            {scanning && (
+              <div className="absolute top-4 right-4">
+                <div className="bg-blue-500/20 rounded-full px-3 py-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                    <span className="text-blue-400 text-xs">Initialisation...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Overlay avec cadre */}
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                <div className="relative w-64 h-64">
+                  <div className="absolute -top-1 -left-1 w-8 h-8 border-t-2 border-l-2 border-blue-400 rounded-tl-lg" />
+                  <div className="absolute -top-1 -right-1 w-8 h-8 border-t-2 border-r-2 border-blue-400 rounded-tr-lg" />
+                  <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-2 border-l-2 border-blue-400 rounded-bl-lg" />
+                  <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-2 border-r-2 border-blue-400 rounded-br-lg" />
+                </div>
+              </div>
+              <div className="absolute bottom-20 left-0 right-0 text-center">
+                <p className="text-white/70 text-sm">Placez le QR code dans le cadre</p>
               </div>
             </div>
           </div>
         ) : (
-          <>
-            {/* Conteneur unique pour le scanner */}
-            <div id="qr-reader" className="w-full h-full min-h-[400px]"></div>
+          <div className="space-y-4">
+            {error && (
+              <div className="bg-red-500/20 rounded-xl p-4 border border-red-500/30">
+                <p className="text-red-400 text-sm">{error}</p>
+                <button
+                  onClick={retryScanner}
+                  className="mt-2 text-blue-400 text-sm hover:underline"
+                >
+                  Réessayer avec la caméra
+                </button>
+              </div>
+            )}
             
-            {/* Overlay de scan */}
-            <div className="absolute inset-0 pointer-events-none">
-              {/* Cadre de scan */}
-              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                <div className="relative w-72 h-72">
-                  <div className="absolute -top-1 -left-1 w-8 h-8 border-t-3 border-l-3 border-blue-400 rounded-tl-lg"></div>
-                  <div className="absolute -top-1 -right-1 w-8 h-8 border-t-3 border-r-3 border-blue-400 rounded-tr-lg"></div>
-                  <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-3 border-l-3 border-blue-400 rounded-bl-lg"></div>
-                  <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-3 border-r-3 border-blue-400 rounded-br-lg"></div>
-                  
-                  {/* Animation de scan */}
-                  <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-scan"></div>
-                </div>
+            <div>
+              <label className="label text-white">Saisie manuelle</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualInput}
+                  onChange={(e) => setManualInput(e.target.value)}
+                  placeholder="Collez le QR code ou le numéro de téléphone"
+                  className="input-field flex-1"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={pasteFromClipboard}
+                  className="bg-white/10 hover:bg-white/20 text-white px-3 rounded-lg transition-all"
+                  title="Coller"
+                >
+                  <FaCopy />
+                </button>
               </div>
-              
-              {/* Instructions */}
-              <div className="absolute bottom-20 left-0 right-0 text-center">
-                <div className="inline-block bg-black/50 backdrop-blur-sm rounded-full px-4 py-2">
-                  <p className="text-white/80 text-sm">
-                    <FaExchangeAlt className="inline mr-1 animate-pulse" />
-                    Scannez le QR code CashPays
-                  </p>
-                </div>
-              </div>
+              <p className="text-white/40 text-xs mt-1">
+                Format accepté: numéro à 8 chiffres ou JSON {"{recipient: '66234567'}"}
+              </p>
             </div>
-          </>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleManualSubmit}
+                className="flex-1 btn-primary"
+              >
+                <FaQrcode className="inline mr-1" /> Valider
+              </button>
+              <label className="flex-1 btn-secondary text-center cursor-pointer">
+                <FaUpload className="inline mr-1" /> Importer
+                <input
+                  type="file"
+                  accept=".txt,.json,.qr"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            <button
+              onClick={retryScanner}
+              className="w-full text-white/40 text-sm py-2 hover:text-white/60"
+            >
+              <FaCamera className="inline mr-1" /> Utiliser la caméra
+            </button>
+          </div>
         )}
       </div>
       
       {/* Footer */}
       <div className="p-4 bg-gradient-to-r from-blue-900 to-blue-800">
-        <div className="flex gap-3 mb-3">
+        {!showManualInput && hasPermission ? (
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowManualInput(true)}
+              className="flex-1 btn-secondary"
+            >
+              Saisie manuelle
+            </button>
+            <button
+              onClick={() => { stopScanner(); onClose() }}
+              className="flex-1 btn-secondary"
+            >
+              Annuler
+            </button>
+          </div>
+        ) : (
           <button
-            onClick={handleManualInput}
-            className="flex-1 btn-secondary flex items-center justify-center gap-2"
+            onClick={onClose}
+            className="w-full btn-secondary"
           >
-            <FaCamera /> Saisie manuelle
+            Fermer
           </button>
-          <button
-            onClick={toggleTorch}
-            className={`btn-secondary flex items-center justify-center gap-2 ${
-              torchOn ? 'bg-yellow-500/30 text-yellow-400' : ''
-            }`}
-          >
-            <FaLightbulb /> Lampe
-          </button>
-        </div>
-        
-        <button
-          onClick={() => { stopScanner(); onClose() }}
-          className="w-full text-white/50 text-center py-2 hover:text-white/70 transition-colors"
-        >
-          Annuler
-        </button>
+        )}
       </div>
-
-      <style jsx>{`
-        @keyframes scan {
-          0% {
-            top: 0;
-          }
-          100% {
-            top: 100%;
-          }
-        }
-        .animate-scan {
-          animation: scan 2s linear infinite;
-        }
-        .border-t-3 {
-          border-top-width: 3px;
-        }
-        .border-l-3 {
-          border-left-width: 3px;
-        }
-        .border-r-3 {
-          border-right-width: 3px;
-        }
-        .border-b-3 {
-          border-bottom-width: 3px;
-        }
-        #qr-reader {
-          background: #000;
-        }
-        #qr-reader video {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-      `}</style>
     </div>
   )
 }

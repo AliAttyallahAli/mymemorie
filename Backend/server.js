@@ -46,6 +46,7 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'cashpays_super_secret_key_2024';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'cashpays_refresh_secret_2024';
 
+
 // ============================================
 // UTILITAIRES
 // ============================================
@@ -530,8 +531,10 @@ app.get('/api/wallet/history', authenticateToken, async (req, res) => {
 // ============================================
 // ROUTES TRANSACTIONS
 // ============================================
+// ============================================
+// TRANSFERT ENTRE UTILISATEURS AVEC NOTIFICATIONS
+// ============================================
 
-// Transfert entre utilisateurs
 app.post('/api/transfer', authenticateToken, async (req, res) => {
     const { receiver_phone, amount, description } = req.body;
     
@@ -614,22 +617,61 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
                 [reference, sender.phone, receiver.phone, amount, fee, amount, xml, description || '']
             );
             
+            // Enregistrer la notification dans la base de données pour le destinataire
+            await run(
+                `INSERT INTO notifications (user_id, title, message, type, is_read)
+                 VALUES (?, '💰 Transfert reçu', ?, 'transaction', 0)`,
+                [receiver.id, `Vous avez reçu ${amount.toLocaleString()} FCFA de ${sender.fullname}`]
+            );
+            
+            // Enregistrer la notification dans la base de données pour l'expéditeur
+            await run(
+                `INSERT INTO notifications (user_id, title, message, type, is_read)
+                 VALUES (?, '✓ Transfert effectué', ?, 'transaction', 0)`,
+                [sender.id, `Vous avez envoyé ${amount.toLocaleString()} FCFA à ${receiver.fullname}. Frais: ${fee} FCFA`]
+            );
+            
             await run('COMMIT');
             
-            // Notifications en temps réel
-            await sendRealtimeNotification(
-                receiver.id, 
-                'Transfert reçu', 
-                `Vous avez reçu ${amount.toLocaleString()} FCFA de ${sender.fullname}`,
-                'transaction'
-            );
+            // ============================================
+            // NOTIFICATIONS EN TEMPS RÉEL VIA SOCKET.IO
+            // ============================================
             
-            await sendRealtimeNotification(
-                sender.id,
-                'Transfert effectué',
-                `Vous avez envoyé ${amount.toLocaleString()} FCFA à ${receiver.fullname}. Frais: ${fee} FCFA`,
-                'transaction'
-            );
+            // Notification pour le destinataire
+            io.to(`user_${receiver.id}`).emit('transaction_received', {
+                reference: reference,
+                amount: amount,
+                sender_name: sender.fullname,
+                sender_phone: sender.phone,
+                timestamp: new Date().toISOString(),
+                type: 'received',
+                message: `Vous avez reçu ${amount.toLocaleString()} FCFA de ${sender.fullname}`
+            });
+            
+            // Notification pour l'expéditeur
+            io.to(`user_${sender.id}`).emit('transaction_sent', {
+                reference: reference,
+                amount: amount,
+                fee: fee,
+                total: totalAmount,
+                receiver_name: receiver.fullname,
+                receiver_phone: receiver.phone,
+                timestamp: new Date().toISOString(),
+                type: 'sent',
+                message: `Vous avez envoyé ${amount.toLocaleString()} FCFA à ${receiver.fullname}. Frais: ${fee} FCFA`
+            });
+            
+            // Notification push pour le destinataire (si configurée)
+            if (receiver.fcm_token) {
+                await sendPushNotification(receiver.fcm_token, {
+                    title: '💰 Argent reçu !',
+                    body: `${sender.fullname} vous a envoyé ${amount.toLocaleString()} FCFA`,
+                    data: { reference, amount, type: 'transfer_received' }
+                });
+            }
+            
+            // Notification SMS pour le destinataire (optionnel)
+            // await sendSMS(receiver.phone, `CashPays: Vous avez reçu ${amount.toLocaleString()} FCFA de ${sender.fullname}. Réf: ${reference}`);
             
             res.json({
                 success: true,
@@ -650,9 +692,596 @@ app.post('/api/transfer', authenticateToken, async (req, res) => {
         }
         
     } catch (error) {
-        console.error(error);
+        console.error('Erreur transfert:', error);
         res.status(500).json({ error: 'Erreur lors du transfert' });
     }
+});
+// backend/server.js - Ajouter cet endpoint public
+
+// Récupérer la liste des agents actifs (public)
+app.get('/api/agents', authenticateToken, async (req, res) => {
+  try {
+    const agents = await query(`
+      SELECT u.id, u.fullname, u.phone, u.province, u.city, 
+             a.agency_name, a.agency_address, a.agency_type
+      FROM users u
+      JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' AND u.is_active = 1 AND a.is_active = 1
+      ORDER BY u.fullname ASC
+    `)
+    
+    res.json(agents || [])
+  } catch (error) {
+    console.error('Erreur récupération agents:', error)
+    res.status(500).json({ error: 'Erreur lors de la récupération des agents' })
+  }
+})
+// backend/server.js - Endpoint public pour les agents
+
+// Récupérer la liste des agents actifs
+app.get('/api/agents', authenticateToken, async (req, res) => {
+  try {
+    const agents = await query(`
+      SELECT 
+        u.id, 
+        u.fullname, 
+        u.phone, 
+        u.province, 
+        u.city,
+        a.agency_name, 
+        a.agency_address, 
+        a.agency_type
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+      ORDER BY u.fullname ASC
+    `)
+    
+    res.json(agents || [])
+  } catch (error) {
+    console.error('Erreur récupération agents:', error)
+    res.status(500).json({ error: 'Erreur lors de la récupération des agents' })
+  }
+})
+// backend/server.js - Ajouter ou vérifier cet endpoint
+
+app.get('/api/agents', authenticateToken, async (req, res) => {
+  try {
+    const agents = await query(`
+      SELECT 
+        u.id, 
+        u.fullname, 
+        u.phone, 
+        u.province, 
+        u.city,
+        a.agency_name, 
+        a.agency_address, 
+        a.agency_type
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+      ORDER BY u.fullname ASC
+    `)
+    
+    res.json(agents || [])
+  } catch (error) {
+    console.error('Erreur récupération agents:', error)
+    res.status(500).json({ error: 'Erreur lors de la récupération des agents' })
+  }
+})
+// backend/server.js - Endpoints notifications améliorés
+
+// Récupérer toutes les notifications
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    const notifications = await query(`
+      SELECT id, title, message, type, is_read, created_at, data
+      FROM notifications 
+      WHERE user_id = ? 
+      ORDER BY created_at DESC 
+      LIMIT 100
+    `, [req.user.userId])
+    
+    // Parser les données JSON
+    const parsed = notifications.map(n => ({
+      ...n,
+      data: n.data ? JSON.parse(n.data) : null
+    }))
+    
+    res.json(parsed || [])
+  } catch (error) {
+    console.error('Erreur récupération notifications:', error)
+    res.json([])
+  }
+})
+
+// Marquer une notification comme lue
+app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
+  const { id } = req.params
+  
+  try {
+    await run(
+      'UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?',
+      [id, req.user.userId]
+    )
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Erreur marquage notification:', error)
+    res.status(500).json({ error: 'Erreur lors du marquage' })
+  }
+})
+
+// Marquer toutes les notifications comme lues
+app.put('/api/notifications/read-all', authenticateToken, async (req, res) => {
+  try {
+    await run(
+      'UPDATE notifications SET is_read = 1 WHERE user_id = ?',
+      [req.user.userId]
+    )
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Erreur marquage toutes notifications:', error)
+    res.status(500).json({ error: 'Erreur lors du marquage' })
+  }
+})
+
+// Supprimer une notification
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params
+  
+  try {
+    await run(
+      'DELETE FROM notifications WHERE id = ? AND user_id = ?',
+      [id, req.user.userId]
+    )
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Erreur suppression notification:', error)
+    res.status(500).json({ error: 'Erreur lors de la suppression' })
+  }
+})
+
+// Supprimer toutes les notifications
+app.delete('/api/notifications/all', authenticateToken, async (req, res) => {
+  try {
+    await run(
+      'DELETE FROM notifications WHERE user_id = ?',
+      [req.user.userId]
+    )
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Erreur suppression toutes notifications:', error)
+    res.status(500).json({ error: 'Erreur lors de la suppression' })
+  }
+})
+
+// Créer une notification pour un utilisateur
+async function createNotification(userId, title, message, type = 'info', data = null) {
+  try {
+    const result = await run(`
+      INSERT INTO notifications (user_id, title, message, type, data, created_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [userId, title, message, type, data ? JSON.stringify(data) : null])
+    
+    // Envoyer en temps réel via Socket.IO
+    const notification = {
+      id: result.lastID,
+      title,
+      message,
+      type,
+      is_read: false,
+      created_at: new Date().toISOString(),
+      data
+    }
+    
+    io.to(`user_${userId}`).emit('new_notification', notification)
+    
+    return notification
+  } catch (error) {
+    console.error('Erreur création notification:', error)
+    return null
+  }
+}
+
+// backend/server.js - Endpoint de retrait corrigé
+app.post('/api/withdraw', authenticateToken, async (req, res) => {
+  const { amount, agent_id, agent_phone, description } = req.body;
+  
+  console.log('Requête retrait reçue:', { amount, agent_id, agent_phone, user: req.user });
+  
+  // Validation des données reçues
+  if (!amount) {
+    return res.status(400).json({ error: 'Le montant est requis' });
+  }
+  
+  const amountNum = parseInt(amount);
+  
+  if (isNaN(amountNum) || amountNum < 25) {
+    return res.status(400).json({ error: 'Le montant minimum est de 25 FCFA' });
+  }
+  
+  if (amountNum > 10000000) {
+    return res.status(400).json({ error: 'Le montant maximum est de 10 000 000 FCFA' });
+  }
+  
+  // Récupérer l'utilisateur
+  const user = await get('SELECT id, phone, fullname, is_active FROM users WHERE id = ?', [req.user.userId]);
+  
+  if (!user || !user.is_active) {
+    return res.status(404).json({ error: 'Utilisateur non trouvé ou compte inactif' });
+  }
+  
+  // Récupérer l'agent
+  let agent = null;
+  if (agent_id) {
+    agent = await get('SELECT id, phone, fullname FROM users WHERE id = ? AND role = "agent" AND is_active = 1', [agent_id]);
+  } else if (agent_phone) {
+    agent = await get('SELECT id, phone, fullname FROM users WHERE phone = ? AND role = "agent" AND is_active = 1', [agent_phone]);
+  }
+  
+  if (!agent) {
+    return res.status(404).json({ error: 'Agent non trouvé' });
+  }
+  
+  // Vérifier le solde
+  const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [user.id]);
+  
+  if (!wallet || wallet.balance < amountNum) {
+    return res.status(400).json({ error: 'Solde insuffisant' });
+  }
+  
+  // Calculer les frais (2%)
+  const fee = Math.floor(amountNum * 0.02);
+  const totalAmount = amountNum + fee;
+  
+  // Récupérer le wallet admin
+  const adminWallet = await get(
+    `SELECT w.id FROM wallets w 
+     JOIN users u ON w.user_id = u.id 
+     WHERE u.role = 'admin' AND u.phone = '62787307'`
+  );
+  
+  const reference = `WDR-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  
+  try {
+    await run('BEGIN TRANSACTION');
+    
+    // Débiter l'utilisateur
+    await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, user.id]);
+    
+    // Créditer les frais à l'admin
+    if (adminWallet) {
+      await run('UPDATE wallets SET balance = balance + ? WHERE id = ?', [fee, adminWallet.id]);
+    }
+    
+    // Enregistrer la transaction
+    await run(`
+      INSERT INTO transactions 
+      (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description, created_at, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'withdraw', 'completed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [reference, user.phone, agent.phone, amountNum, fee, amountNum - fee, description || '']);
+    
+    // Créer une notification pour l'utilisateur
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type)
+      VALUES (?, 'Retrait effectué', ?, 'transaction')
+    `, [user.id, `Vous avez retiré ${amountNum.toLocaleString()} FCFA chez ${agent.fullname}`]);
+    
+    await run('COMMIT');
+    
+    res.json({
+      success: true,
+      reference: reference,
+      amount: amountNum,
+      fee: fee,
+      netAmount: amountNum - fee,
+      new_balance: wallet.balance - totalAmount
+    });
+    
+  } catch (error) {
+    await run('ROLLBACK');
+    console.error('Erreur retrait:', error);
+    res.status(500).json({ error: 'Erreur lors du traitement du retrait' });
+  }
+});
+
+// Endpoint pour les dépôts
+app.post('/api/deposit', authenticateToken, async (req, res) => {
+  const { amount, agent_id, description } = req.body
+  
+  if (!amount || amount < 100) {
+    return res.status(400).json({ error: 'Montant minimum de dépôt: 100 FCFA' })
+  }
+  
+  try {
+    const user = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId])
+    const agent = await get('SELECT id, fullname, phone FROM users WHERE id = ?', [agent_id])
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent non trouvé' })
+    }
+    
+    const reference = generateTransactionReference()
+    
+    await run('BEGIN TRANSACTION')
+    
+    // Créditer l'utilisateur
+    await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, user.id])
+    
+    // Enregistrer la transaction
+    await run(`
+      INSERT INTO transactions 
+      (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description)
+      VALUES (?, ?, ?, ?, 0, ?, 'deposit', 'completed', ?)
+    `, [reference, agent.phone, user.phone, amount, amount, description || `Dépôt de ${amount} FCFA chez ${agent.fullname}`])
+    
+    await run('COMMIT')
+    
+    // Notification
+    await sendRealtimeNotification(user.id, 'Dépôt réussi', `${amount.toLocaleString()} FCFA ont été ajoutés à votre compte`, 'transaction')
+    
+    res.json({
+      success: true,
+      reference,
+      amount
+    })
+    
+  } catch (error) {
+    await run('ROLLBACK')
+    console.error('Erreur dépôt:', error)
+    res.status(500).json({ error: 'Erreur lors du dépôt' })
+  }
+})
+// backend/server.js - Ajouter/modifier ces endpoints
+
+// ============================================
+// ENDPOINTS NOTIFICATIONS AMÉLIORÉS
+// ============================================
+
+// Envoyer une notification pour toute transaction
+async function sendTransactionNotification(userId, type, data) {
+  let title = '';
+  let message = '';
+  let notifType = 'transaction';
+  
+  switch(type) {
+    case 'transfer_sent':
+      title = '💸 Transfert envoyé';
+      message = `Vous avez envoyé ${data.amount.toLocaleString()} FCFA à ${data.receiver_name}. Frais: ${data.fee.toLocaleString()} FCFA`;
+      break;
+    case 'transfer_received':
+      title = '💰 Transfert reçu';
+      message = `Vous avez reçu ${data.amount.toLocaleString()} FCFA de ${data.sender_name}`;
+      break;
+    case 'deposit':
+      title = '🏦 Dépôt effectué';
+      message = `Vous avez déposé ${data.amount.toLocaleString()} FCFA chez ${data.agent_name || 'un agent CashPays'}`;
+      break;
+    case 'withdraw':
+      title = '💵 Retrait effectué';
+      message = `Vous avez retiré ${data.amount.toLocaleString()} FCFA chez ${data.agent_name}. Frais: ${data.fee.toLocaleString()} FCFA`;
+      break;
+    case 'fee_collected':
+      title = '📊 Frais prélevés';
+      message = `Des frais de ${data.fee.toLocaleString()} FCFA ont été prélevés sur votre transaction`;
+      break;
+    default:
+      title = '🔄 Transaction';
+      message = `Une transaction de ${data.amount.toLocaleString()} FCFA a été effectuée`;
+  }
+  
+  // Insérer la notification
+  await run(`
+    INSERT INTO notifications (user_id, title, message, type, created_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `, [userId, title, message, notifType]);
+  
+  return { title, message, type: notifType };
+}
+
+// Endpoint pour récupérer les notifications
+app.get('/api/notifications', authenticateToken, async (req, res) => {
+  try {
+    const notifications = await query(`
+      SELECT * FROM notifications 
+      WHERE user_id = ? OR user_id IS NULL
+      ORDER BY created_at DESC 
+      LIMIT 50
+    `, [req.user.userId]);
+    
+    res.json(notifications || []);
+  } catch (error) {
+    console.error('Erreur récupération notifications:', error);
+    res.json([]);
+  }
+});
+
+// Endpoint pour marquer une notification comme lue
+app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  try {
+    await run(`
+      UPDATE notifications SET is_read = 1 
+      WHERE id = ? AND (user_id = ? OR user_id IS NULL)
+    `, [id, req.user.userId]);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur lors du marquage' });
+  }
+});
+
+// Endpoint pour marquer toutes les notifications comme lues
+app.put('/api/notifications/read-all', authenticateToken, async (req, res) => {
+  try {
+    await run(`
+      UPDATE notifications SET is_read = 1 
+      WHERE user_id = ? OR user_id IS NULL
+    `, [req.user.userId]);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur lors du marquage' });
+  }
+});
+
+// ============================================
+// ENDPOINTS AGENTS DYNAMIQUES
+// ============================================
+
+// Récupérer tous les agents actifs
+app.get('/api/agents', async (req, res) => {
+  const { city, search, limit = 50, offset = 0 } = req.query;
+  
+  try {
+    let sql = `
+      SELECT u.id, u.fullname, u.phone, u.province, u.city,
+             a.agency_name, a.agency_address, a.agency_phone, a.agency_type,
+             a.commission_rate, a.is_active
+      FROM users u
+      JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' AND u.is_active = 1 AND a.is_active = 1
+    `;
+    const params = [];
+    
+    if (city && city !== 'all') {
+      sql += ' AND (u.city = ? OR u.province = ?)';
+      params.push(city, city);
+    }
+    
+    if (search) {
+      sql += ' AND (u.fullname LIKE ? OR u.phone LIKE ? OR a.agency_name LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    
+    sql += ' ORDER BY a.agency_type DESC, u.fullname ASC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const agents = await query(sql, params);
+    
+    // Compter le total
+    let countSql = `
+      SELECT COUNT(*) as total FROM users u
+      JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' AND u.is_active = 1 AND a.is_active = 1
+    `;
+    const countParams = [];
+    
+    if (city && city !== 'all') {
+      countSql += ' AND (u.city = ? OR u.province = ?)';
+      countParams.push(city, city);
+    }
+    
+    const total = await get(countSql, countParams);
+    
+    // Récupérer les villes disponibles
+    const cities = await query(`
+      SELECT DISTINCT u.city, u.province 
+      FROM users u
+      JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' AND u.is_active = 1 AND a.is_active = 1
+      AND (u.city IS NOT NULL OR u.province IS NOT NULL)
+    `);
+    
+    res.json({
+      agents,
+      total: total?.total || 0,
+      cities: cities.map(c => c.city || c.province).filter(Boolean),
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+  } catch (error) {
+    console.error('Erreur récupération agents:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des agents' });
+  }
+});
+
+// Récupérer les horaires d'un agent
+app.get('/api/agents/:id/schedule', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const schedule = await get(`
+      SELECT * FROM agent_schedules 
+      WHERE agent_id = ?
+    `, [id]);
+    
+    if (!schedule) {
+      // Horaires par défaut
+      res.json({
+        monday: { open: '08:00', close: '18:00', closed: false },
+        tuesday: { open: '08:00', close: '18:00', closed: false },
+        wednesday: { open: '08:00', close: '18:00', closed: false },
+        thursday: { open: '08:00', close: '18:00', closed: false },
+        friday: { open: '08:00', close: '18:00', closed: false },
+        saturday: { open: '09:00', close: '13:00', closed: false },
+        sunday: { open: null, close: null, closed: true }
+      });
+    } else {
+      res.json(schedule);
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur lors de la récupération des horaires' });
+  }
+});
+
+// Récupérer les avis sur un agent
+app.get('/api/agents/:id/reviews', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const reviews = await query(`
+      SELECT r.*, u.fullname as user_name
+      FROM agent_reviews r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.agent_id = ? AND r.status = 'approved'
+      ORDER BY r.created_at DESC
+      LIMIT 20
+    `, [id]);
+    
+    const stats = await get(`
+      SELECT 
+        AVG(rating) as average_rating,
+        COUNT(*) as total_reviews,
+        SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END) as five_stars,
+        SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END) as four_stars,
+        SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) as three_stars,
+        SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END) as two_stars,
+        SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) as one_star
+      FROM agent_reviews
+      WHERE agent_id = ? AND status = 'approved'
+    `, [id]);
+    
+    res.json({
+      reviews: reviews || [],
+      stats: stats || { average_rating: 0, total_reviews: 0 }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur lors de la récupération des avis' });
+  }
+});
+
+// Ajouter un avis sur un agent
+app.post('/api/agents/:id/review', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { rating, comment } = req.body;
+  
+  if (!rating || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: 'Note invalide' });
+  }
+  
+  try {
+    await run(`
+      INSERT INTO agent_reviews (agent_id, user_id, rating, comment, created_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [id, req.user.userId, rating, comment || null]);
+    
+    res.json({ success: true, message: 'Avis ajouté avec succès' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur lors de l\'ajout de l\'avis' });
+  }
 });
 
 // Télécharger XML ISO 20022 d'une transaction
@@ -736,6 +1365,703 @@ app.post('/api/qr/scan', authenticateToken, async (req, res) => {
 // ============================================
 // ROUTES ADMIN
 // ============================================
+// Correction de l'endpoint /api/transfer
+app.post('/api/transfer', authenticateToken, async (req, res) => {
+  const { receiver_phone, amount, description } = req.body;
+  
+  // Validation
+  if (!receiver_phone || !amount) {
+    return res.status(400).json({ error: 'Destinataire et montant requis' });
+  }
+  
+  const amountNum = parseInt(amount);
+  if (amountNum < 25) {
+    return res.status(400).json({ error: 'Le montant minimum est de 25 FCFA' });
+  }
+  
+  try {
+    // Récupérer l'expéditeur
+    const sender = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
+    
+    // Vérifier le solde
+    const senderWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [sender.id]);
+    const fee = Math.floor(amountNum * 0.02);
+    const totalAmount = amountNum + fee;
+    
+    if (senderWallet.balance < totalAmount) {
+      return res.status(400).json({ error: 'Solde insuffisant' });
+    }
+    
+    // Récupérer le destinataire
+    const receiver = await get('SELECT id, phone, fullname FROM users WHERE phone = ? AND is_active = 1', [receiver_phone]);
+    if (!receiver) {
+      return res.status(404).json({ error: 'Destinataire non trouvé' });
+    }
+    
+    if (receiver.id === sender.id) {
+      return res.status(400).json({ error: 'Vous ne pouvez pas vous envoyer d\'argent à vous-même' });
+    }
+    
+    // Récupérer le wallet admin
+    const adminWallet = await get(
+      `SELECT w.id FROM wallets w
+       JOIN users u ON w.user_id = u.id
+       WHERE u.role = 'admin' AND u.phone = '62787307'`
+    );
+    
+    const reference = `CASH-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+    
+    await run('BEGIN TRANSACTION');
+    
+    // Débiter l'expéditeur
+    await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, sender.id]);
+    
+    // Créditer le destinataire
+    await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amountNum, receiver.id]);
+    
+    // Créditer les frais à l'admin
+    if (adminWallet) {
+      await run('UPDATE wallets SET balance = balance + ? WHERE id = ?', [fee, adminWallet.id]);
+    }
+    
+    // Générer XML ISO 20022
+    const xml = generateISO20022XML({
+      reference,
+      sender_phone: sender.phone,
+      receiver_phone: receiver.phone,
+      amount: amountNum,
+      net_amount: amountNum,
+      fee
+    });
+    
+    // Enregistrer la transaction
+    await run(`
+      INSERT INTO transactions 
+      (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, xml_iso20022, description, created_at, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'transfer', 'completed', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [reference, sender.phone, receiver.phone, amountNum, fee, amountNum, xml, description || '']);
+    
+    await run('COMMIT');
+    
+    // Envoyer les notifications
+    await sendTransactionNotification(sender.id, 'transfer_sent', {
+      amount: amountNum,
+      fee: fee,
+      receiver_name: receiver.fullname,
+      receiver_phone: receiver.phone,
+      reference: reference,
+      new_balance: senderWallet.balance - totalAmount
+    });
+    
+    await sendTransactionNotification(receiver.id, 'transfer_received', {
+      amount: amountNum,
+      sender_name: sender.fullname,
+      sender_phone: sender.phone,
+      reference: reference,
+      new_balance: (await get('SELECT balance FROM wallets WHERE user_id = ?', [receiver.id])).balance
+    });
+    
+    // ✅ CORRECTION ICI : objet transaction correctement défini
+    res.json({ 
+      success: true, 
+      transaction: {
+        reference: reference,
+        amount: amountNum,
+        fee: fee,
+        receiver: receiver.fullname,
+        receiver_phone: receiver.phone,
+        new_balance: senderWallet.balance - totalAmount
+      }
+    });
+    
+  } catch (error) {
+    await run('ROLLBACK');
+    console.error('Erreur transfert:', error);
+    res.status(500).json({ error: 'Erreur lors du transfert' });
+  }
+});
+
+// Correction de la fonction sendNotification
+async function sendNotification(userId, title, message, type, category = 'info', metadata = {}) {
+  try {
+    const result = await run(`
+      INSERT INTO notifications (user_id, title, message, type, category, metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `, [userId, title, message, type, category, JSON.stringify(metadata)]);
+    
+    // Envoyer via WebSocket - utiliser l'instance io globale
+    if (global.io) {
+      global.io.to(`user_${userId}`).emit('notification', {
+        id: result.lastID,
+        title,
+        message,
+        type,
+        category,
+        metadata,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    return result.lastID;
+  } catch (error) {
+    console.error('Erreur envoi notification:', error);
+    return null;
+  }
+}
+
+// Stocker l'instance io globalement
+let globalIo = null;
+
+// Dans l'initialisation de Socket.IO
+io.on('connection', (socket) => {
+  globalIo = io;
+  // ... reste du code
+});
+// ============================================
+// ENDPOINTS POUR LES AGENTS (PAGE PUBLIQUE)
+// ============================================
+
+// Récupérer tous les agents actifs (public)
+// backend/server.js - Modifier l'endpoint /api/agents (supprimer authenticateToken)
+
+// Récupérer tous les agents actifs (PUBLIC - sans authentification)
+app.get('/api/agents', async (req, res) => {
+  const { city, search, limit = 50, offset = 0 } = req.query;
+  
+  try {
+    let sql = `
+      SELECT 
+        u.id, 
+        u.fullname, 
+        u.phone, 
+        u.province, 
+        u.city,
+        u.email,
+        a.id as agent_id,
+        a.agency_name, 
+        a.agency_address, 
+        a.agency_phone, 
+        a.agency_type,
+        a.commission_rate, 
+        a.is_active,
+        a.created_at
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+    `;
+    const params = [];
+    
+    if (city && city !== 'all') {
+      sql += ' AND (u.city = ? OR u.province = ?)';
+      params.push(city, city);
+    }
+    
+    if (search) {
+      sql += ' AND (u.fullname LIKE ? OR u.phone LIKE ? OR a.agency_name LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    
+    sql += ' ORDER BY a.agency_type DESC, u.fullname ASC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const agents = await query(sql, params);
+    
+    // Compter le total
+    let countSql = `
+      SELECT COUNT(*) as total 
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+    `;
+    const countParams = [];
+    
+    if (city && city !== 'all') {
+      countSql += ' AND (u.city = ? OR u.province = ?)';
+      countParams.push(city, city);
+    }
+    
+    if (search) {
+      countSql += ' AND (u.fullname LIKE ? OR u.phone LIKE ? OR a.agency_name LIKE ?)';
+      countParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    
+    const total = await get(countSql, countParams);
+    
+    // Récupérer les villes disponibles
+    const citiesResult = await query(`
+      SELECT DISTINCT u.city, u.province 
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+        AND (u.city IS NOT NULL OR u.province IS NOT NULL)
+    `);
+    
+    const cities = [...new Set(
+      citiesResult.map(c => c.city || c.province).filter(Boolean)
+    )];
+    
+    // Ajouter les évaluations
+    for (let agent of agents) {
+      const ratingResult = await get(`
+        SELECT 
+          AVG(rating) as average_rating,
+          COUNT(*) as total_reviews
+        FROM agent_reviews
+        WHERE agent_id = ? AND status = 'approved'
+      `, [agent.agent_id]);
+      
+      agent.rating = ratingResult?.average_rating ? parseFloat(ratingResult.average_rating).toFixed(1) : null;
+      agent.reviews_count = ratingResult?.total_reviews || 0;
+    }
+    
+    res.json({
+      agents: agents || [],
+      total: total?.total || 0,
+      cities: cities,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération agents:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des agents' });
+  }
+});
+
+// Récupérer les détails d'un agent spécifique
+app.get('/api/agents/:id', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const agent = await get(`
+      SELECT 
+        u.id, u.fullname, u.phone, u.province, u.city, u.email,
+        a.id as agent_id, a.agency_name, a.agency_address, a.agency_phone, 
+        a.agency_type, a.commission_rate, a.created_at
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.id = ? AND u.role = 'agent' AND u.is_active = 1 AND a.is_active = 1
+    `, [id]);
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent non trouvé' });
+    }
+    
+    // Récupérer les évaluations
+    const ratingResult = await get(`
+      SELECT 
+        AVG(rating) as average_rating,
+        COUNT(*) as total_reviews
+      FROM agent_reviews
+      WHERE agent_id = ? AND status = 'approved'
+    `, [agent.id]);
+    
+    agent.rating = ratingResult?.average_rating ? parseFloat(ratingResult.average_rating).toFixed(1) : null;
+    agent.reviews_count = ratingResult?.total_reviews || 0;
+    
+    res.json(agent);
+    
+  } catch (error) {
+    console.error('Erreur récupération agent:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des détails' });
+  }
+});
+
+// Récupérer les horaires d'un agent
+app.get('/api/agents/:id/schedule', async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    let schedule = await get(`
+      SELECT * FROM agent_schedules 
+      WHERE agent_id = ?
+    `, [id]);
+    
+    if (!schedule) {
+      // Horaires par défaut
+      schedule = {
+        monday: { open: '08:00', close: '18:00', closed: false },
+        tuesday: { open: '08:00', close: '18:00', closed: false },
+        wednesday: { open: '08:00', close: '18:00', closed: false },
+        thursday: { open: '08:00', close: '18:00', closed: false },
+        friday: { open: '08:00', close: '18:00', closed: false },
+        saturday: { open: '09:00', close: '13:00', closed: false },
+        sunday: { open: null, close: null, closed: true }
+      };
+    }
+    
+    res.json(schedule);
+    
+  } catch (error) {
+    console.error('Erreur récupération horaires:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des horaires' });
+  }
+});
+
+// Récupérer les avis d'un agent
+app.get('/api/agents/:id/reviews', async (req, res) => {
+  const { id } = req.params;
+  const { limit = 20, offset = 0 } = req.query;
+  
+  try {
+    const reviews = await query(`
+      SELECT 
+        r.*, 
+        u.fullname as user_name,
+        u.phone as user_phone
+      FROM agent_reviews r
+      INNER JOIN users u ON r.user_id = u.id
+      WHERE r.agent_id = ? AND r.status = 'approved'
+      ORDER BY r.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [id, parseInt(limit), parseInt(offset)]);
+    
+    const stats = await get(`
+      SELECT 
+        AVG(rating) as average_rating,
+        COUNT(*) as total_reviews,
+        SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END) as five_stars,
+        SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END) as four_stars,
+        SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) as three_stars,
+        SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END) as two_stars,
+        SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) as one_star
+      FROM agent_reviews
+      WHERE agent_id = ? AND status = 'approved'
+    `, [id]);
+    
+    res.json({
+      reviews: reviews || [],
+      stats: stats || { 
+        average_rating: 0, 
+        total_reviews: 0,
+        five_stars: 0, four_stars: 0, three_stars: 0, two_stars: 0, one_star: 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération avis:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des avis' });
+  }
+});
+
+// Ajouter un avis sur un agent (authentifié requis)
+app.post('/api/agents/:id/review', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { rating, comment } = req.body;
+  
+  if (!rating || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: 'Note invalide (1-5)' });
+  }
+  
+  try {
+    // Vérifier que l'agent existe
+    const agent = await get(`
+      SELECT id FROM agents WHERE user_id = ?
+    `, [id]);
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent non trouvé' });
+    }
+    
+    // Vérifier que l'utilisateur n'a pas déjà laissé un avis
+    const existingReview = await get(`
+      SELECT id FROM agent_reviews 
+      WHERE agent_id = ? AND user_id = ? AND status = 'approved'
+    `, [agent.id, req.user.userId]);
+    
+    if (existingReview) {
+      return res.status(400).json({ error: 'Vous avez déjà laissé un avis pour cet agent' });
+    }
+    
+    await run(`
+      INSERT INTO agent_reviews (agent_id, user_id, rating, comment, status, created_at)
+      VALUES (?, ?, ?, ?, 'approved', CURRENT_TIMESTAMP)
+    `, [agent.id, req.user.userId, rating, comment || null]);
+    
+    res.status(201).json({ 
+      success: true, 
+      message: 'Avis ajouté avec succès' 
+    });
+    
+  } catch (error) {
+    console.error('Erreur ajout avis:', error);
+    res.status(500).json({ error: 'Erreur lors de l\'ajout de l\'avis' });
+  }
+});
+
+// ============================================
+// ENDPOINTS POUR DEVENIR AGENT
+// ============================================
+
+
+
+// Configuration multer pour l'upload de documents
+const agentStorage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, 'uploads', 'agent_applications');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, `agent-app-${uniqueSuffix}${ext}`);
+  }
+});
+
+const agentFileFilter = (req, file, cb) => {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'];
+  if (allowedTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Type de fichier non autorisé'), false);
+  }
+};
+
+const agentUpload = multer({ 
+  storage: agentStorage,
+  fileFilter: agentFileFilter,
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB max
+});
+
+// Soumettre une candidature pour devenir agent
+app.post('/api/become-agent', agentUpload.fields([
+  { name: 'id_card', maxCount: 1 },
+  { name: 'business_license', maxCount: 1 }
+]), async (req, res) => {
+  const {
+    fullname, phone, email, agency_name, agency_address,
+    city, province, experience, motivation, id_card_number
+  } = req.body;
+  
+  const files = req.files;
+  
+  // Validation
+  if (!fullname || !phone || !agency_name || !agency_address || !motivation) {
+    return res.status(400).json({ error: 'Champs obligatoires manquants' });
+  }
+  
+  if (phone && !/^\d{8}$/.test(phone)) {
+    return res.status(400).json({ error: 'Numéro de téléphone invalide (8 chiffres)' });
+  }
+  
+  try {
+    // Créer la table si elle n'existe pas
+    await run(`
+      CREATE TABLE IF NOT EXISTS agent_applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fullname TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        email TEXT,
+        agency_name TEXT NOT NULL,
+        agency_address TEXT NOT NULL,
+        city TEXT,
+        province TEXT,
+        experience TEXT,
+        motivation TEXT NOT NULL,
+        id_card_number TEXT,
+        id_card_path TEXT,
+        business_license_path TEXT,
+        status TEXT DEFAULT 'pending',
+        reviewed_by INTEGER,
+        reviewed_at DATETIME,
+        rejection_reason TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (reviewed_by) REFERENCES users(id)
+      )
+    `);
+    
+    // Insérer la candidature
+    const result = await run(`
+      INSERT INTO agent_applications (
+        fullname, phone, email, agency_name, agency_address,
+        city, province, experience, motivation, id_card_number,
+        id_card_path, business_license_path, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+    `, [
+      fullname, phone, email || null, agency_name, agency_address,
+      city || null, province || null, experience || null, motivation,
+      id_card_number || null,
+      files?.id_card ? files.id_card[0].path : null,
+      files?.business_license ? files.business_license[0].path : null
+    ]);
+    
+    // Notification à l'admin
+    const admin = await get('SELECT id FROM users WHERE role = "admin" AND phone = "62787307"');
+    if (admin) {
+      await run(`
+        INSERT INTO notifications (user_id, title, message, type, created_at)
+        VALUES (?, 'Nouvelle candidature agent', ?, 'alert', CURRENT_TIMESTAMP)
+      `, [admin.id, `${fullname} a postulé pour devenir agent CashPays`]);
+    }
+    
+    res.status(201).json({
+      success: true,
+      message: 'Candidature envoyée avec succès',
+      application_id: result.lastID
+    });
+    
+  } catch (error) {
+    console.error('Erreur soumission candidature:', error);
+    res.status(500).json({ error: 'Erreur lors de l\'envoi de la candidature' });
+  }
+});
+
+// Récupérer toutes les candidatures d'agents (admin uniquement)
+app.get('/api/admin/agent-applications', authenticateToken, requireAdmin, async (req, res) => {
+  const { status, limit = 50, offset = 0 } = req.query;
+  
+  try {
+    let sql = `
+      SELECT * FROM agent_applications
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (status && status !== 'all') {
+      sql += ' AND status = ?';
+      params.push(status);
+    }
+    
+    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const applications = await query(sql, params);
+    
+    const total = await get(`
+      SELECT COUNT(*) as count FROM agent_applications
+      ${status && status !== 'all' ? 'WHERE status = ?' : ''}
+    `, status && status !== 'all' ? [status] : []);
+    
+    res.json({
+      applications: applications || [],
+      total: total?.count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération candidatures:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération' });
+  }
+});
+
+// Approuver ou rejeter une candidature (admin uniquement)
+app.post('/api/admin/agent-applications/:id/review', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { action, rejection_reason } = req.body;
+  
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'Action invalide' });
+  }
+  
+  try {
+    const application = await get('SELECT * FROM agent_applications WHERE id = ?', [id]);
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Candidature non trouvée' });
+    }
+    
+    if (application.status !== 'pending') {
+      return res.status(400).json({ error: 'Cette candidature a déjà été traitée' });
+    }
+    
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    
+    await run(`
+      UPDATE agent_applications 
+      SET status = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = ?
+      WHERE id = ?
+    `, [newStatus, req.user.userId, rejection_reason || null, id]);
+    
+    // Si approuvé, créer le compte agent
+    if (action === 'approve') {
+      // Générer un mot de passe temporaire
+      const tempPassword = Math.random().toString(36).slice(-8);
+      const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+      const hashedKey = await bcrypt.hash(privateKey, 10);
+      
+      // Créer l'utilisateur agent
+      const userResult = await run(`
+        INSERT INTO users (phone, fullname, password_hash, private_key_6, province, city, email, role, is_active, is_verified, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'agent', 1, 1, CURRENT_TIMESTAMP)
+      `, [application.phone, application.fullname, hashedPassword, hashedKey, application.province || 'N\'Djaména', application.city || null, application.email || null]);
+      
+      // Créer l'agence
+      const agencyNumber = 'AG' + Date.now().toString().slice(-6);
+      await run(`
+        INSERT INTO agents (user_id, agency_number, agency_name, agency_address, agency_phone, agency_type, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, 'secondaire', ?, CURRENT_TIMESTAMP)
+      `, [userResult.lastID, agencyNumber, application.agency_name, application.agency_address, application.phone, req.user.userId]);
+      
+      // Notification au nouveau agent
+      await run(`
+        INSERT INTO notifications (user_id, title, message, type, created_at)
+        VALUES (?, 'Bienvenue dans le réseau CashPays', ?, 'success', CURRENT_TIMESTAMP)
+      `, [userResult.lastID, `Félicitations ! Votre agence "${application.agency_name}" est maintenant active.`]);
+    }
+    
+    // Notification à l'utilisateur
+    const title = action === 'approve' ? '✅ Candidature acceptée' : '❌ Candidature rejetée';
+    const message = action === 'approve' 
+      ? 'Félicitations ! Votre candidature pour devenir agent CashPays a été acceptée.'
+      : `Votre candidature a été rejetée. Raison: ${rejection_reason || 'Non conforme'}`;
+    
+    // Ici, envoyer la notification par SMS ou email si possible
+    
+    res.json({
+      success: true,
+      message: `Candidature ${action === 'approve' ? 'approuvée' : 'rejetée'} avec succès`
+    });
+    
+  } catch (error) {
+    console.error('Erreur traitement candidature:', error);
+    res.status(500).json({ error: 'Erreur lors du traitement' });
+  }
+});
+
+// Télécharger un document de candidature (admin uniquement)
+app.get('/api/admin/agent-applications/:id/download/:type', authenticateToken, requireAdmin, async (req, res) => {
+  const { id, type } = req.params;
+  
+  try {
+    const application = await get('SELECT * FROM agent_applications WHERE id = ?', [id]);
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Candidature non trouvée' });
+    }
+    
+    let filePath = null;
+    let filename = '';
+    
+    if (type === 'id_card') {
+      filePath = application.id_card_path;
+      filename = `cni_${application.fullname}.pdf`;
+    } else if (type === 'business_license') {
+      filePath = application.business_license_path;
+      filename = `registre_${application.agency_name}.pdf`;
+    }
+    
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Document non trouvé' });
+    }
+    
+    res.download(filePath, filename);
+    
+  } catch (error) {
+    console.error('Erreur téléchargement document:', error);
+    res.status(500).json({ error: 'Erreur lors du téléchargement' });
+  }
+});
 
 // Récupérer tous les utilisateurs
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
@@ -1791,6 +3117,7 @@ const upload = multer({
     fileFilter: fileFilter,
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB max
 });
+
 
 // ============================================
 // ENDPOINTS KYC
