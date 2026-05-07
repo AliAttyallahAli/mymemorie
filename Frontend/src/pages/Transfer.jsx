@@ -1,18 +1,17 @@
-// src/pages/Transfer.jsx
-import React, { useState, useRef, useEffect } from 'react'
+// src/pages/Transfer.jsx - Version finale sans erreurs DOM
+import React, { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { 
   FaUser, FaPhone, FaMoneyBillWave, FaQrcode, 
-  FaCamera, FaTimes, FaUpload, FaCopy, FaCheckCircle,
-  FaArrowRight, FaHistory, FaHome, FaReceipt,
-  FaWhatsapp, FaEnvelope, FaDownload, FaPrint,
-  FaInfoCircle, FaSpinner, FaUserPlus, FaTrash,
-  FaRegClock, FaShieldAlt, FaExclamationTriangle,
-  FaShareAlt, FaFilePdf, FaBell, FaStar
+  FaTimes, FaCopy, FaCheckCircle, FaArrowRight, 
+  FaHistory, FaHome, FaWhatsapp, FaEnvelope, 
+  FaDownload, FaSpinner, FaTrash, FaShieldAlt, 
+  FaExclamationTriangle, FaFilePdf, FaKey
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
+import PinModal from '../components/PinModal'
 
 function Transfer({ user, socket }) {
   const navigate = useNavigate()
@@ -27,8 +26,13 @@ function Transfer({ user, socket }) {
   const [recentContacts, setRecentContacts] = useState([])
   const [favorites, setFavorites] = useState([])
   
+  // États pour le PIN
+  const [hasPin, setHasPin] = useState(false)
+  const [showPinModal, setShowPinModal] = useState(false)
+  const [pendingTransaction, setPendingTransaction] = useState(null)
+  const [checkingPin, setCheckingPin] = useState(true)
+  
   // États pour le QR code
-  const [showQRModal, setShowQRModal] = useState(false)
   const [qrAmount, setQrAmount] = useState('')
   const [qrDescription, setQrDescription] = useState('')
   const [qrGenerated, setQrGenerated] = useState(false)
@@ -42,13 +46,29 @@ function Transfer({ user, socket }) {
   const [countdown, setCountdown] = useState(5)
   const [kycLimit, setKycLimit] = useState(null)
 
-  // Traiter les paramètres URL (QR code dynamique)
+  useEffect(() => {
+    checkUserPin()
+  }, [])
+
+  const checkUserPin = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/user/pin-status', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setHasPin(response.data.hasPin || false)
+    } catch (error) {
+      console.error('Erreur vérification PIN:', error)
+      setHasPin(false)
+    } finally {
+      setCheckingPin(false)
+    }
+  }
+
   useEffect(() => {
     const phoneParam = searchParams.get('phone')
     const amountParam = searchParams.get('amount')
     const descParam = searchParams.get('description')
-    
-    console.log('📱 Paramètres URL reçus:', { phoneParam, amountParam, descParam })
     
     if (phoneParam) {
       setReceiverPhone(phoneParam)
@@ -65,7 +85,6 @@ function Transfer({ user, socket }) {
     }
   }, [searchParams])
 
-  // Auto-fermeture de la notification
   useEffect(() => {
     if (showNotification && notificationType === 'success') {
       const timer = setInterval(() => {
@@ -81,30 +100,18 @@ function Transfer({ user, socket }) {
     }
   }, [showNotification, notificationType])
 
-  // Charger les contacts et limites KYC
   useEffect(() => {
-    fetchRecentContacts()
-    loadFavorites()
-    fetchKycLimits()
-  }, [])
+    if (user) {
+      fetchRecentContacts()
+      loadFavorites()
+      fetchKycLimits()
+    }
+  }, [user])
 
-  // Écouter les notifications socket
   useEffect(() => {
     if (socket) {
       socket.on('transaction_received', (data) => {
-        toast.custom((t) => (
-          <div className="bg-gradient-to-r from-green-900 to-green-800 rounded-xl p-4 shadow-2xl border-l-4 border-green-500 max-w-sm">
-            <div className="flex items-start gap-3">
-              <FaMoneyBillWave className="text-green-400 text-2xl" />
-              <div>
-                <p className="text-white font-semibold">Argent reçu !</p>
-                <p className="text-white/70 text-sm">
-                  {data.amount.toLocaleString()} FCFA de {data.sender_name}
-                </p>
-              </div>
-            </div>
-          </div>
-        ), { duration: 5000 })
+        toast.success(`💰 ${data.amount.toLocaleString()} FCFA reçu de ${data.sender_name}`)
         
         setTransactionData({
           amount: data.amount,
@@ -172,15 +179,6 @@ function Transfer({ user, socket }) {
     }
   }
 
-  const saveFavorite = (phone, name) => {
-    const newFavorites = [{ phone, name, date: new Date().toISOString() }, ...favorites]
-      .filter((v, i, a) => a.findIndex(t => t.phone === v.phone) === i)
-      .slice(0, 10)
-    setFavorites(newFavorites)
-    localStorage.setItem('cashpays_favorites', JSON.stringify(newFavorites))
-    toast.success('Ajouté aux favoris')
-  }
-
   const removeFavorite = (phone) => {
     const newFavorites = favorites.filter(f => f.phone !== phone)
     setFavorites(newFavorites)
@@ -188,7 +186,6 @@ function Transfer({ user, socket }) {
     toast.success('Retiré des favoris')
   }
 
-  // Générer un lien de paiement dynamique
   const generatePaymentLink = () => {
     const amountNum = parseInt(qrAmount)
     if (amountNum && amountNum < 25) {
@@ -205,7 +202,6 @@ function Transfer({ user, socket }) {
     return `${baseUrl}/transfer?${params.toString()}`
   }
 
-  // Générer le QR code
   const generateQRCode = () => {
     const link = generatePaymentLink()
     if (!link) return
@@ -233,14 +229,14 @@ function Transfer({ user, socket }) {
 
   const shareViaWhatsApp = () => {
     if (!paymentLink) return
-    const message = `💰 *Demande de paiement CashPays*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}\n\n📱 CashPays - Transfert instantané`
+    const message = `💰 *Demande de paiement CashPays*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
   }
 
   const shareViaEmail = () => {
     if (!paymentLink) return
     const subject = 'Demande de paiement CashPays'
-    const body = `Bonjour,\n\nJe vous invite à me payer via CashPays.\n\nLien de paiement: ${paymentLink}\n\nMerci !`
+    const body = `Bonjour,\n\nLien de paiement: ${paymentLink}\n\nMerci !`
     window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
   }
 
@@ -254,30 +250,53 @@ function Transfer({ user, socket }) {
     }
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    
+  const prepareTransaction = () => {
     const amountNum = parseInt(amount)
+    
     if (amountNum < 25) {
       toast.error('Le montant minimum est de 25 FCFA')
-      return
+      return false
     }
     
     if (receiverPhone === user?.phone) {
       toast.error('Vous ne pouvez pas vous envoyer de l\'argent à vous-même')
-      return
+      return false
     }
     
     if (receiverPhone.length !== 8 || !/^\d{8}$/.test(receiverPhone)) {
       toast.error('Le numéro du destinataire doit contenir 8 chiffres')
-      return
+      return false
     }
     
     if (kycLimit && amountNum > kycLimit.limits?.single_transaction_limit) {
       toast.error(`La limite par transaction est de ${kycLimit.limits.single_transaction_limit.toLocaleString()} FCFA`)
-      return
+      return false
     }
+    
+    setPendingTransaction({
+      receiver_phone: receiverPhone,
+      amount: amountNum,
+      description
+    })
+    
+    return true
+  }
 
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    
+    if (!prepareTransaction()) return
+    
+    if (!hasPin) {
+      setShowPinModal(true)
+    } else {
+      setShowPinModal(true)
+    }
+  }
+
+  const processTransaction = async () => {
+    if (!pendingTransaction) return
+    
     setLoading(true)
     
     try {
@@ -285,19 +304,19 @@ function Transfer({ user, socket }) {
       const response = await axios.post(
         '/api/transfer',
         {
-          receiver_phone: receiverPhone,
-          amount: amountNum,
-          description
+          receiver_phone: pendingTransaction.receiver_phone,
+          amount: pendingTransaction.amount,
+          description: pendingTransaction.description
         },
         { headers: { Authorization: `Bearer ${token}` } }
       )
       
       setTransactionData({
         reference: response.data.transaction.reference,
-        amount: amountNum,
+        amount: pendingTransaction.amount,
         fee: response.data.transaction.fee,
         receiver_name: response.data.transaction.receiver,
-        receiver_phone: receiverPhone,
+        receiver_phone: pendingTransaction.receiver_phone,
         sender_name: user?.fullname,
         sender_phone: user?.phone,
         status: 'completed',
@@ -313,6 +332,11 @@ function Transfer({ user, socket }) {
       setReceiverPhone('')
       setAmount('')
       setDescription('')
+      setPendingTransaction(null)
+      
+      if (!hasPin) {
+        setHasPin(true)
+      }
       
       fetchRecentContacts()
       
@@ -323,9 +347,6 @@ function Transfer({ user, socket }) {
       if (error.response?.data?.code === 'INSUFFICIENT_BALANCE') {
         errorMessage = 'Solde insuffisant'
         suggestion = 'Rechargez votre compte ou réduisez le montant'
-      } else if (error.response?.data?.code === 'USER_NOT_FOUND') {
-        errorMessage = 'Destinataire non trouvé'
-        suggestion = 'Vérifiez le numéro de téléphone du destinataire'
       }
       
       setTransactionData({
@@ -359,53 +380,42 @@ function Transfer({ user, socket }) {
       month: '2-digit',
       year: 'numeric',
       hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
+      minute: '2-digit'
     })
   }
 
-  // Génération du PDF
   const generatePDF = () => {
     const receiptHTML = `
       <!DOCTYPE html>
       <html>
       <head>
-        <meta charset="UTF-8">
         <title>CashPays - Reçu ${transactionData?.reference}</title>
         <style>
-          body { font-family: 'Arial', sans-serif; padding: 40px; background: white; }
-          .receipt { max-width: 600px; margin: 0 auto; border: 2px solid #0A2F6C; border-radius: 16px; padding: 30px; background: white; }
+          body { font-family: Arial; padding: 40px; }
+          .receipt { max-width: 600px; margin: 0 auto; border: 2px solid #0A2F6C; border-radius: 16px; padding: 30px; }
           .header { text-align: center; border-bottom: 2px solid #0A2F6C; padding-bottom: 20px; margin-bottom: 20px; }
           .logo { font-size: 28px; font-weight: bold; color: #0A2F6C; }
           .subtitle { color: #666; font-size: 12px; }
-          .success-icon { text-align: center; font-size: 48px; margin: 20px 0; }
           .info-row { display: flex; justify-content: space-between; margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid #eee; }
-          .label { font-weight: bold; color: #555; }
-          .value { color: #333; }
+          .label { font-weight: bold; }
           .total { font-size: 18px; font-weight: bold; margin-top: 20px; padding-top: 15px; border-top: 2px solid #0A2F6C; }
           .footer { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 10px; color: #999; }
-          .status { display: inline-block; background: #10b981; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; }
         </style>
       </head>
       <body>
         <div class="receipt">
-          <div class="header"><div class="logo">🏦 CASHPAYS</div><div class="subtitle">Transfert d'argent instantané - GOUROUSDJA</div></div>
-          <div class="success-icon">✅</div>
-          <div class="info-row"><span class="label">RÉFÉRENCE</span><span class="value">${transactionData?.reference}</span></div>
-          <div class="info-row"><span class="label">DATE</span><span class="value">${formatDate(transactionData?.date || new Date())}</span></div>
-          <div class="info-row"><span class="label">STATUT</span><span class="value"><span class="status">COMPLÉTÉ</span></span></div>
-          <div style="margin: 20px 0;"><div class="info-row"><span class="label">EXPÉDITEUR</span><span class="value">${transactionData?.sender_name || user?.fullname}</span></div>
-          <div class="info-row"><span class="label">TÉLÉPHONE EXP</span><span class="value">${transactionData?.sender_phone || user?.phone}</span></div></div>
-          <div style="margin: 20px 0;"><div class="info-row"><span class="label">DESTINATAIRE</span><span class="value">${transactionData?.receiver_name}</span></div>
-          <div class="info-row"><span class="label">TÉLÉPHONE DEST</span><span class="value">${transactionData?.receiver_phone}</span></div></div>
-          <div style="margin: 20px 0; background: #f5f5f5; padding: 15px; border-radius: 8px;">
-            <div class="info-row"><span class="label">MONTANT ENVOYÉ</span><span class="value">${formatAmount(transactionData?.amount)}</span></div>
-            <div class="info-row"><span class="label">FRAIS (2%)</span><span class="value">${formatAmount(transactionData?.fee)}</span></div>
-            <div class="info-row total"><span class="label">TOTAL DÉBITÉ</span><span class="value">${formatAmount((transactionData?.amount || 0) + (transactionData?.fee || 0))}</span></div>
-          </div>
-          <div class="footer"><p>Merci d'utiliser CashPays - Transfert d'argent instantané au Tchad</p>
-          <p>Service client: 62 78 73 07 | support@cashpays.td</p>
-          <p>© 2026 CashPays - GOUROUSDJA</p></div>
+          <div class="header"><div class="logo">CASHPAYS</div><div class="subtitle">Transfert d'argent instantané - GOUROUSDJA</div></div>
+          <div class="info-row"><span class="label">RÉFÉRENCE</span><span>${transactionData?.reference}</span></div>
+          <div class="info-row"><span class="label">DATE</span><span>${formatDate(transactionData?.date || new Date())}</span></div>
+          <div class="info-row"><span class="label">STATUT</span><span>COMPLÉTÉ</span></div>
+          <div class="info-row"><span class="label">EXPÉDITEUR</span><span>${transactionData?.sender_name || user?.fullname}</span></div>
+          <div class="info-row"><span class="label">TÉLÉPHONE EXP</span><span>${transactionData?.sender_phone || user?.phone}</span></div>
+          <div class="info-row"><span class="label">DESTINATAIRE</span><span>${transactionData?.receiver_name}</span></div>
+          <div class="info-row"><span class="label">TÉLÉPHONE DEST</span><span>${transactionData?.receiver_phone}</span></div>
+          <div class="info-row"><span class="label">MONTANT ENVOYÉ</span><span>${formatAmount(transactionData?.amount)}</span></div>
+          <div class="info-row"><span class="label">FRAIS (2%)</span><span>${formatAmount(transactionData?.fee)}</span></div>
+          <div class="info-row total"><span class="label">TOTAL DÉBITÉ</span><span>${formatAmount((transactionData?.amount || 0) + (transactionData?.fee || 0))}</span></div>
+          <div class="footer"><p>Merci d'utiliser CashPays</p><p>Service client: 62 78 73 07</p></div>
         </div>
       </body>
       </html>
@@ -417,32 +427,20 @@ function Transfer({ user, socket }) {
   }
 
   const downloadPDF = () => generatePDF()
+  
   const shareViaWhatsAppReceipt = () => {
-    const message = `🏦 *CASHPAYS - Transaction réussie* ✅\n\n📋 *Référence:* ${transactionData?.reference}\n💰 *Montant:* ${formatAmount(transactionData?.amount)}\n📊 *Frais:* ${formatAmount(transactionData?.fee)}\n👤 *Destinataire:* ${transactionData?.receiver_name}\n✅ *Statut:* COMPLÉTÉ`
+    const message = `🏦 CASHPAYS - Transaction réussie ✅\n\n📋 Référence: ${transactionData?.reference}\n💰 Montant: ${formatAmount(transactionData?.amount)}\n📊 Frais: ${formatAmount(transactionData?.fee)}\n👤 Destinataire: ${transactionData?.receiver_name}`
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
   }
+  
   const shareViaEmailReceipt = () => {
-    const subject = `CashPays - Reçu de transaction ${transactionData?.reference}`
-    const body = `Bonjour,\n\nReçu de transaction CashPays.\n\nRÉFÉRENCE: ${transactionData?.reference}\nDATE: ${formatDate(transactionData?.date || new Date())}\nMONTANT: ${formatAmount(transactionData?.amount)}\nDESTINATAIRE: ${transactionData?.receiver_name}\n\nMerci d'utiliser CashPays !`
+    const subject = `CashPays - Reçu ${transactionData?.reference}`
+    const body = `Reçu de transaction CashPays.\n\nRéférence: ${transactionData?.reference}\nMontant: ${formatAmount(transactionData?.amount)}\nDestinataire: ${transactionData?.receiver_name}`
     window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
   }
+  
   const downloadTXT = () => {
-    const receipt = `
-╔══════════════════════════════════════════════════════════════╗
-║                    CASHPAYS - REÇU DE TRANSACTION            ║
-╠══════════════════════════════════════════════════════════════╣
-║  Référence: ${transactionData?.reference}                    ║
-║  Date: ${formatDate(transactionData?.date || new Date())}    ║
-║  Statut: ✓ COMPLÉTÉ                                          ║
-╠══════════════════════════════════════════════════════════════╣
-║  DE: ${transactionData?.sender_name || user?.fullname} (${transactionData?.sender_phone || user?.phone}) ║
-║  À: ${transactionData?.receiver_name} (${transactionData?.receiver_phone}) ║
-╠══════════════════════════════════════════════════════════════╣
-║  Montant: ${formatAmount(transactionData?.amount)}           ║
-║  Frais: ${formatAmount(transactionData?.fee)}                ║
-║  TOTAL: ${formatAmount((transactionData?.amount || 0) + (transactionData?.fee || 0))} ║
-╚══════════════════════════════════════════════════════════════╝
-    `
+    const receipt = `CASHPAYS - REÇU\n\nRéférence: ${transactionData?.reference}\nMontant: ${formatAmount(transactionData?.amount)}\nFrais: ${formatAmount(transactionData?.fee)}\nDestinataire: ${transactionData?.receiver_name}`
     const blob = new Blob([receipt], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -453,89 +451,91 @@ function Transfer({ user, socket }) {
     toast.success('Reçu téléchargé !')
   }
 
-  const TransactionNotification = () => {
+  // Rendu simplifié de la notification - sans animations problématiques
+  const renderNotification = () => {
+    if (!showNotification) return null
+    
     if (notificationType === 'success') {
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
-          <div className="relative max-w-md w-full bg-gradient-to-br from-green-900 to-green-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-green-400 animate-pulse"></div>
-            <div className="text-center pt-6 pb-2">
-              <div className="inline-flex p-3 bg-green-500/20 rounded-full mb-3">
-                <FaCheckCircle className="text-green-400 text-5xl" />
+          <div className="max-w-md w-full bg-green-800 rounded-2xl p-6">
+            <div className="text-center">
+              <div className="text-green-400 text-5xl mb-3">✓</div>
+              <h2 className="text-xl font-bold text-white mb-2">Transfert réussi !</h2>
+              <p className="text-white/70 text-sm mb-4">{formatAmount(transactionData?.amount)} envoyés</p>
+              <div className="bg-white/10 rounded-lg p-3 mb-4 text-left">
+                <p className="text-white/60 text-xs">Référence: {transactionData?.reference}</p>
+                <p className="text-white/60 text-xs">Destinataire: {transactionData?.receiver_name}</p>
+                <p className="text-white/60 text-xs">Montant: {formatAmount(transactionData?.amount)}</p>
+                <p className="text-white/60 text-xs">Frais: {formatAmount(transactionData?.fee)}</p>
               </div>
-              <h2 className="text-2xl font-bold text-white">Transfert réussi !</h2>
-              <p className="text-green-200 text-sm mt-1">{formatAmount(transactionData?.amount)} envoyés</p>
+              <div className="flex gap-2">
+                <button onClick={downloadPDF} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">PDF</button>
+                <button onClick={downloadTXT} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">TXT</button>
+                <button onClick={shareViaWhatsAppReceipt} className="flex-1 bg-[#25d366]/20 text-white py-2 rounded-lg text-sm">WhatsApp</button>
+              </div>
+              <button onClick={() => setShowNotification(false)} className="w-full mt-4 bg-white text-green-800 py-2 rounded-lg font-semibold">
+                Fermer
+              </button>
             </div>
-            <div className="bg-white/10 mx-4 rounded-xl p-4 mb-4">
-              <div className="space-y-2">
-                <div className="flex justify-between"><span className="text-white/60 text-sm">Référence</span><span className="text-white text-xs font-mono">{transactionData?.reference}</span></div>
-                <div className="flex justify-between"><span className="text-white/60 text-sm">Destinataire</span><span className="text-white text-sm">{transactionData?.receiver_name}</span></div>
-                <div className="border-t border-white/20 my-2"></div>
-                <div className="flex justify-between"><span className="text-white/60 text-sm">Montant</span><span className="text-white font-bold">{formatAmount(transactionData?.amount)}</span></div>
-                <div className="flex justify-between"><span className="text-white/60 text-sm">Frais (2%)</span><span className="text-yellow-300">{formatAmount(transactionData?.fee)}</span></div>
-                <div className="flex justify-between pt-2 border-t border-white/20"><span className="text-white font-semibold">Total débité</span><span className="text-white font-bold">{formatAmount((transactionData?.amount || 0) + (transactionData?.fee || 0))}</span></div>
-              </div>
-            </div>
-            <div className="px-4 pb-4">
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <button onClick={downloadPDF} className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-sm"><FaFilePdf /> PDF</button>
-                <button onClick={downloadTXT} className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-sm"><FaDownload /> TXT</button>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={shareViaWhatsAppReceipt} className="flex items-center justify-center gap-2 bg-[#25d366]/20 hover:bg-[#25d366]/30 text-white py-2 rounded-xl text-sm"><FaWhatsapp /> WhatsApp</button>
-                <button onClick={shareViaEmailReceipt} className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-sm"><FaEnvelope /> Email</button>
-              </div>
-              <div className="grid grid-cols-3 gap-2 mt-3">
-                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs"><FaHome size={14} /> Accueil</button>
-                <button onClick={() => { setShowNotification(false); setAmount(''); setReceiverPhone('') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs"><FaArrowRight size={14} /> Nouveau</button>
-                <button onClick={() => { setShowNotification(false); navigate('/history') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs"><FaHistory size={14} /> Historique</button>
-              </div>
-            </div>
-            <div className="text-center py-2 bg-black/20"><p className="text-white/40 text-xs">Fermeture dans {countdown} seconde{countdown > 1 ? 's' : ''}...</p></div>
-            <button onClick={() => setShowNotification(false)} className="absolute top-4 right-4 text-white/40 hover:text-white"><FaTimes /></button>
           </div>
         </div>
       )
     }
+    
     if (notificationType === 'received') {
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
-          <div className="relative max-w-md w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="text-center pt-6 pb-2">
-              <div className="inline-flex p-3 bg-blue-500/20 rounded-full mb-3"><FaMoneyBillWave className="text-blue-400 text-5xl" /></div>
-              <h2 className="text-2xl font-bold text-white">Argent reçu !</h2>
-              <p className="text-blue-200 text-sm mt-1">{formatAmount(transactionData?.amount)} reçus</p>
-            </div>
-            <div className="bg-white/10 mx-4 rounded-xl p-4 mb-4">
-              <div className="space-y-2">
-                <div className="flex justify-between"><span className="text-white/60 text-sm">Référence</span><span className="text-white text-xs font-mono">{transactionData?.reference}</span></div>
-                <div className="flex justify-between"><span className="text-white/60 text-sm">Expéditeur</span><span className="text-white text-sm">{transactionData?.sender_name}</span></div>
-                <div className="flex justify-between"><span className="text-white/60 text-sm">Téléphone</span><span className="text-white text-sm">{transactionData?.sender_phone}</span></div>
+          <div className="max-w-md w-full bg-blue-800 rounded-2xl p-6">
+            <div className="text-center">
+              <div className="text-blue-400 text-5xl mb-3">💰</div>
+              <h2 className="text-xl font-bold text-white mb-2">Argent reçu !</h2>
+              <p className="text-white/70 text-sm mb-4">{formatAmount(transactionData?.amount)} reçus</p>
+              <div className="bg-white/10 rounded-lg p-3 mb-4 text-left">
+                <p className="text-white/60 text-xs">Référence: {transactionData?.reference}</p>
+                <p className="text-white/60 text-xs">Expéditeur: {transactionData?.sender_name}</p>
               </div>
+              <button onClick={() => setShowNotification(false)} className="w-full bg-white text-blue-800 py-2 rounded-lg font-semibold">
+                Voir mon solde
+              </button>
             </div>
-            <div className="p-4"><button onClick={() => setShowNotification(false)} className="w-full btn-primary">Voir mon solde</button></div>
-            <button onClick={() => setShowNotification(false)} className="absolute top-4 right-4 text-white/40 hover:text-white"><FaTimes /></button>
           </div>
         </div>
       )
     }
+    
     if (notificationType === 'error') {
       return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
-          <div className="relative max-w-md w-full bg-gradient-to-br from-red-900 to-red-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="text-center pt-6 pb-2">
-              <div className="inline-flex p-3 bg-red-500/20 rounded-full mb-3"><FaExclamationTriangle className="text-red-400 text-5xl" /></div>
-              <h2 className="text-2xl font-bold text-white">Transfert échoué</h2>
-              <p className="text-red-200 text-sm mt-1">{transactionData?.error}</p>
+          <div className="max-w-md w-full bg-red-800 rounded-2xl p-6">
+            <div className="text-center">
+              <div className="text-red-400 text-5xl mb-3">⚠️</div>
+              <h2 className="text-xl font-bold text-white mb-2">Transfert échoué</h2>
+              <p className="text-white/70 text-sm mb-4">{transactionData?.error}</p>
+              <div className="bg-white/10 rounded-lg p-3 mb-4">
+                <p className="text-white/60 text-sm">{transactionData?.suggestion}</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowNotification(false)} className="flex-1 bg-white/20 text-white py-2 rounded-lg">Réessayer</button>
+                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 bg-white text-red-800 py-2 rounded-lg font-semibold">Retour</button>
+              </div>
             </div>
-            <div className="bg-white/10 mx-4 rounded-xl p-4 mb-4"><div className="bg-red-500/20 rounded-lg p-3"><p className="text-red-300 text-sm">{transactionData?.suggestion}</p></div></div>
-            <div className="p-4 flex gap-3"><button onClick={() => setShowNotification(false)} className="flex-1 btn-primary">Réessayer</button><button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 btn-secondary">Retour</button></div>
-            <button onClick={() => setShowNotification(false)} className="absolute top-4 right-4 text-white/40 hover:text-white"><FaTimes /></button>
           </div>
         </div>
       )
     }
+    
     return null
+  }
+
+  if (checkingPin) {
+    return (
+      <Layout user={user} socket={socket}>
+        <div className="flex justify-center items-center h-64">
+          <div className="w-12 h-12 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+        </div>
+      </Layout>
+    )
   }
 
   return (
@@ -635,6 +635,13 @@ function Transfer({ user, socket }) {
               </div>
             </div>
 
+            <div className="bg-blue-500/10 rounded-xl p-3 flex items-center gap-2">
+              <FaShieldAlt className="text-blue-400" />
+              <p className="text-blue-300 text-xs">
+                {hasPin ? '🔐 Vos transactions sont sécurisées par votre code PIN' : '🔒 Définissez votre code PIN pour sécuriser vos transactions'}
+              </p>
+            </div>
+
             <button type="submit" disabled={loading} className="btn-primary w-full">
               {loading ? <><FaSpinner className="animate-spin" /> Traitement...</> : 'Confirmer le transfert'}
             </button>
@@ -680,10 +687,7 @@ function Transfer({ user, socket }) {
               </button>
               <div className="bg-blue-500/10 rounded-xl p-3">
                 <p className="text-blue-300 text-xs text-center">
-                  💡 Le QR code généré redirige vers la page de transfert avec votre numéro pré-rempli
-                </p>
-                <p className="text-white/40 text-xs text-center mt-2">
-                  Lien généré : <span className="text-blue-400 break-all">{`/transfer?phone=${user?.phone}`}</span>
+                  💡 Le QR code redirige vers la page de transfert avec votre numéro pré-rempli
                 </p>
               </div>
             </div>
@@ -691,48 +695,45 @@ function Transfer({ user, socket }) {
             <div className="space-y-4">
               <div className="text-center">
                 {qrImageUrl && (
-                  <img src={qrImageUrl} alt="QR Code de paiement" className="w-48 h-48 mx-auto bg-white p-4 rounded-xl shadow-lg" />
+                  <img src={qrImageUrl} alt="QR Code" className="w-48 h-48 mx-auto bg-white p-4 rounded-xl shadow-lg" />
                 )}
-                <p className="text-white/60 text-xs mt-2">Scannez ce code pour me payer</p>
               </div>
-
               <div className="bg-white/5 rounded-xl p-3">
                 <div className="flex justify-between text-sm">
                   <span className="text-white/60">Votre numéro</span>
                   <span className="font-mono font-bold text-white">{user?.phone}</span>
                 </div>
-                {qrAmount && (
-                  <div className="flex justify-between text-sm mt-2">
-                    <span className="text-white/60">Montant demandé</span>
-                    <span className="text-green-400 font-bold">{parseInt(qrAmount).toLocaleString()} FCFA</span>
-                  </div>
-                )}
                 <div className="flex justify-between text-sm mt-2 pt-2 border-t border-white/10">
-                  <span className="text-white/60">Lien de paiement</span>
-                  <button onClick={() => copyToClipboard(paymentLink, 'Lien')} className="text-blue-400 text-xs hover:underline flex items-center gap-1">
-                    <FaCopy size={10} /> Copier
-                  </button>
+                  <button onClick={() => copyToClipboard(paymentLink, 'Lien')} className="text-blue-400 text-xs">Copier le lien</button>
                 </div>
               </div>
-
               <div className="flex gap-2">
-                <button onClick={downloadQRCode} className="flex-1 btn-secondary text-sm"><FaDownload className="inline mr-1" /> Télécharger</button>
-                <button onClick={() => copyToClipboard(paymentLink, 'Lien')} className="flex-1 btn-secondary text-sm"><FaCopy className="inline mr-1" /> Copier lien</button>
+                <button onClick={downloadQRCode} className="flex-1 btn-secondary text-sm"><FaDownload /> Télécharger</button>
+                <button onClick={shareViaWhatsApp} className="flex-1 btn-secondary text-sm"><FaWhatsapp /> WhatsApp</button>
               </div>
-
-              <div className="flex gap-2">
-                <button onClick={shareViaWhatsApp} className="flex-1 bg-[#25d366]/20 hover:bg-[#25d366]/30 text-white text-sm py-2 rounded-lg"><FaWhatsapp className="inline mr-1" /> WhatsApp</button>
-                <button onClick={shareViaEmail} className="flex-1 bg-white/10 hover:bg-white/20 text-white text-sm py-2 rounded-lg"><FaEnvelope className="inline mr-1" /> Email</button>
-              </div>
-
-              <button onClick={resetQRGenerator} className="w-full text-sm text-white/40 hover:text-white/60">Générer un nouveau QR code</button>
+              <button onClick={resetQRGenerator} className="w-full text-sm text-white/40">Nouveau QR code</button>
             </div>
           )}
         </div>
       </div>
 
-      {/* Notification */}
-      {showNotification && <TransactionNotification />}
+      {showPinModal && (
+        <PinModal
+          isOpen={showPinModal}
+          onClose={() => {
+            setShowPinModal(false)
+            setPendingTransaction(null)
+          }}
+          onSuccess={() => {
+            if (!hasPin) setHasPin(true)
+            processTransaction()
+          }}
+          type={hasPin ? 'verify' : 'set'}
+          amount={pendingTransaction?.amount}
+        />
+      )}
+
+      {renderNotification()}
     </Layout>
   )
 }

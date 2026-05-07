@@ -64,15 +64,15 @@ function Contact({ user }) {
     {
       icon: FaEnvelope,
       title: 'Email',
-      details: 'support@cashpays.td',
-      link: 'mailto:support@cashpays.td',
+      details: 'supportcashpays@gmail.com',
+      link: 'mailto:supportcashpays@gmail.com',
       color: 'bg-blue-500/20 text-blue-400'
     },
     {
       icon: FaMapMarkerAlt,
       title: 'Adresse',
-      details: 'N\'Djaména, Quartier Moursal, Tchad',
-      link: 'https://maps.google.com/?q=N\'Djaména+Tchad',
+      details: 'mongo, Quartier Secteur N°7, Tchad',
+      link: 'https://maps.google.com/?q=Mongo+Tchad',
       color: 'bg-red-500/20 text-red-400'
     }
   ]
@@ -81,7 +81,7 @@ function Contact({ user }) {
     { icon: FaFacebook, name: 'Facebook', link: 'https://facebook.com/cashpays', color: 'bg-[#1877f2]' },
     { icon: FaWhatsapp, name: 'WhatsApp', link: 'https://wa.me/23562787307', color: 'bg-[#25d366]' },
     { icon: FaTelegram, name: 'Telegram', link: 'https://t.me/cashpays', color: 'bg-[#0088cc]' },
-    { icon: FaEnvelope, name: 'Email', link: 'mailto:support@cashpays.td', color: 'bg-gray-500' }
+    { icon: FaEnvelope, name: 'Email', link: 'mailto:supportcashpays@gmail.com', color: 'bg-gray-500' }
   ]
 
   const faqs = [

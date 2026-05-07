@@ -1,5 +1,4 @@
-// src/pages/Deposit.jsx - Version corrigée
-
+// src/pages/Deposit.jsx - Version corrigée sans erreurs DOM
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
@@ -13,6 +12,7 @@ import {
   FaExclamationTriangle
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
+import PinModal from '../components/PinModal'
 
 function Deposit({ user }) {
   const navigate = useNavigate()
@@ -28,9 +28,16 @@ function Deposit({ user }) {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCity, setSelectedCity] = useState('all')
   const [cities, setCities] = useState([])
+  
+  // États pour le PIN
+  const [hasPin, setHasPin] = useState(false)
+  const [showPinModal, setShowPinModal] = useState(false)
+  const [pendingDeposit, setPendingDeposit] = useState(null)
+  const [checkingPin, setCheckingPin] = useState(true)
 
   useEffect(() => {
     fetchAgents()
+    checkUserPin()
   }, [])
 
   useEffect(() => {
@@ -48,22 +55,35 @@ function Deposit({ user }) {
     }
   }, [showNotification, notificationType])
 
+  const checkUserPin = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/user/pin-status', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setHasPin(response.data.hasPin || false)
+    } catch (error) {
+      console.error('Erreur vérification PIN:', error)
+      setHasPin(false)
+    } finally {
+      setCheckingPin(false)
+    }
+  }
+
   const fetchAgents = async () => {
     setLoadingAgents(true)
     try {
       const token = localStorage.getItem('accessToken')
-      // UTILISER LE BON ENDPOINT : /api/agents (public)
       const response = await axios.get('/api/agents', {
         headers: { Authorization: `Bearer ${token}` }
       })
-      const agentsData = response.data || []
+      const agentsData = response.data.agents || response.data || []
       setAgents(agentsData)
       
       const uniqueCities = [...new Set(agentsData.map(a => a.city || a.province).filter(Boolean))]
       setCities(uniqueCities)
     } catch (error) {
       console.error('Erreur chargement agents:', error)
-      // Données fictives pour la démonstration
       const mockAgents = [
         { id: 1, fullname: 'Jean NDOUMBE', phone: '66234567', province: 'N\'Djaména', city: 'N\'Djaména', agency_name: 'Agence CashPays Moursal', agency_address: 'Quartier Moursal' },
         { id: 2, fullname: 'Marie MBALLA', phone: '66345678', province: 'Logone Occidental', city: 'Moundou', agency_name: 'Agence CashPays Moundou', agency_address: 'Avenue Charles de Gaulle' },
@@ -71,51 +91,76 @@ function Deposit({ user }) {
         { id: 4, fullname: 'Aïssa MAHAMAT', phone: '66567890', province: 'Ouaddaï', city: 'Abéché', agency_name: 'Agence CashPays Abéché', agency_address: 'Route de l\'aéroport' }
       ]
       setAgents(mockAgents)
+      setCities(['N\'Djaména', 'Moundou', 'Bongor', 'Abéché'])
     } finally {
       setLoadingAgents(false)
     }
   }
 
   const filteredAgents = agents.filter(agent => {
-    const matchesSearch = agent.fullname.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         agent.phone.includes(searchTerm) ||
+    const matchesSearch = agent.fullname?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         agent.phone?.includes(searchTerm) ||
                          (agent.agency_name && agent.agency_name.toLowerCase().includes(searchTerm.toLowerCase()))
     const matchesCity = selectedCity === 'all' || agent.city === selectedCity || agent.province === selectedCity
     return matchesSearch && matchesCity
   })
 
-  const handleDeposit = async (e) => {
-    e.preventDefault()
-    
+  const prepareDeposit = () => {
     const amountNum = parseInt(amount)
     if (amountNum < 100) {
       toast.error('Le montant minimum est de 100 FCFA')
-      return
+      return false
     }
     
     if (!selectedAgent) {
       toast.error('Veuillez sélectionner un agent')
-      return
+      return false
     }
+    
+    setPendingDeposit({
+      amount: amountNum,
+      agent_id: selectedAgent.id,
+      agent_name: selectedAgent.fullname,
+      agent_phone: selectedAgent.phone,
+      description: `Dépôt de ${amountNum} FCFA chez ${selectedAgent.fullname}`
+    })
+    
+    return true
+  }
+
+  const handleDeposit = async (e) => {
+    e.preventDefault()
+    
+    if (!prepareDeposit()) return
+    
+    if (!hasPin) {
+      setShowPinModal(true)
+    } else {
+      setShowPinModal(true)
+    }
+  }
+
+  const processDeposit = async () => {
+    if (!pendingDeposit) return
     
     setLoading(true)
     
     try {
       const token = localStorage.getItem('accessToken')
       const response = await axios.post('/api/deposit', {
-        amount: amountNum,
-        agent_id: selectedAgent.id,
-        description: `Dépôt de ${amountNum} FCFA chez ${selectedAgent.fullname}`
+        amount: pendingDeposit.amount,
+        agent_id: pendingDeposit.agent_id,
+        description: pendingDeposit.description
       }, {
         headers: { Authorization: `Bearer ${token}` }
       })
       
       setTransactionData({
-        reference: response.data.reference,
-        amount: amountNum,
+        reference: response.data.reference || `DEP-${Date.now()}`,
+        amount: pendingDeposit.amount,
         fee: 0,
-        agent_name: selectedAgent.fullname,
-        agent_phone: selectedAgent.phone,
+        agent_name: pendingDeposit.agent_name,
+        agent_phone: pendingDeposit.agent_phone,
         status: 'completed',
         type: 'deposit',
         date: new Date().toISOString()
@@ -127,6 +172,7 @@ function Deposit({ user }) {
       
       setAmount('')
       setSelectedAgent(null)
+      setPendingDeposit(null)
       
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erreur lors du dépôt')
@@ -156,76 +202,58 @@ function Deposit({ user }) {
   const TransactionNotification = () => {
     if (notificationType === 'success') {
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
-          <div className="relative max-w-md w-full bg-gradient-to-br from-green-900 to-green-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-green-400 animate-pulse"></div>
-            
-            <div className="text-center pt-6 pb-2">
-              <div className="inline-flex p-3 bg-green-500/20 rounded-full mb-3 animate-bounce">
-                <FaCheckCircle className="text-green-400 text-5xl" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="relative max-w-md w-full bg-green-800 rounded-2xl shadow-2xl">
+            <div className="p-6">
+              <div className="text-center mb-4">
+                <div className="inline-flex p-3 bg-green-500/20 rounded-full mb-3">
+                  <FaCheckCircle className="text-green-400 text-4xl" />
+                </div>
+                <h2 className="text-xl font-bold text-white">Dépôt réussi !</h2>
+                <p className="text-green-200 text-sm mt-1">
+                  {formatAmount(transactionData?.amount)} ajoutés à votre compte
+                </p>
               </div>
-              <h2 className="text-2xl font-bold text-white">Dépôt réussi !</h2>
-              <p className="text-green-200 text-sm mt-1">
-                {formatAmount(transactionData?.amount)} ajoutés à votre compte
-              </p>
-            </div>
 
-            <div className="bg-white/10 mx-4 rounded-xl p-4 mb-4">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Référence</span>
-                  <span className="text-white text-xs font-mono">{transactionData?.reference}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Agent</span>
-                  <span className="text-white text-sm">{transactionData?.agent_name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Téléphone agent</span>
-                  <span className="text-white text-sm">{transactionData?.agent_phone}</span>
-                </div>
-                <div className="border-t border-white/20 my-2"></div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Montant déposé</span>
-                  <span className="text-white font-bold text-lg">{formatAmount(transactionData?.amount)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Frais</span>
-                  <span className="text-green-300">Gratuit</span>
+              <div className="bg-white/10 rounded-lg p-3 mb-4">
+                <div className="space-y-1 text-sm">
+                  <p className="text-white/60">Référence: {transactionData?.reference}</p>
+                  <p className="text-white/60">Agent: {transactionData?.agent_name}</p>
+                  <p className="text-white/60">Téléphone: {transactionData?.agent_phone}</p>
+                  <div className="border-t border-white/20 my-2"></div>
+                  <p className="text-white font-bold">Montant: {formatAmount(transactionData?.amount)}</p>
+                  <p className="text-green-300">Frais: Gratuit</p>
                 </div>
               </div>
-            </div>
 
-            <div className="px-4 pb-4">
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <button onClick={() => window.print()} className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-sm">
-                  <FaDownload /> Reçu
+              <div className="flex gap-2 mb-3">
+                <button onClick={() => window.print()} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaDownload className="inline mr-1" /> Reçu
                 </button>
                 <button onClick={() => {
-                  const message = `🏦 *CASHPAYS - Dépôt réussi* ✅\n\n📋 Référence: ${transactionData?.reference}\n💰 Montant: ${formatAmount(transactionData?.amount)}\n👤 Agent: ${transactionData?.agent_name}\n📅 Date: ${formatDate(new Date())}\n\n✅ Statut: COMPLÉTÉ`
+                  const message = `🏦 CASHPAYS - Dépôt réussi ✅\n\n💰 Montant: ${formatAmount(transactionData?.amount)}\n👤 Agent: ${transactionData?.agent_name}`
                   window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
-                }} className="flex items-center justify-center gap-2 bg-[#25d366]/20 hover:bg-[#25d366]/30 text-white py-2 rounded-xl text-sm">
-                  <FaWhatsapp /> Partager
+                }} className="flex-1 bg-[#25d366]/20 text-white py-2 rounded-lg text-sm">
+                  <FaWhatsapp className="inline mr-1" /> Partager
                 </button>
               </div>
               
-              <div className="grid grid-cols-3 gap-2">
-                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
-                  <FaHome size={14} /> Accueil
+              <div className="flex gap-2">
+                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaHome className="inline mr-1" /> Accueil
                 </button>
-                <button onClick={() => { setShowNotification(false); setAmount(''); setSelectedAgent(null) }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
-                  <FaArrowRight size={14} /> Nouveau
+                <button onClick={() => { setShowNotification(false); setAmount(''); setSelectedAgent(null) }} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaArrowRight className="inline mr-1" /> Nouveau
                 </button>
-                <button onClick={() => { setShowNotification(false); navigate('/history') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
-                  <FaHistory size={14} /> Historique
+                <button onClick={() => { setShowNotification(false); navigate('/history') }} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaHistory className="inline mr-1" /> Historique
                 </button>
               </div>
-            </div>
 
-            <div className="text-center py-2 bg-black/20">
-              <p className="text-white/40 text-xs">Fermeture dans {countdown} seconde{countdown > 1 ? 's' : ''}...</p>
+              <div className="text-center mt-3">
+                <p className="text-white/40 text-xs">Fermeture dans {countdown} secondes...</p>
+              </div>
             </div>
-
             <button onClick={() => setShowNotification(false)} className="absolute top-4 right-4 text-white/40 hover:text-white">
               <FaTimes />
             </button>
@@ -236,25 +264,23 @@ function Deposit({ user }) {
 
     if (notificationType === 'error') {
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
-          <div className="relative max-w-md w-full bg-gradient-to-br from-red-900 to-red-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="text-center pt-6 pb-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="relative max-w-md w-full bg-red-800 rounded-2xl shadow-2xl">
+            <div className="p-6 text-center">
               <div className="inline-flex p-3 bg-red-500/20 rounded-full mb-3">
-                <FaExclamationTriangle className="text-red-400 text-5xl" />
+                <FaExclamationTriangle className="text-red-400 text-4xl" />
               </div>
-              <h2 className="text-2xl font-bold text-white">Dépôt échoué</h2>
-              <p className="text-red-200 text-sm mt-1">{transactionData?.error}</p>
+              <h2 className="text-xl font-bold text-white mb-2">Dépôt échoué</h2>
+              <p className="text-red-200 text-sm">{transactionData?.error}</p>
+              <div className="flex gap-3 mt-4">
+                <button onClick={() => setShowNotification(false)} className="flex-1 bg-white/20 text-white py-2 rounded-lg">
+                  Réessayer
+                </button>
+                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 bg-white text-red-800 py-2 rounded-lg font-semibold">
+                  Retour
+                </button>
+              </div>
             </div>
-
-            <div className="p-4 flex gap-3">
-              <button onClick={() => setShowNotification(false)} className="flex-1 btn-primary">
-                Réessayer
-              </button>
-              <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 btn-secondary">
-                Retour
-              </button>
-            </div>
-
             <button onClick={() => setShowNotification(false)} className="absolute top-4 right-4 text-white/40 hover:text-white">
               <FaTimes />
             </button>
@@ -264,6 +290,16 @@ function Deposit({ user }) {
     }
 
     return null
+  }
+
+  if (checkingPin) {
+    return (
+      <Layout user={user}>
+        <div className="flex justify-center items-center h-64">
+          <div className="w-12 h-12 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+        </div>
+      </Layout>
+    )
   }
 
   return (
@@ -316,6 +352,15 @@ function Deposit({ user }) {
                 </div>
               </div>
             )}
+
+            <div className="bg-blue-500/10 rounded-xl p-3 flex items-center gap-2">
+              <FaShieldAlt className="text-blue-400" />
+              <p className="text-blue-300 text-xs">
+                {hasPin 
+                  ? '🔐 Vos opérations sont sécurisées par votre code PIN' 
+                  : '🔒 Définissez votre code PIN pour sécuriser vos transactions'}
+              </p>
+            </div>
 
             <button
               type="submit"
@@ -409,6 +454,23 @@ function Deposit({ user }) {
           )}
         </div>
       </div>
+
+      {/* Modal PIN */}
+      {showPinModal && (
+        <PinModal
+          isOpen={showPinModal}
+          onClose={() => {
+            setShowPinModal(false)
+            setPendingDeposit(null)
+          }}
+          onSuccess={() => {
+            setHasPin(true)
+            processDeposit()
+          }}
+          type={hasPin ? 'verify' : 'set'}
+          amount={pendingDeposit?.amount}
+        />
+      )}
 
       {showNotification && <TransactionNotification />}
     </Layout>

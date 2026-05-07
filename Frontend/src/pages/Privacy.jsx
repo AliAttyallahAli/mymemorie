@@ -155,9 +155,9 @@ function Privacy({ user }) {
             <div className="bg-white/5 rounded-xl p-4">
               <p className="text-white/70">Pour toute question relative à la confidentialité :</p>
               <div className="mt-3 space-y-2">
-                <p className="text-white">📧 Email : <span className="text-blue-300">privacy@cashpays.td</span></p>
+                <p className="text-white">📧 Email : <span className="text-blue-300">cashpays@gmail.com</span></p>
                 <p className="text-white">📞 Téléphone : <span className="text-blue-300">+235 62 78 73 07</span></p>
-                <p className="text-white">📍 Adresse : N'Djaména, Tchad</p>
+                <p className="text-white">📍 Adresse : Mongo, Tchad</p>
               </div>
             </div>
           </section>

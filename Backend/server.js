@@ -24,7 +24,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
     cors: {
-        origin: "http://localhost:5173",
+        origin: "http://Backend/public", // Remplacez par l'URL de votre frontend
         methods: ["GET", "POST"]
     }
 });
@@ -99,6 +99,155 @@ function generateTokens(userId, phone, role) {
     
     return { accessToken, refreshToken };
 }
+
+// ============================================
+// ENDPOINTS POUR LE PIN DE TRANSACTION
+// ============================================
+
+// Définir le PIN de transaction (première transaction)
+app.post('/api/user/set-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin } = req.body;
+  
+  // Validation du PIN
+  if (!pin || !/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'Le PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get('SELECT is_pin_set FROM users WHERE id = ?', [req.user.userId]);
+    
+    if (user.is_pin_set) {
+      return res.status(400).json({ error: 'Un PIN est déjà défini' });
+    }
+    
+    const hashedPin = await bcrypt.hash(pin, 10);
+    
+    await run(`
+      UPDATE users 
+      SET transaction_pin = ?, is_pin_set = 1, pin_attempts = 0, pin_blocked_until = NULL
+      WHERE id = ?
+    `, [hashedPin, req.user.userId]);
+    
+    res.json({ 
+      success: true, 
+      message: 'PIN de transaction défini avec succès' 
+    });
+  } catch (error) {
+    console.error('Erreur définition PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la définition du PIN' });
+  }
+});
+
+// Vérifier le PIN de transaction
+app.post('/api/user/verify-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin, transactionId } = req.body;
+  
+  if (!pin || !/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'Le PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get(`
+      SELECT id, transaction_pin, is_pin_set, pin_attempts, pin_blocked_until 
+      FROM users WHERE id = ?
+    `, [req.user.userId]);
+    
+    if (!user.is_pin_set) {
+      return res.status(400).json({ error: 'Aucun PIN défini' });
+    }
+    
+    // Vérifier si le PIN est bloqué
+    if (user.pin_blocked_until && new Date(user.pin_blocked_until) > new Date()) {
+      const waitMinutes = Math.ceil((new Date(user.pin_blocked_until) - new Date()) / 60000);
+      return res.status(403).json({ 
+        error: `Trop de tentatives. Réessayez dans ${waitMinutes} minutes.` 
+      });
+    }
+    
+    const isValid = await bcrypt.compare(pin, user.transaction_pin);
+    
+    if (!isValid) {
+      const newAttempts = (user.pin_attempts || 0) + 1;
+      
+      if (newAttempts >= 5) {
+        // Bloquer le PIN pendant 30 minutes après 5 tentatives
+        const blockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+        await run(`
+          UPDATE users SET pin_attempts = ?, pin_blocked_until = ? WHERE id = ?
+        `, [newAttempts, blockedUntil.toISOString(), req.user.userId]);
+        
+        return res.status(403).json({ error: 'PIN incorrect. Compte bloqué 30 minutes.' });
+      } else {
+        await run('UPDATE users SET pin_attempts = ? WHERE id = ?', [newAttempts, req.user.userId]);
+        return res.status(401).json({ error: `PIN incorrect. ${5 - newAttempts} tentative(s) restante(s).` });
+      }
+    }
+    
+    // Réinitialiser les tentatives
+    await run('UPDATE users SET pin_attempts = 0, pin_blocked_until = NULL WHERE id = ?', [req.user.userId]);
+    
+    // Marquer la transaction comme validée
+    if (transactionId) {
+      await run('UPDATE transactions SET pin_verified = 1 WHERE id = ?', [transactionId]);
+    }
+    
+    res.json({ success: true, message: 'PIN valide' });
+    
+  } catch (error) {
+    console.error('Erreur vérification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la vérification' });
+  }
+});
+
+// Modifier le PIN (si connu)
+app.post('/api/user/change-transaction-pin', authenticateToken, async (req, res) => {
+  const { oldPin, newPin } = req.body;
+  
+  if (!oldPin || !newPin || !/^\d{4}$/.test(newPin)) {
+    return res.status(400).json({ error: 'Le nouveau PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get('SELECT transaction_pin, is_pin_set FROM users WHERE id = ?', [req.user.userId]);
+    
+    if (!user.is_pin_set) {
+      return res.status(400).json({ error: 'Aucun PIN défini' });
+    }
+    
+    const isValid = await bcrypt.compare(oldPin, user.transaction_pin);
+    
+    if (!isValid) {
+      return res.status(401).json({ error: 'Ancien PIN incorrect' });
+    }
+    
+    const hashedNewPin = await bcrypt.hash(newPin, 10);
+    
+    await run('UPDATE users SET transaction_pin = ? WHERE id = ?', [hashedNewPin, req.user.userId]);
+    
+    res.json({ success: true, message: 'PIN modifié avec succès' });
+    
+  } catch (error) {
+    console.error('Erreur modification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la modification' });
+  }
+});
+
+// Réinitialiser le PIN (admin uniquement)
+app.post('/api/admin/reset-transaction-pin/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    await run(`
+      UPDATE users 
+      SET transaction_pin = NULL, is_pin_set = 0, pin_attempts = 0, pin_blocked_until = NULL 
+      WHERE id = ?
+    `, [userId]);
+    
+    res.json({ success: true, message: 'PIN réinitialisé' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erreur lors de la réinitialisation' });
+  }
+});
 
 // Génération XML ISO 20022
 function generateISO20022XML(transaction) {
@@ -534,169 +683,542 @@ app.get('/api/wallet/history', authenticateToken, async (req, res) => {
 // ============================================
 // TRANSFERT ENTRE UTILISATEURS AVEC NOTIFICATIONS
 // ============================================
+// backend/server.js - Ajouter ces endpoints
 
-app.post('/api/transfer', authenticateToken, async (req, res) => {
-    const { receiver_phone, amount, description } = req.body;
+// ============================================
+// ENDPOINTS POUR LE PIN DE TRANSACTION
+// ============================================
+
+// Définir le PIN de transaction (première transaction)
+app.post('/api/user/set-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin } = req.body;
+  
+  console.log('🔐 Définition PIN pour user:', req.user.userId);
+  
+  // Validation du PIN
+  if (!pin) {
+    return res.status(400).json({ error: 'Le PIN est requis' });
+  }
+  
+  if (!/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'Le PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get('SELECT is_pin_set FROM users WHERE id = ?', [req.user.userId]);
     
-    if (!receiver_phone || !amount) {
-        return res.status(400).json({ error: 'Destinataire et montant requis' });
+    if (user && user.is_pin_set) {
+      return res.status(400).json({ error: 'Un PIN est déjà défini' });
     }
     
-    if (amount < 25) {
-        return res.status(400).json({ error: 'Le montant minimum est de 25 FCFA' });
-    }
+    const hashedPin = await bcrypt.hash(pin, 10);
     
-    try {
-        // Récupérer l'expéditeur
-        const sender = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
-        
-        // Vérifier le solde de l'expéditeur
-        const senderWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [sender.id]);
-        
-        const fee = Math.floor(amount * 0.02); // 2% de frais
-        const totalAmount = amount + fee;
-        
-        if (senderWallet.balance < totalAmount) {
-            return res.status(400).json({ error: 'Solde insuffisant' });
-        }
-        
-        // Vérifier le destinataire
-        const receiver = await get('SELECT id, phone, fullname, is_active FROM users WHERE phone = ?', [receiver_phone]);
-        
-        if (!receiver) {
-            return res.status(404).json({ error: 'Destinataire non trouvé' });
-        }
-        
-        if (!receiver.is_active) {
-            return res.status(400).json({ error: 'Le compte du destinataire est inactif' });
-        }
-        
-        // Récupérer le wallet principal admin
-        const adminWallet = await get(
-            `SELECT w.id, w.balance, u.id as user_id 
-             FROM wallets w
-             JOIN users u ON w.user_id = u.id
-             WHERE u.role = 'admin' AND u.phone = '62787307'`
-        );
-        
-        if (!adminWallet) {
-            return res.status(500).json({ error: 'Wallet admin non trouvé' });
-        }
-        
-        // Générer la référence
-        const reference = generateTransactionReference();
-        
-        // Effectuer les transferts dans une transaction SQL
-        await run('BEGIN TRANSACTION');
-        
-        try {
-            // Débiter l'expéditeur
-            await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, sender.id]);
-            
-            // Créditer le destinataire
-            await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, receiver.id]);
-            
-            // Créditer le wallet admin des frais
-            await run('UPDATE wallets SET balance = balance + ? WHERE id = ?', [fee, adminWallet.id]);
-            
-            // Générer XML ISO 20022
-            const xml = generateISO20022XML({
-                reference,
-                sender_phone: sender.phone,
-                receiver_phone: receiver.phone,
-                amount,
-                net_amount: amount,
-                fee
-            });
-            
-            // Enregistrer la transaction
-            await run(
-                `INSERT INTO transactions 
-                 (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, xml_iso20022, description)
-                 VALUES (?, ?, ?, ?, ?, ?, 'transfer', 'completed', ?, ?)`,
-                [reference, sender.phone, receiver.phone, amount, fee, amount, xml, description || '']
-            );
-            
-            // Enregistrer la notification dans la base de données pour le destinataire
-            await run(
-                `INSERT INTO notifications (user_id, title, message, type, is_read)
-                 VALUES (?, '💰 Transfert reçu', ?, 'transaction', 0)`,
-                [receiver.id, `Vous avez reçu ${amount.toLocaleString()} FCFA de ${sender.fullname}`]
-            );
-            
-            // Enregistrer la notification dans la base de données pour l'expéditeur
-            await run(
-                `INSERT INTO notifications (user_id, title, message, type, is_read)
-                 VALUES (?, '✓ Transfert effectué', ?, 'transaction', 0)`,
-                [sender.id, `Vous avez envoyé ${amount.toLocaleString()} FCFA à ${receiver.fullname}. Frais: ${fee} FCFA`]
-            );
-            
-            await run('COMMIT');
-            
-            // ============================================
-            // NOTIFICATIONS EN TEMPS RÉEL VIA SOCKET.IO
-            // ============================================
-            
-            // Notification pour le destinataire
-            io.to(`user_${receiver.id}`).emit('transaction_received', {
-                reference: reference,
-                amount: amount,
-                sender_name: sender.fullname,
-                sender_phone: sender.phone,
-                timestamp: new Date().toISOString(),
-                type: 'received',
-                message: `Vous avez reçu ${amount.toLocaleString()} FCFA de ${sender.fullname}`
-            });
-            
-            // Notification pour l'expéditeur
-            io.to(`user_${sender.id}`).emit('transaction_sent', {
-                reference: reference,
-                amount: amount,
-                fee: fee,
-                total: totalAmount,
-                receiver_name: receiver.fullname,
-                receiver_phone: receiver.phone,
-                timestamp: new Date().toISOString(),
-                type: 'sent',
-                message: `Vous avez envoyé ${amount.toLocaleString()} FCFA à ${receiver.fullname}. Frais: ${fee} FCFA`
-            });
-            
-            // Notification push pour le destinataire (si configurée)
-            if (receiver.fcm_token) {
-                await sendPushNotification(receiver.fcm_token, {
-                    title: '💰 Argent reçu !',
-                    body: `${sender.fullname} vous a envoyé ${amount.toLocaleString()} FCFA`,
-                    data: { reference, amount, type: 'transfer_received' }
-                });
-            }
-            
-            // Notification SMS pour le destinataire (optionnel)
-            // await sendSMS(receiver.phone, `CashPays: Vous avez reçu ${amount.toLocaleString()} FCFA de ${sender.fullname}. Réf: ${reference}`);
-            
-            res.json({
-                success: true,
-                transaction: {
-                    reference,
-                    amount,
-                    fee,
-                    total: totalAmount,
-                    receiver: receiver.fullname,
-                    receiver_phone: receiver.phone,
-                    new_balance: senderWallet.balance - totalAmount
-                }
-            });
-            
-        } catch (err) {
-            await run('ROLLBACK');
-            throw err;
-        }
-        
-    } catch (error) {
-        console.error('Erreur transfert:', error);
-        res.status(500).json({ error: 'Erreur lors du transfert' });
-    }
+    await run(`
+      UPDATE users 
+      SET transaction_pin = ?, is_pin_set = 1, pin_attempts = 0, pin_blocked_until = NULL
+      WHERE id = ?
+    `, [hashedPin, req.user.userId]);
+    
+    res.json({ 
+      success: true, 
+      message: 'PIN de transaction défini avec succès' 
+    });
+    
+  } catch (error) {
+    console.error('Erreur définition PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la définition du PIN' });
+  }
 });
-// backend/server.js - Ajouter cet endpoint public
+
+// Vérifier le PIN de transaction
+app.post('/api/user/verify-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin, transactionId } = req.body;
+  
+  console.log('🔐 Vérification PIN pour user:', req.user.userId);
+  
+  if (!pin) {
+    return res.status(400).json({ error: 'Le PIN est requis' });
+  }
+  
+  if (!/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'Le PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get(`
+      SELECT id, transaction_pin, is_pin_set, pin_attempts, pin_blocked_until 
+      FROM users WHERE id = ?
+    `, [req.user.userId]);
+    
+    if (!user || !user.is_pin_set) {
+      return res.status(400).json({ error: 'Aucun PIN défini' });
+    }
+    
+    // Vérifier si le PIN est bloqué
+    if (user.pin_blocked_until && new Date(user.pin_blocked_until) > new Date()) {
+      const waitMinutes = Math.ceil((new Date(user.pin_blocked_until) - new Date()) / 60000);
+      return res.status(403).json({ 
+        error: `Trop de tentatives. Réessayez dans ${waitMinutes} minutes.` 
+      });
+    }
+    
+    const isValid = await bcrypt.compare(pin, user.transaction_pin);
+    
+    if (!isValid) {
+      const newAttempts = (user.pin_attempts || 0) + 1;
+      
+      if (newAttempts >= 5) {
+        // Bloquer le PIN pendant 30 minutes après 5 tentatives
+        const blockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+        await run(`
+          UPDATE users SET pin_attempts = ?, pin_blocked_until = ? WHERE id = ?
+        `, [newAttempts, blockedUntil.toISOString(), req.user.userId]);
+        
+        return res.status(403).json({ error: 'PIN incorrect. Compte bloqué 30 minutes.' });
+      } else {
+        await run('UPDATE users SET pin_attempts = ? WHERE id = ?', [newAttempts, req.user.userId]);
+        return res.status(401).json({ error: `PIN incorrect. ${5 - newAttempts} tentative(s) restante(s).` });
+      }
+    }
+    
+    // Réinitialiser les tentatives
+    await run('UPDATE users SET pin_attempts = 0, pin_blocked_until = NULL WHERE id = ?', [req.user.userId]);
+    
+    // Marquer la transaction comme validée (optionnel)
+    if (transactionId) {
+      await run('UPDATE transactions SET pin_verified = 1 WHERE id = ?', [transactionId]);
+    }
+    
+    res.json({ success: true, message: 'PIN valide' });
+    
+  } catch (error) {
+    console.error('Erreur vérification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la vérification' });
+  }
+});
+
+// Modifier le PIN (si connu)
+app.post('/api/user/change-transaction-pin', authenticateToken, async (req, res) => {
+  const { oldPin, newPin } = req.body;
+  
+  if (!oldPin || !newPin) {
+    return res.status(400).json({ error: 'Ancien et nouveau PIN requis' });
+  }
+  
+  if (!/^\d{4}$/.test(newPin)) {
+    return res.status(400).json({ error: 'Le nouveau PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get('SELECT transaction_pin, is_pin_set FROM users WHERE id = ?', [req.user.userId]);
+    
+    if (!user || !user.is_pin_set) {
+      return res.status(400).json({ error: 'Aucun PIN défini' });
+    }
+    
+    const isValid = await bcrypt.compare(oldPin, user.transaction_pin);
+    
+    if (!isValid) {
+      return res.status(401).json({ error: 'Ancien PIN incorrect' });
+    }
+    
+    const hashedNewPin = await bcrypt.hash(newPin, 10);
+    
+    await run('UPDATE users SET transaction_pin = ? WHERE id = ?', [hashedNewPin, req.user.userId]);
+    
+    res.json({ success: true, message: 'PIN modifié avec succès' });
+    
+  } catch (error) {
+    console.error('Erreur modification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la modification' });
+  }
+});
+
+// backend/server.js - Ajouter ces endpoints
+
+// ============================================
+// GESTION DU PIN UTILISATEUR
+// ============================================
+
+// Vérifier si l'utilisateur a un PIN
+app.get('/api/user/pin-status', authenticateToken, async (req, res) => {
+  try {
+    const user = await get('SELECT is_pin_set FROM users WHERE id = ?', [req.user.userId]);
+    res.json({ hasPin: user?.is_pin_set === 1 });
+  } catch (error) {
+    console.error('Erreur vérification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la vérification' });
+  }
+});
+
+// Définir le PIN (première fois ou réinitialisation par admin)
+app.post('/api/user/set-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin } = req.body;
+  
+  if (!pin || !/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'Le PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const hashedPin = await bcrypt.hash(pin, 10);
+    
+    await run(`
+      UPDATE users 
+      SET transaction_pin = ?, is_pin_set = 1, pin_attempts = 0, pin_blocked_until = NULL
+      WHERE id = ?
+    `, [hashedPin, req.user.userId]);
+    
+    // Créer une notification de confirmation
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type, category, created_at)
+      VALUES (?, '🔐 PIN sécurisé', 'Votre code PIN a été défini avec succès', 'success', 'security', CURRENT_TIMESTAMP)
+    `, [req.user.userId]);
+    
+    res.json({ success: true, message: 'PIN défini avec succès' });
+    
+  } catch (error) {
+    console.error('Erreur définition PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la définition du PIN' });
+  }
+});
+
+// Vérifier le PIN avant transaction
+app.post('/api/user/verify-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin } = req.body;
+  
+  if (!pin || !/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'PIN invalide' });
+  }
+  
+  try {
+    const user = await get(`
+      SELECT transaction_pin, is_pin_set, pin_attempts, pin_blocked_until 
+      FROM users WHERE id = ?
+    `, [req.user.userId]);
+    
+    if (!user?.is_pin_set) {
+      return res.status(400).json({ error: 'Aucun PIN défini' });
+    }
+    
+    // Vérifier le blocage
+    if (user.pin_blocked_until && new Date(user.pin_blocked_until) > new Date()) {
+      const waitMinutes = Math.ceil((new Date(user.pin_blocked_until) - new Date()) / 60000);
+      return res.status(403).json({ error: `PIN bloqué. Réessayez dans ${waitMinutes} min.` });
+    }
+    
+    const isValid = await bcrypt.compare(pin, user.transaction_pin);
+    
+    if (!isValid) {
+      const newAttempts = (user.pin_attempts || 0) + 1;
+      const remainingAttempts = 5 - newAttempts;
+      
+      if (newAttempts >= 5) {
+        const blockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+        await run(`
+          UPDATE users SET pin_attempts = ?, pin_blocked_until = ? WHERE id = ?
+        `, [newAttempts, blockedUntil.toISOString(), req.user.userId]);
+        
+        // Notification d'alerte
+        await run(`
+          INSERT INTO notifications (user_id, title, message, type, category, created_at)
+          VALUES (?, '⚠️ PIN bloqué', 'Trop de tentatives incorrectes. PIN bloqué 30 minutes.', 'alert', 'security', CURRENT_TIMESTAMP)
+        `, [req.user.userId]);
+        
+        return res.status(403).json({ error: 'PIN bloqué 30 minutes' });
+      } else {
+        await run('UPDATE users SET pin_attempts = ? WHERE id = ?', [newAttempts, req.user.userId]);
+        return res.status(401).json({ error: `PIN incorrect. ${remainingAttempts} tentative(s) restante(s).` });
+      }
+    }
+    
+    // Réinitialiser les tentatives
+    await run('UPDATE users SET pin_attempts = 0, pin_blocked_until = NULL WHERE id = ?', [req.user.userId]);
+    
+    res.json({ success: true, message: 'PIN valide' });
+    
+  } catch (error) {
+    console.error('Erreur vérification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la vérification' });
+  }
+});
+
+// Demander une réinitialisation de PIN (mot de passe oublié)
+app.post('/api/user/request-pin-reset', authenticateToken, async (req, res) => {
+  try {
+    const user = await get('SELECT phone, fullname FROM users WHERE id = ?', [req.user.userId]);
+    
+    // Créer une demande de réinitialisation
+    const token = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 heure
+    
+    await run(`
+      INSERT INTO pin_reset_requests (user_id, token, expires_at, created_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    `, [req.user.userId, token, expiresAt.toISOString()]);
+    
+    // Notification à l'admin
+    const admin = await get('SELECT id FROM users WHERE role = "admin" LIMIT 1');
+    if (admin) {
+      await run(`
+        INSERT INTO notifications (user_id, title, message, type, category, metadata, created_at)
+        VALUES (?, '🆘 Demande réinitialisation PIN', ?, 'alert', 'admin', ?, CURRENT_TIMESTAMP)
+      `, [admin.id, `${user.fullname} (${user.phone}) demande une réinitialisation de son code PIN.`, JSON.stringify({ userId: req.user.userId, token })]);
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Demande envoyée. Un administrateur vous contactera.' 
+    });
+    
+  } catch (error) {
+    console.error('Erreur demande réinitialisation:', error);
+    res.status(500).json({ error: 'Erreur lors de la demande' });
+  }
+});
+
+// Admin: Réinitialiser le PIN d'un utilisateur
+app.post('/api/admin/reset-user-pin/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    const user = await get('SELECT id, fullname, phone FROM users WHERE id = ?', [userId]);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    
+    // Réinitialiser le PIN
+    await run(`
+      UPDATE users 
+      SET transaction_pin = NULL, is_pin_set = 0, pin_attempts = 0, pin_blocked_until = NULL
+      WHERE id = ?
+    `, [userId]);
+    
+    // Notification à l'utilisateur
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type, category, created_at)
+      VALUES (?, '🔄 PIN réinitialisé', 'Votre code PIN a été réinitialisé par l\'administrateur. Veuillez en définir un nouveau.', 'info', 'security', CURRENT_TIMESTAMP)
+    `, [userId]);
+    
+    // Log admin
+    await run(`
+      INSERT INTO system_logs (user_id, action, details, created_at)
+      VALUES (?, 'PIN_RESET', ?, CURRENT_TIMESTAMP)
+    `, [req.user.userId, `Réinitialisation du PIN de l'utilisateur ${user.fullname} (${user.phone})`]);
+    
+    res.json({ 
+      success: true, 
+      message: `PIN de ${user.fullname} réinitialisé avec succès` 
+    });
+    
+  } catch (error) {
+    console.error('Erreur réinitialisation PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la réinitialisation' });
+  }
+});
+
+// Admin: Obtenir la liste des utilisateurs sans PIN
+app.get('/api/admin/users-without-pin', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const users = await query(`
+      SELECT id, fullname, phone, created_at
+      FROM users 
+      WHERE role = 'user' AND (is_pin_set = 0 OR is_pin_set IS NULL)
+      ORDER BY created_at DESC
+    `);
+    
+    res.json({ users: users || [] });
+  } catch (error) {
+    console.error('Erreur récupération utilisateurs:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération' });
+  }
+});
+// backend/server.js - Ajouter ces endpoints
+
+// ============================================
+// GESTION DU PIN UTILISATEUR
+// ============================================
+
+// Vérifier si l'utilisateur a un PIN
+app.get('/api/user/pin-status', authenticateToken, async (req, res) => {
+  try {
+    const user = await get('SELECT is_pin_set FROM users WHERE id = ?', [req.user.userId]);
+    res.json({ hasPin: user?.is_pin_set === 1 });
+  } catch (error) {
+    console.error('Erreur vérification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la vérification' });
+  }
+});
+
+// Définir le PIN (première transaction)
+app.post('/api/user/set-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin } = req.body;
+  
+  if (!pin || !/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'Le PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get('SELECT is_pin_set FROM users WHERE id = ?', [req.user.userId]);
+    
+    if (user?.is_pin_set) {
+      return res.status(400).json({ error: 'Un PIN est déjà défini' });
+    }
+    
+    const hashedPin = await bcrypt.hash(pin, 10);
+    
+    await run(`
+      UPDATE users 
+      SET transaction_pin = ?, is_pin_set = 1, pin_attempts = 0, pin_blocked_until = NULL
+      WHERE id = ?
+    `, [hashedPin, req.user.userId]);
+    
+    // Notification de confirmation
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type, category, created_at)
+      VALUES (?, '🔐 PIN sécurisé', 'Votre code PIN a été défini avec succès pour sécuriser vos transactions', 'success', 'security', CURRENT_TIMESTAMP)
+    `, [req.user.userId]);
+    
+    res.json({ success: true, message: 'PIN défini avec succès' });
+    
+  } catch (error) {
+    console.error('Erreur définition PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la définition du PIN' });
+  }
+});
+
+// Vérifier le PIN avant transaction
+app.post('/api/user/verify-transaction-pin', authenticateToken, async (req, res) => {
+  const { pin } = req.body;
+  
+  if (!pin || !/^\d{4}$/.test(pin)) {
+    return res.status(400).json({ error: 'PIN invalide' });
+  }
+  
+  try {
+    const user = await get(`
+      SELECT transaction_pin, is_pin_set, pin_attempts, pin_blocked_until 
+      FROM users WHERE id = ?
+    `, [req.user.userId]);
+    
+    if (!user?.is_pin_set) {
+      return res.status(400).json({ error: 'Aucun PIN défini' });
+    }
+    
+    // Vérifier le blocage
+    if (user.pin_blocked_until && new Date(user.pin_blocked_until) > new Date()) {
+      const waitMinutes = Math.ceil((new Date(user.pin_blocked_until) - new Date()) / 60000);
+      return res.status(403).json({ error: `PIN bloqué. Réessayez dans ${waitMinutes} min.` });
+    }
+    
+    const isValid = await bcrypt.compare(pin, user.transaction_pin);
+    
+    if (!isValid) {
+      const newAttempts = (user.pin_attempts || 0) + 1;
+      const remainingAttempts = 5 - newAttempts;
+      
+      if (newAttempts >= 5) {
+        const blockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+        await run(`
+          UPDATE users SET pin_attempts = ?, pin_blocked_until = ? WHERE id = ?
+        `, [newAttempts, blockedUntil.toISOString(), req.user.userId]);
+        
+        // Notification d'alerte
+        await run(`
+          INSERT INTO notifications (user_id, title, message, type, category, created_at)
+          VALUES (?, '⚠️ PIN bloqué', 'Trop de tentatives incorrectes. PIN bloqué 30 minutes.', 'alert', 'security', CURRENT_TIMESTAMP)
+        `, [req.user.userId]);
+        
+        return res.status(403).json({ error: 'PIN bloqué 30 minutes' });
+      } else {
+        await run('UPDATE users SET pin_attempts = ? WHERE id = ?', [newAttempts, req.user.userId]);
+        return res.status(401).json({ error: `PIN incorrect. ${remainingAttempts} tentative(s) restante(s).` });
+      }
+    }
+    
+    // Réinitialiser les tentatives
+    await run('UPDATE users SET pin_attempts = 0, pin_blocked_until = NULL WHERE id = ?', [req.user.userId]);
+    
+    res.json({ success: true, message: 'PIN valide' });
+    
+  } catch (error) {
+    console.error('Erreur vérification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la vérification' });
+  }
+});
+
+// Modifier le PIN (si connu)
+app.post('/api/user/change-transaction-pin', authenticateToken, async (req, res) => {
+  const { oldPin, newPin } = req.body;
+  
+  if (!oldPin || !newPin) {
+    return res.status(400).json({ error: 'Ancien et nouveau PIN requis' });
+  }
+  
+  if (!/^\d{4}$/.test(newPin)) {
+    return res.status(400).json({ error: 'Le nouveau PIN doit contenir 4 chiffres' });
+  }
+  
+  try {
+    const user = await get('SELECT transaction_pin, is_pin_set FROM users WHERE id = ?', [req.user.userId]);
+    
+    if (!user?.is_pin_set) {
+      return res.status(400).json({ error: 'Aucun PIN défini' });
+    }
+    
+    const isValid = await bcrypt.compare(oldPin, user.transaction_pin);
+    
+    if (!isValid) {
+      return res.status(401).json({ error: 'Ancien PIN incorrect' });
+    }
+    
+    const hashedNewPin = await bcrypt.hash(newPin, 10);
+    
+    await run('UPDATE users SET transaction_pin = ?, pin_attempts = 0 WHERE id = ?', [hashedNewPin, req.user.userId]);
+    
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type, category, created_at)
+      VALUES (?, '🔄 PIN modifié', 'Votre code PIN a été modifié avec succès', 'success', 'security', CURRENT_TIMESTAMP)
+    `, [req.user.userId]);
+    
+    res.json({ success: true, message: 'PIN modifié avec succès' });
+    
+  } catch (error) {
+    console.error('Erreur modification PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la modification' });
+  }
+});
+
+// Admin: Obtenir les demandes de réinitialisation de PIN
+app.get('/api/admin/pin-reset-requests', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const requests = await query(`
+      SELECT pr.*, u.fullname, u.phone, u.email
+      FROM pin_reset_requests pr
+      JOIN users u ON pr.user_id = u.id
+      WHERE pr.expires_at > CURRENT_TIMESTAMP AND pr.status = 'pending'
+      ORDER BY pr.created_at DESC
+    `);
+    
+    res.json({ requests: requests || [] });
+  } catch (error) {
+    console.error('Erreur récupération demandes:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération' });
+  }
+});
+
+// Admin: Marquer une demande comme traitée
+app.put('/api/admin/pin-reset-requests/:id/process', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    await run('UPDATE pin_reset_requests SET status = "processed", processed_at = CURRENT_TIMESTAMP WHERE id = ?', [id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erreur traitement demande:', error);
+    res.status(500).json({ error: 'Erreur lors du traitement' });
+  }
+});
 
 // Récupérer la liste des agents actifs (public)
 app.get('/api/agents', authenticateToken, async (req, res) => {
@@ -774,30 +1296,57 @@ app.get('/api/agents', authenticateToken, async (req, res) => {
   }
 })
 // backend/server.js - Endpoints notifications améliorés
-
-// Récupérer toutes les notifications
+// backend/server.js - Corriger l'endpoint des notifications
 app.get('/api/notifications', authenticateToken, async (req, res) => {
+  const { limit = 100, offset = 0, category = 'all' } = req.query;
+  
   try {
-    const notifications = await query(`
-      SELECT id, title, message, type, is_read, created_at, data
+    // Supprimer la colonne 'data' qui n'existe pas
+    let sql = `
+      SELECT id, title, message, type, category, is_read, metadata, link, created_at, read_at
       FROM notifications 
-      WHERE user_id = ? 
-      ORDER BY created_at DESC 
-      LIMIT 100
-    `, [req.user.userId])
+      WHERE user_id = ? OR user_id IS NULL
+    `;
+    const params = [req.user.userId];
     
-    // Parser les données JSON
-    const parsed = notifications.map(n => ({
-      ...n,
-      data: n.data ? JSON.parse(n.data) : null
-    }))
+    if (category !== 'all') {
+      sql += ' AND category = ?';
+      params.push(category);
+    }
     
-    res.json(parsed || [])
+    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const notifications = await query(sql, params);
+    
+    // Compter le nombre total
+    let countSql = `
+      SELECT COUNT(*) as total FROM notifications 
+      WHERE user_id = ? OR user_id IS NULL
+    `;
+    if (category !== 'all') {
+      countSql += ' AND category = ?';
+    }
+    
+    const total = await get(countSql, params.slice(0, category !== 'all' ? 2 : 1));
+    
+    // Compter les non lues
+    const unreadResult = await get(`
+      SELECT COUNT(*) as count FROM notifications 
+      WHERE (user_id = ? OR user_id IS NULL) AND is_read = 0
+    `, [req.user.userId]);
+    
+    res.json({
+      notifications: notifications || [],
+      total: total?.total || 0,
+      unread_count: unreadResult?.count || 0
+    });
+    
   } catch (error) {
-    console.error('Erreur récupération notifications:', error)
-    res.json([])
+    console.error('Erreur récupération notifications:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des notifications' });
   }
-})
+});
 
 // Marquer une notification comme lue
 app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
@@ -1037,10 +1586,209 @@ app.post('/api/deposit', authenticateToken, async (req, res) => {
   }
 })
 // backend/server.js - Ajouter/modifier ces endpoints
+// backend/server.js - Endpoint public pour les agents
+app.get('/api/agents', async (req, res) => {
+  const { city, search, limit = 50, offset = 0 } = req.query;
+  
+  console.log('📋 Requête agents reçue:', { city, search, limit, offset });
+  
+  try {
+    let sql = `
+      SELECT 
+        u.id, 
+        u.fullname, 
+        u.phone, 
+        u.province, 
+        u.city,
+        a.id as agent_id,
+        a.agency_name, 
+        a.agency_address, 
+        a.agency_phone, 
+        a.agency_type,
+        a.is_active
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+    `;
+    const params = [];
+    
+    if (city && city !== 'all') {
+      sql += ' AND (u.city = ? OR u.province = ?)';
+      params.push(city, city);
+    }
+    
+    if (search) {
+      sql += ' AND (u.fullname LIKE ? OR u.phone LIKE ? OR a.agency_name LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    
+    sql += ' ORDER BY a.agency_type DESC, u.fullname ASC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const agents = await query(sql, params);
+    
+    // Compter le total
+    let countSql = `
+      SELECT COUNT(*) as total 
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+    `;
+    const countParams = [];
+    
+    if (city && city !== 'all') {
+      countSql += ' AND (u.city = ? OR u.province = ?)';
+      countParams.push(city, city);
+    }
+    
+    if (search) {
+      countSql += ' AND (u.fullname LIKE ? OR u.phone LIKE ? OR a.agency_name LIKE ?)';
+      countParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    
+    const total = await get(countSql, countParams);
+    
+    // Récupérer les villes disponibles
+    const citiesResult = await query(`
+      SELECT DISTINCT u.city, u.province 
+      FROM users u
+      INNER JOIN agents a ON u.id = a.user_id
+      WHERE u.role = 'agent' 
+        AND u.is_active = 1 
+        AND a.is_active = 1
+        AND (u.city IS NOT NULL OR u.province IS NOT NULL)
+    `);
+    
+    const cities = [...new Set(
+      citiesResult.map(c => c.city || c.province).filter(Boolean)
+    )];
+    
+    console.log(`✅ ${agents.length} agents trouvés dans la base`);
+    
+    res.json({
+      agents: agents || [],
+      total: total?.total || 0,
+      cities: cities || [],
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+    
+  } catch (error) {
+    console.error('❌ Erreur récupération agents:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des agents' });
+  }
+});
+
+
 
 // ============================================
 // ENDPOINTS NOTIFICATIONS AMÉLIORÉS
 // ============================================
+
+// backend/server.js - Ajouter cet endpoint
+
+// Approuver ou rejeter une candidature (admin uniquement)
+app.post('/api/admin/agent-applications/:id/review', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { action, rejection_reason } = req.body;
+  
+  console.log('📋 Traitement candidature:', { id, action, rejection_reason });
+  
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ error: 'Action invalide' });
+  }
+  
+  try {
+    const application = await get('SELECT * FROM agent_applications WHERE id = ?', [id]);
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Candidature non trouvée' });
+    }
+    
+    if (application.status !== 'pending') {
+      return res.status(400).json({ error: 'Cette candidature a déjà été traitée' });
+    }
+    
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    
+    await run(`
+      UPDATE agent_applications 
+      SET status = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, rejection_reason = ?
+      WHERE id = ?
+    `, [newStatus, req.user.userId, rejection_reason || null, id]);
+    
+    // Si approuvé, créer le compte agent
+    if (action === 'approve') {
+      const tempPassword = Math.random().toString(36).slice(-8);
+      const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+      const hashedKey = await bcrypt.hash(privateKey, 10);
+      
+      // Créer l'utilisateur agent
+      const userResult = await run(`
+        INSERT INTO users (phone, fullname, password_hash, private_key_6, province, city, email, role, is_active, is_verified, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'agent', 1, 1, CURRENT_TIMESTAMP)
+      `, [
+        application.phone, 
+        application.fullname, 
+        hashedPassword, 
+        hashedKey, 
+        application.province || 'N\'Djaména', 
+        application.city || null, 
+        application.email || null
+      ]);
+      
+      // Créer l'agence
+      const agencyNumber = 'AG' + Date.now().toString().slice(-6);
+      await run(`
+        INSERT INTO agents (user_id, agency_number, agency_name, agency_address, agency_phone, agency_type, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, 'secondaire', ?, CURRENT_TIMESTAMP)
+      `, [
+        userResult.lastID, 
+        agencyNumber, 
+        application.agency_name, 
+        application.agency_address, 
+        application.phone, 
+        req.user.userId
+      ]);
+      
+      // Notification au nouvel agent
+      await run(`
+        INSERT INTO notifications (user_id, title, message, type, created_at)
+        VALUES (?, '✅ Bienvenue dans le réseau CashPays', ?, 'success', CURRENT_TIMESTAMP)
+      `, [userResult.lastID, `Félicitations ! Votre agence "${application.agency_name}" est maintenant active.`]);
+    }
+    
+    // Notification à l'utilisateur
+    const title = action === 'approve' ? '✅ Candidature acceptée' : '❌ Candidature rejetée';
+    const message = action === 'approve' 
+      ? 'Félicitations ! Votre candidature pour devenir agent CashPays a été acceptée.'
+      : `Votre candidature a été rejetée. Raison: ${rejection_reason || 'Non conforme'}`;
+    
+    // Envoyer la notification (si l'utilisateur a un compte)
+    const user = await get('SELECT id FROM users WHERE phone = ?', [application.phone]);
+    if (user) {
+      await run(`
+        INSERT INTO notifications (user_id, title, message, type, created_at)
+        VALUES (?, ?, ?, 'alert', CURRENT_TIMESTAMP)
+      `, [user.id, title, message]);
+    }
+    
+    res.json({
+      success: true,
+      message: `Candidature ${action === 'approve' ? 'approuvée' : 'rejetée'} avec succès`
+    });
+    
+  } catch (error) {
+    console.error('❌ Erreur traitement candidature:', error);
+    res.status(500).json({ error: 'Erreur lors du traitement' });
+  }
+});
+
 
 // Envoyer une notification pour toute transaction
 async function sendTransactionNotification(userId, type, data) {
@@ -1131,6 +1879,49 @@ app.put('/api/notifications/read-all', authenticateToken, async (req, res) => {
 // ENDPOINTS AGENTS DYNAMIQUES
 // ============================================
 
+
+// src/pages/Agents.jsx - Modifier fetchAgents
+
+const fetchAgents = async () => {
+  setLoading(true)
+  try {
+    const params = {
+      limit: agentsPerPage,
+      offset: (currentPage - 1) * agentsPerPage
+    }
+    
+    if (selectedCity !== 'all') {
+      params.city = selectedCity
+    }
+    
+    if (searchTerm) {
+      params.search = searchTerm
+    }
+    
+    // Ne pas envoyer de token pour cette requête publique
+    const response = await axios.get('/api/agents', { params })
+    
+    if (response.data && response.data.agents) {
+      setAgents(response.data.agents)
+      setTotalPages(Math.ceil(response.data.total / agentsPerPage))
+      setTotalAgents(response.data.total)
+      setCities(response.data.cities || [])
+    } else {
+      setAgents([])
+      setCities([])
+    }
+  } catch (error) {
+    console.error('Erreur chargement agents:', error)
+    setAgents([])
+    setCities([])
+    // Ne pas afficher d'erreur pour les utilisateurs non connectés
+    if (error.response?.status !== 401) {
+      toast.error('Erreur lors du chargement des agents')
+    }
+  } finally {
+    setLoading(false)
+  }
+}
 // Récupérer tous les agents actifs
 app.get('/api/agents', async (req, res) => {
   const { city, search, limit = 50, offset = 0 } = req.query;
@@ -3697,5 +4488,752 @@ async function startServer() {
 }
 
 startServer();
+// backend/server.js - Ajouter ces endpoints
+
+// ============================================
+// ENDPOINTS PARRAINAGE (REFERRAL)
+// ============================================
+
+// Vérifier si un code de parrainage est valide
+app.get('/api/referral/check/:code', async (req, res) => {
+  const { code } = req.params;
+  
+  try {
+    // Vérifier si le code de parrainage existe
+    const user = await get(`
+      SELECT id, fullname, phone FROM users 
+      WHERE referral_code = ? AND is_active = 1
+    `, [code]);
+    
+    if (user) {
+      res.json({
+        valid: true,
+        message: `Code parrainage de ${user.fullname}`,
+        referrer_id: user.id,
+        referrer_name: user.fullname,
+        bonus: 500
+      });
+    } else {
+      res.json({
+        valid: false,
+        message: 'Code de parrainage invalide'
+      });
+    }
+  } catch (error) {
+    console.error('Erreur vérification code:', error);
+    res.json({ valid: false, message: 'Erreur lors de la vérification' });
+  }
+});
+
+// Obtenir les statistiques de parrainage de l'utilisateur
+app.get('/api/referral/stats', authenticateToken, async (req, res) => {
+  try {
+    // Récupérer le code de parrainage de l'utilisateur
+    const user = await get(`
+      SELECT referral_code, fullname, phone FROM users WHERE id = ?
+    `, [req.user.userId]);
+    
+    const referralCode = user?.referral_code || generateReferralCode(user?.phone);
+    
+    // Récupérer les statistiques de parrainage
+    const stats = await get(`
+      SELECT 
+        COUNT(*) as total_referrals,
+        SUM(CASE WHEN status = 'completed' THEN bonus_amount ELSE 0 END) as total_bonus,
+        SUM(CASE WHEN status = 'pending' THEN bonus_amount ELSE 0 END) as pending_bonus
+      FROM referrals
+      WHERE referrer_id = ? AND status != 'cancelled'
+    `, [req.user.userId]);
+    
+    // Récupérer la liste des parrainages
+    const referrals = await query(`
+      SELECT 
+        r.*,
+        u.fullname as referred_name,
+        u.phone as referred_phone,
+        u.created_at as referred_date
+      FROM referrals r
+      JOIN users u ON r.referred_id = u.id
+      WHERE r.referrer_id = ?
+      ORDER BY r.created_at DESC
+      LIMIT 20
+    `, [req.user.userId]);
+    
+    res.json({
+      referral_code: referralCode,
+      totalReferrals: stats?.total_referrals || 0,
+      totalBonus: stats?.total_bonus || 0,
+      pendingBonus: stats?.pending_bonus || 0,
+      referrals: referrals || []
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération stats parrainage:', error);
+    res.json({
+      totalReferrals: 0,
+      totalBonus: 0,
+      pendingBonus: 0,
+      referrals: []
+    });
+  }
+});
+
+// Générer un code de parrainage unique
+function generateReferralCode(phone) {
+  if (!phone) return 'CASH' + Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `CASH${phone.slice(-6)}`;
+}
+
+// Ajouter la colonne referral_code à la table users si elle n'existe pas
+const addReferralColumn = async () => {
+  try {
+    await run(`ALTER TABLE users ADD COLUMN referral_code TEXT UNIQUE`);
+  } catch (e) {
+    // La colonne existe déjà
+  }
+};
+addReferralColumn();
+
+// Créer la table des parrainages
+const createReferralsTable = async () => {
+  await run(`
+    CREATE TABLE IF NOT EXISTS referrals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      referrer_id INTEGER NOT NULL,
+      referred_id INTEGER NOT NULL,
+      referral_code TEXT NOT NULL,
+      bonus_amount INTEGER DEFAULT 500,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'cancelled')),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
+      FOREIGN KEY (referrer_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (referred_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(referred_id)
+    )
+  `);
+};
+createReferralsTable();
+
+// src/pages/Profile.jsx - Remplacer la fonction copyReferralLink
+
+// Fonction de copie sécurisée avec fallback
+const safeCopyToClipboard = (text, label) => {
+  if (!text) {
+    toast.error('Aucune information à copier')
+    return false
+  }
+  
+  // Méthode 1: Clipboard API moderne
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        toast.success(`${label} copié !`)
+      })
+      .catch((err) => {
+        console.warn('Erreur clipboard API:', err)
+        fallbackCopy(text, label)
+      })
+  } else {
+    // Méthode 2: Fallback traditionnelle
+    fallbackCopy(text, label)
+  }
+}
+
+// Fallback pour navigateurs anciens ou HTTP
+const fallbackCopy = (text, label) => {
+  const textArea = document.createElement('textarea')
+  textArea.value = text
+  textArea.style.position = 'fixed'
+  textArea.style.top = '-9999px'
+  textArea.style.left = '-9999px'
+  textArea.style.opacity = '0'
+  document.body.appendChild(textArea)
+  
+  textArea.select()
+  textArea.setSelectionRange(0, text.length)
+  
+  try {
+    const successful = document.execCommand('copy')
+    if (successful) {
+      toast.success(`${label} copié !`)
+    } else {
+      toast.error(`Impossible de copier ${label}`)
+    }
+  } catch (err) {
+    console.error('Erreur copie:', err)
+    toast.error(`Impossible de copier ${label}`)
+  }
+  
+  document.body.removeChild(textArea)
+}
+
+// Fonction copyReferralLink corrigée
+const copyReferralLink = () => {
+  if (!referralLink) {
+    toast.error('Lien de parrainage non disponible')
+    return
+  }
+  safeCopyToClipboard(referralLink, 'Lien de parrainage')
+  setReferralCopied(true)
+  setTimeout(() => setReferralCopied(false), 3000)
+}
+
+// Fonction copyReferralCode (si vous voulez copier le code)
+const copyReferralCodeOnly = () => {
+  if (!referralCode) {
+    toast.error('Code de parrainage non disponible')
+    return
+  }
+  safeCopyToClipboard(referralCode, 'Code de parrainage')
+}
+
+// backend/server.js - Ajouter ces endpoints
+
+// ============================================
+// ENDPOINTS POUR LE PARRAINAGE
+// ============================================
+
+// Vérifier si un code de parrainage est valide
+app.get('/api/referral/check/:code', async (req, res) => {
+  const { code } = req.params;
+  
+  try {
+    // Vérifier si le code existe dans la base de données
+    const user = await get(`
+      SELECT id, fullname, phone FROM users 
+      WHERE referral_code = ? AND is_active = 1
+    `, [code]);
+    
+    if (user) {
+      res.json({
+        valid: true,
+        message: `Code valide - Parrainé par ${user.fullname}`,
+        referrer_id: user.id,
+        referrer_name: user.fullname
+      });
+    } else {
+      res.json({
+        valid: false,
+        message: 'Code de parrainage invalide ou expiré'
+      });
+    }
+  } catch (error) {
+    console.error('Erreur vérification code:', error);
+    res.status(500).json({ 
+      valid: false, 
+      message: 'Erreur lors de la vérification' 
+    });
+  }
+});
+
+// Obtenir les statistiques de parrainage de l'utilisateur
+app.get('/api/referral/stats', authenticateToken, async (req, res) => {
+  try {
+    // Récupérer le code de parrainage de l'utilisateur
+    const user = await get(`
+      SELECT referral_code FROM users WHERE id = ?
+    `, [req.user.userId]);
+    
+    // Compter les filleuls
+    const referrals = await query(`
+      SELECT u.id, u.fullname, u.phone, u.created_at,
+             CASE 
+               WHEN u.created_at >= datetime('now', '-7 days') THEN 'pending'
+               ELSE 'validated'
+             END as status
+      FROM users u
+      WHERE u.referred_by = ?
+      ORDER BY u.created_at DESC
+    `, [req.user.userId]);
+    
+    const totalReferrals = referrals.length;
+    const pendingBonus = referrals.filter(r => r.status === 'pending').length * 500;
+    const totalBonus = referrals.filter(r => r.status === 'validated').length * 500;
+    
+    res.json({
+      totalReferrals,
+      totalBonus,
+      pendingBonus,
+      referrals
+    });
+  } catch (error) {
+    console.error('Erreur stats parrainage:', error);
+    res.json({
+      totalReferrals: 0,
+      totalBonus: 0,
+      pendingBonus: 0,
+      referrals: []
+    });
+  }
+});
+// ============================================
+// AUTHENTIFICATION À DEUX FACTEURS (2FA)
+// ============================================
+
+// Générer un secret 2FA pour l'utilisateur
+app.post('/api/user/2fa/setup', authenticateToken, async (req, res) => {
+  const { method } = req.body;
+  
+  try {
+    // Générer un secret pour l'authentification
+    const secret = generate2FASecret();
+    const userId = req.user.userId;
+    
+    // Stocker temporairement le secret
+    await run(
+      `UPDATE users SET two_factor_secret = ?, two_factor_method = ?, two_factor_pending = 1 
+       WHERE id = ?`,
+      [secret, method || 'authenticator', userId]
+    );
+    
+    // Générer le QR code URL pour Google Authenticator
+    const appName = 'CashPays';
+    const accountName = req.user.phone;
+    const qrCodeUrl = `otpauth://totp/${appName}:${accountName}?secret=${secret}&issuer=${appName}`;
+    
+    res.json({
+      secret,
+      qrCodeUrl,
+      backupCodes: generateBackupCodes()
+    });
+    
+  } catch (error) {
+    console.error('Erreur setup 2FA:', error);
+    res.status(500).json({ error: 'Erreur lors de l\'initialisation' });
+  }
+});
+
+// Vérifier et activer la 2FA
+app.post('/api/user/2fa/verify', authenticateToken, async (req, res) => {
+  const { code, method, phoneNumber, email } = req.body;
+  
+  try {
+    const user = await get(
+      `SELECT two_factor_secret FROM users WHERE id = ? AND two_factor_pending = 1`,
+      [req.user.userId]
+    );
+    
+    if (!user) {
+      return res.status(400).json({ error: 'Aucune configuration 2FA en cours' });
+    }
+    
+    // Vérifier le code TOTP
+    const isValid = verifyTOTPCode(user.two_factor_secret, code);
+    
+    if (!isValid) {
+      return res.status(400).json({ error: 'Code invalide' });
+    }
+    
+    // Activer la 2FA
+    await run(
+      `UPDATE users SET 
+        two_factor_enabled = 1, 
+        two_factor_method = ?, 
+        two_factor_phone = ?, 
+        two_factor_email = ?,
+        two_factor_pending = 0
+       WHERE id = ?`,
+      [method, phoneNumber || null, email || null, req.user.userId]
+    );
+    
+    // Générer et stocker les codes de secours
+    const backupCodes = generateBackupCodes();
+    await run(
+      `UPDATE users SET two_factor_backup_codes = ? WHERE id = ?`,
+      [JSON.stringify(backupCodes), req.user.userId]
+    );
+    
+    res.json({
+      success: true,
+      backupCodes
+    });
+    
+  } catch (error) {
+    console.error('Erreur vérification 2FA:', error);
+    res.status(500).json({ error: 'Erreur lors de la vérification' });
+  }
+});
+
+// Obtenir le statut 2FA de l'utilisateur
+app.get('/api/user/2fa/status', authenticateToken, async (req, res) => {
+  try {
+    const user = await get(
+      `SELECT two_factor_enabled, two_factor_method, two_factor_phone, two_factor_email, 
+              two_factor_backup_codes, created_at as enabledAt 
+       FROM users WHERE id = ?`,
+      [req.user.userId]
+    );
+    
+    res.json({
+      enabled: user?.two_factor_enabled === 1,
+      method: user?.two_factor_method || null,
+      phone: user?.two_factor_phone,
+      email: user?.two_factor_email,
+      enabledAt: user?.enabledAt,
+      hasBackupCodes: !!user?.two_factor_backup_codes
+    });
+    
+  } catch (error) {
+    console.error('Erreur statut 2FA:', error);
+    res.json({ enabled: false });
+  }
+});
+
+// Désactiver la 2FA
+app.post('/api/user/2fa/disable', authenticateToken, async (req, res) => {
+  const { password } = req.body;
+  
+  try {
+    // Vérifier le mot de passe
+    const user = await get('SELECT password_hash FROM users WHERE id = ?', [req.user.userId]);
+    const isValid = await bcrypt.compare(password, user.password_hash);
+    
+    if (!isValid) {
+      return res.status(401).json({ error: 'Mot de passe incorrect' });
+    }
+    
+    await run(
+      `UPDATE users SET 
+        two_factor_enabled = 0, 
+        two_factor_secret = NULL, 
+        two_factor_method = NULL, 
+        two_factor_phone = NULL, 
+        two_factor_email = NULL,
+        two_factor_backup_codes = NULL,
+        two_factor_pending = 0
+       WHERE id = ?`,
+      [req.user.userId]
+    );
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Erreur désactivation 2FA:', error);
+    res.status(500).json({ error: 'Erreur lors de la désactivation' });
+  }
+});
+
+// Obtenir les appareils de confiance
+app.get('/api/user/2fa/devices', authenticateToken, async (req, res) => {
+  try {
+    const devices = await query(
+      `SELECT id, device_name, device_type, last_used, created_at 
+       FROM trusted_devices 
+       WHERE user_id = ? 
+       ORDER BY last_used DESC`,
+      [req.user.userId]
+    );
+    
+    res.json(devices || []);
+  } catch (error) {
+    console.error('Erreur récupération appareils:', error);
+    res.json([]);
+  }
+});
+
+// Révoquer un appareil de confiance
+app.delete('/api/user/2fa/device/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    await run(
+      `DELETE FROM trusted_devices WHERE id = ? AND user_id = ?`,
+      [id, req.user.userId]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erreur révocation appareil:', error);
+    res.status(500).json({ error: 'Erreur lors de la révocation' });
+  }
+});
+
+// Générer de nouveaux codes de secours
+app.post('/api/user/2fa/backup-codes', authenticateToken, async (req, res) => {
+  try {
+    const backupCodes = generateBackupCodes();
+    await run(
+      `UPDATE users SET two_factor_backup_codes = ? WHERE id = ?`,
+      [JSON.stringify(backupCodes), req.user.userId]
+    );
+    
+    res.json({ backupCodes });
+  } catch (error) {
+    console.error('Erreur génération codes:', error);
+    res.status(500).json({ error: 'Erreur lors de la génération' });
+  }
+});
+
+// ============================================
+// FONCTIONS UTILITAIRES 2FA
+// ============================================
+
+// Générer un secret pour TOTP
+function generate2FASecret() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let secret = '';
+  for (let i = 0; i < 16; i++) {
+    secret += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return secret;
+}
+
+// Vérifier un code TOTP (simplifié, à remplacer par une vraie bibliothèque)
+function verifyTOTPCode(secret, code) {
+  // Dans une vraie implémentation, utilisez `speakeasy` ou `otplib`
+  // Pour l'instant, acceptons les codes 123456 en développement
+  // À remplacer par une vraie validation TOTP
+  if (process.env.NODE_ENV === 'development') {
+    return code === '123456' || code.length === 6;
+  }
+  return code.length === 6;
+}
+
+// Générer des codes de secours
+function generateBackupCodes() {
+  const codes = [];
+  for (let i = 0; i < 10; i++) {
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+    codes.push(code);
+  }
+  return codes;
+}
+
+// backend/server.js - Ajouter cet endpoint exactement
+
+// Récupérer une notification spécifique par son ID
+app.get('/api/notifications/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  
+  console.log('🔔 Récupération notification ID:', id, 'User:', req.user.userId);
+  
+  try {
+    // Vérifier que l'ID est un nombre
+    const notificationId = parseInt(id);
+    if (isNaN(notificationId)) {
+      return res.status(400).json({ error: 'ID de notification invalide' });
+    }
+    
+    const notification = await get(`
+      SELECT n.*, 
+             CASE WHEN n.is_read = 0 THEN 'unread' ELSE 'read' END as read_status,
+             u.fullname as user_name
+      FROM notifications n
+      LEFT JOIN users u ON n.user_id = u.id
+      WHERE n.id = ? AND (n.user_id = ? OR n.user_id IS NULL)
+    `, [notificationId, req.user.userId]);
+    
+    if (!notification) {
+      return res.status(404).json({ error: 'Notification non trouvée' });
+    }
+    
+    // Parser le metadata si présent
+    if (notification.metadata) {
+      try {
+        notification.metadata = JSON.parse(notification.metadata);
+      } catch (e) {
+        notification.metadata = null;
+      }
+    }
+    
+    res.json(notification);
+  } catch (error) {
+    console.error('Erreur récupération notification:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération' });
+  }
+});
+
+// Marquer une notification comme lue
+app.put('/api/notifications/:id/read', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const notificationId = parseInt(id);
+    if (isNaN(notificationId)) {
+      return res.status(400).json({ error: 'ID de notification invalide' });
+    }
+    
+    await run(`
+      UPDATE notifications 
+      SET is_read = 1, read_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND (user_id = ? OR user_id IS NULL)
+    `, [notificationId, req.user.userId]);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erreur marquage notification:', error);
+    res.status(500).json({ error: 'Erreur lors du marquage' });
+  }
+});
+
+// Supprimer une notification
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const notificationId = parseInt(id);
+    if (isNaN(notificationId)) {
+      return res.status(400).json({ error: 'ID de notification invalide' });
+    }
+    
+    const result = await run(`
+      DELETE FROM notifications 
+      WHERE id = ? AND (user_id = ? OR user_id IS NULL)
+    `, [notificationId, req.user.userId]);
+    
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Notification non trouvée' });
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erreur suppression notification:', error);
+    res.status(500).json({ error: 'Erreur lors de la suppression' });
+  }
+});
+// backend/server.js - Endpoint pour réinitialiser le PIN d'un utilisateur
+
+// Réinitialiser le PIN (clé privée) d'un utilisateur
+app.post('/api/admin/reset-user-pin/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    // Vérifier que l'utilisateur existe
+    const user = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [userId]);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    
+    // Générer une nouvelle clé privée à 6 chiffres
+    const newPrivateKey = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedKey = await bcrypt.hash(newPrivateKey, 10);
+    
+    // Mettre à jour la clé privée
+    await run('UPDATE users SET private_key_6 = ? WHERE id = ?', [hashedKey, userId]);
+    
+    // Enregistrer dans les logs
+    await run(`
+      INSERT INTO system_logs (user_id, action, details, created_at)
+      VALUES (?, 'PIN_RESET', ?, CURRENT_TIMESTAMP)
+    `, [req.user.userId, `Réinitialisation du PIN pour l'utilisateur ${user.phone}`]);
+    
+    // Créer une notification pour l'utilisateur
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type, created_at)
+      VALUES (?, '🔑 PIN réinitialisé', ?, 'alert', CURRENT_TIMESTAMP)
+    `, [userId, `Votre code PIN a été réinitialisé par l'administrateur. Nouveau code: ${newPrivateKey}`]);
+    
+    res.json({
+      success: true,
+      message: 'PIN réinitialisé avec succès',
+      new_pin: newPrivateKey,
+      user: {
+        id: user.id,
+        phone: user.phone,
+        fullname: user.fullname
+      }
+    });
+    
+  } catch (error) {
+    console.error('Erreur réinitialisation PIN:', error);
+    res.status(500).json({ error: 'Erreur lors de la réinitialisation du PIN' });
+  }
+});
+// backend/server.js - Ajouter cet endpoint
+
+// Demande de réinitialisation de mot de passe
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { phone } = req.body;
+  
+  if (!phone || !/^\d{8}$/.test(phone)) {
+    return res.status(400).json({ error: 'Numéro de téléphone invalide' });
+  }
+  
+  try {
+    // Vérifier si l'utilisateur existe
+    const user = await get('SELECT id, phone, fullname, email FROM users WHERE phone = ?', [phone]);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Aucun compte trouvé avec ce numéro' });
+    }
+    
+    // Récupérer l'admin principal
+    const admin = await get('SELECT id FROM users WHERE role = "admin" AND phone = "62787307"');
+    
+    if (admin) {
+      // Créer une notification pour l'admin
+      await run(`
+        INSERT INTO notifications (user_id, title, message, type, metadata, created_at)
+        VALUES (?, '🔑 Demande de réinitialisation', ?, 'alert', ?, CURRENT_TIMESTAMP)
+      `, [
+        admin.id,
+        `L'utilisateur ${user.fullname} (${user.phone}) a demandé la réinitialisation de son mot de passe.`,
+        JSON.stringify({ userId: user.id, phone: user.phone, type: 'password_reset' })
+      ]);
+      
+      // Optionnel: Envoyer une notification socket à l'admin
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`user_${admin.id}`).emit('notification', {
+          title: '🔑 Demande de réinitialisation',
+          message: `L'utilisateur ${user.fullname} demande la réinitialisation de son mot de passe.`,
+          type: 'alert',
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+    
+    // Enregistrer la demande dans les logs
+    await run(`
+      INSERT INTO system_logs (user_id, action, details, created_at)
+      VALUES (?, 'PASSWORD_RESET_REQUEST', ?, CURRENT_TIMESTAMP)
+    `, [user.id, `Demande de réinitialisation de mot de passe pour ${phone}`]);
+    
+    res.json({ 
+      success: true, 
+      message: 'Votre demande a été envoyée à l\'administrateur. Vous serez contacté sous 24h.' 
+    });
+    
+  } catch (error) {
+    console.error('Erreur demande réinitialisation:', error);
+    res.status(500).json({ error: 'Erreur lors de l\'envoi de la demande' });
+  }
+});
+
+// Admin: Réinitialiser le mot de passe d'un utilisateur
+app.post('/api/admin/reset-password/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { newPassword } = req.body;
+  
+  if (!newPassword || newPassword.length < 4) {
+    return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 4 caractères' });
+  }
+  
+  try {
+    const user = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [userId]);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await run('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, userId]);
+    
+    // Créer une notification pour l'utilisateur
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type, created_at)
+      VALUES (?, '🔐 Mot de passe réinitialisé', ?, 'alert', CURRENT_TIMESTAMP)
+    `, [userId, `Votre mot de passe a été réinitialisé par l'administrateur.`]);
+    
+    res.json({ 
+      success: true, 
+      message: 'Mot de passe réinitialisé avec succès' 
+    });
+    
+  } catch (error) {
+    console.error('Erreur réinitialisation mot de passe:', error);
+    res.status(500).json({ error: 'Erreur lors de la réinitialisation' });
+  }
+});
 
 module.exports = { app, io };

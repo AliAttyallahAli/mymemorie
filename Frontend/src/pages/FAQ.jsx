@@ -82,7 +82,7 @@ function FAQ({ user }) {
       questions: [
         {
           q: 'Comment contacter le service client ?',
-          a: 'Vous pouvez nous joindre par téléphone au 62 78 73 07, par email à support@cashpays.td, ou via WhatsApp au même numéro.'
+          a: 'Vous pouvez nous joindre par téléphone au 62 78 73 07, par email à supportcashpays@gmail.com, ou via WhatsApp au même numéro.'
         },
         {
           q: 'Quels sont les horaires du support ?',

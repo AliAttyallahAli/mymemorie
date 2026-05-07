@@ -7,7 +7,6 @@ PRAGMA foreign_keys = ON;
 -- ============================================
 -- TABLE DES UTILISATEURS
 -- ============================================
-
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     phone TEXT(8) UNIQUE NOT NULL,
@@ -23,12 +22,26 @@ CREATE TABLE IF NOT EXISTS users (
     is_active INTEGER DEFAULT 1,
     is_verified INTEGER DEFAULT 0,
     preferences TEXT DEFAULT '{}',
+    
+    -- Code de parrainage
+    referral_code TEXT UNIQUE,
+    referred_by INTEGER,
+    
+    -- Transaction PIN
+    transaction_pin TEXT,
+    is_pin_set INTEGER DEFAULT 0,
+    pin_attempts INTEGER DEFAULT 0,
+    pin_blocked_until DATETIME,
+    
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (referred_by) REFERENCES users(id)
 );
 
+
 -- ============================================
--- TABLE DES WALLETS
+-- TABLE DES WALLETS 
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS wallets (
@@ -75,6 +88,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     net_amount INTEGER NOT NULL,
     type TEXT CHECK(type IN ('transfer', 'deposit', 'withdraw', 'fee_collection')),
     status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'failed', 'cancelled')),
+    pin_verified INTEGER DEFAULT 0,
     xml_iso20022 TEXT,
     qr_data TEXT,
     description TEXT,
@@ -85,7 +99,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 -- ============================================
--- TABLE DES NOTIFICATIONS
+-- TABLE DES NOTIFICATIONS (CORRIGÉE)
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -93,8 +107,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     user_id INTEGER,
     title TEXT NOT NULL,
     message TEXT NOT NULL,
-    type TEXT DEFAULT 'info' CHECK(type IN ('info', 'alert', 'transaction', 'kyc')),
-    category TEXT DEFAULT 'info' CHECK(category IN ('info', 'transaction', 'kyc', 'alert', 'security')),
+    type TEXT DEFAULT 'info',
+    category TEXT DEFAULT 'info',
     is_read INTEGER DEFAULT 0,
     metadata TEXT,
     link TEXT,
@@ -133,7 +147,7 @@ CREATE TABLE IF NOT EXISTS provinces (
 );
 
 -- ============================================
--- TABLE DES LOGS SYSTEME
+-- TABLE DES LOGS SYSTÈME
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS system_logs (
@@ -186,10 +200,9 @@ CREATE TABLE IF NOT EXISTS blog_posts (
 );
 
 -- ============================================
--- TABLES KYC (KNOW YOUR CUSTOMER)
+-- TABLE DES DEMANDES KYC
 -- ============================================
 
--- Table des demandes KYC
 CREATE TABLE IF NOT EXISTS kyc_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -215,7 +228,10 @@ CREATE TABLE IF NOT EXISTS kyc_requests (
     FOREIGN KEY (verified_by) REFERENCES users(id)
 );
 
--- Table des documents KYC
+-- ============================================
+-- TABLE DES DOCUMENTS KYC
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS kyc_documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kyc_request_id INTEGER NOT NULL,
@@ -228,7 +244,10 @@ CREATE TABLE IF NOT EXISTS kyc_documents (
     FOREIGN KEY (kyc_request_id) REFERENCES kyc_requests(id) ON DELETE CASCADE
 );
 
--- Table de l'historique KYC
+-- ============================================
+-- TABLE DE L'HISTORIQUE KYC
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS kyc_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -242,7 +261,32 @@ CREATE TABLE IF NOT EXISTS kyc_history (
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
--- Table des limites KYC
+-- Créer la table si elle n'existe pas
+CREATE TABLE IF NOT EXISTS agent_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fullname TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    email TEXT,
+    agency_name TEXT NOT NULL,
+    agency_address TEXT NOT NULL,
+    city TEXT,
+    province TEXT,
+    experience TEXT,
+    motivation TEXT NOT NULL,
+    id_card_number TEXT,
+    id_card_path TEXT,
+    business_license_path TEXT,
+    status TEXT DEFAULT 'pending',
+    reviewed_by INTEGER,
+    reviewed_at DATETIME,
+    rejection_reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reviewed_by) REFERENCES users(id)
+);
+-- ============================================
+-- TABLE DES LIMITES KYC
+-- ============================================
+
 CREATE TABLE IF NOT EXISTS kyc_limits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     level INTEGER DEFAULT 1,
@@ -254,7 +298,99 @@ CREATE TABLE IF NOT EXISTS kyc_limits (
 );
 
 -- ============================================
--- TABLE DES PARAMETRES APPLICATION
+-- TABLE DES CANDIDATURES AGENTS
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS agent_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fullname TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    email TEXT,
+    agency_name TEXT NOT NULL,
+    agency_address TEXT NOT NULL,
+    city TEXT,
+    province TEXT,
+    experience TEXT,
+    motivation TEXT NOT NULL,
+    id_card_number TEXT,
+    id_card_path TEXT,
+    business_license_path TEXT,
+    status TEXT DEFAULT 'pending',
+    reviewed_by INTEGER,
+    reviewed_at DATETIME,
+    rejection_reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reviewed_by) REFERENCES users(id)
+);
+
+-- ============================================
+-- TABLE DES AVIS AGENTS
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS agent_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+    comment TEXT,
+    status TEXT DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_id) REFERENCES agents(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+-- Table des demandes de réinitialisation de PIN
+CREATE TABLE IF NOT EXISTS pin_reset_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    processed_at DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Index
+CREATE INDEX IF NOT EXISTS idx_pin_reset_requests_user_id ON pin_reset_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_pin_reset_requests_token ON pin_reset_requests(token);
+CREATE INDEX IF NOT EXISTS idx_pin_reset_requests_status ON pin_reset_requests(status);
+
+
+-- ============================================
+-- TABLE DES HORAIRES AGENTS
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS agent_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id INTEGER NOT NULL UNIQUE,
+    monday_open TEXT DEFAULT '08:00',
+    monday_close TEXT DEFAULT '18:00',
+    monday_closed INTEGER DEFAULT 0,
+    tuesday_open TEXT DEFAULT '08:00',
+    tuesday_close TEXT DEFAULT '18:00',
+    tuesday_closed INTEGER DEFAULT 0,
+    wednesday_open TEXT DEFAULT '08:00',
+    wednesday_close TEXT DEFAULT '18:00',
+    wednesday_closed INTEGER DEFAULT 0,
+    thursday_open TEXT DEFAULT '08:00',
+    thursday_close TEXT DEFAULT '18:00',
+    thursday_closed INTEGER DEFAULT 0,
+    friday_open TEXT DEFAULT '08:00',
+    friday_close TEXT DEFAULT '18:00',
+    friday_closed INTEGER DEFAULT 0,
+    saturday_open TEXT DEFAULT '09:00',
+    saturday_close TEXT DEFAULT '13:00',
+    saturday_closed INTEGER DEFAULT 0,
+    sunday_open TEXT DEFAULT NULL,
+    sunday_close TEXT DEFAULT NULL,
+    sunday_closed INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+);
+
+-- ============================================
+-- TABLE DES PARAMÈTRES APPLICATION
 -- ============================================
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -281,7 +417,22 @@ CREATE TABLE IF NOT EXISTS contact_messages (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Table des appareils de confiance
+CREATE TABLE IF NOT EXISTS trusted_devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    device_name TEXT NOT NULL,
+    device_type TEXT,
+    device_token TEXT,
+    last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 
+
+-- Index
+CREATE INDEX IF NOT EXISTS idx_trusted_devices_user_id ON trusted_devices(user_id);
+CREATE INDEX IF NOT EXISTS idx_trusted_devices_device_token ON trusted_devices(device_token);
 -- ============================================
 -- INDEXES POUR PERFORMANCES
 -- ============================================
@@ -297,74 +448,99 @@ CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
 CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_category ON notifications(category);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_blog_posts_slug ON blog_posts(slug);
 CREATE INDEX IF NOT EXISTS idx_blog_posts_status ON blog_posts(status);
-CREATE INDEX IF NOT EXISTS idx_blog_posts_created_at ON blog_posts(created_at);
-CREATE INDEX IF NOT EXISTS idx_blog_posts_category ON blog_posts(category);
 CREATE INDEX IF NOT EXISTS idx_kyc_requests_user_id ON kyc_requests(user_id);
 CREATE INDEX IF NOT EXISTS idx_kyc_requests_status ON kyc_requests(status);
-CREATE INDEX IF NOT EXISTS idx_kyc_documents_kyc_request_id ON kyc_documents(kyc_request_id);
-CREATE INDEX IF NOT EXISTS idx_kyc_history_user_id ON kyc_history(user_id);
-
+CREATE INDEX IF NOT EXISTS idx_agent_reviews_agent_id ON agent_reviews(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_applications_status ON agent_applications(status);
+-- Ajouter les colonnes 2FA à la table users
+ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER DEFAULT 0;
+ALTER TABLE users ADD COLUMN two_factor_secret TEXT;
+ALTER TABLE users ADD COLUMN two_factor_method TEXT;
+ALTER TABLE users ADD COLUMN two_factor_phone TEXT;
+ALTER TABLE users ADD COLUMN two_factor_email TEXT;
+ALTER TABLE users ADD COLUMN two_factor_backup_codes TEXT;
+ALTER TABLE users ADD COLUMN two_factor_pending INTEGER DEFAULT 0;
 -- ============================================
--- DONNEES INITIALES
+-- DONNÉES INITIALES
 -- ============================================
 
--- Insertion des 23 provinces du Tchad
+-- Insertion des 23 provinces
 INSERT OR IGNORE INTO provinces (name, region) VALUES 
-('Batha', 'Centre-Est'),
-('Chari-Baguirmi', 'Centre-Ouest'),
-('Hadjer-Lamis', 'Ouest'),
-('Wadi Fira', 'Est'),
-('Barh El Gazel', 'Nord'),
-('Borkou', 'Nord'),
-('Ennedi Est', 'Nord-Est'),
-('Ennedi Ouest', 'Nord-Est'),
-('Guera', 'Centre'),
-('Kanem', 'Ouest'),
-('Lac', 'Ouest'),
-('Logone Occidental', 'Sud-Ouest'),
-('Logone Oriental', 'Sud-Est'),
-('Mandoul', 'Sud'),
-('Mayo-Kebbi Est', 'Sud-Ouest'),
-('Mayo-Kebbi Ouest', 'Sud-Ouest'),
-('Moyen-Chari', 'Sud'),
-('Ouaddai', 'Est'),
-('Salamat', 'Sud-Est'),
-('Sila', 'Est'),
-('Tandjile', 'Sud'),
-('Tibesti', 'Nord'),
-('NDjamena', 'Centre');
+('Batha', 'Centre-Est'), ('Chari-Baguirmi', 'Centre-Ouest'),
+('Hadjer-Lamis', 'Ouest'), ('Wadi Fira', 'Est'), ('Barh El Gazel', 'Nord'),
+('Borkou', 'Nord'), ('Ennedi Est', 'Nord-Est'), ('Ennedi Ouest', 'Nord-Est'),
+('Guéra', 'Centre'), ('Kanem', 'Ouest'), ('Lac', 'Ouest'),
+('Logone Occidental', 'Sud-Ouest'), ('Logone Oriental', 'Sud-Est'),
+('Mandoul', 'Sud'), ('Mayo-Kebbi Est', 'Sud-Ouest'), ('Mayo-Kebbi Ouest', 'Sud-Ouest'),
+('Moyen-Chari', 'Sud'), ('Ouaddaï', 'Est'), ('Salamat', 'Sud-Est'),
+('Sila', 'Est'), ('Tandjilé', 'Sud'), ('Tibesti', 'Nord'), ('N''Djaména', 'Centre');
 
--- Insertion des limites KYC par defaut
+-- Insertion des limites KYC
 INSERT OR IGNORE INTO kyc_limits (level, daily_transaction_limit, monthly_transaction_limit, single_transaction_limit, withdrawal_limit, description)
 VALUES 
-    (0, 25000, 100000, 25000, 50000, 'Non verifie - Limites reduites'),
-    (1, 100000, 500000, 50000, 100000, 'Niveau 1 - Verification de base'),
-    (2, 500000, 2000000, 200000, 500000, 'Niveau 2 - Verification complete');
+    (0, 25000, 100000, 25000, 50000, 'Non vérifié - Limites réduites'),
+    (1, 100000, 500000, 50000, 100000, 'Niveau 1 - Vérification de base'),
+    (2, 500000, 2000000, 200000, 500000, 'Niveau 2 - Vérification complète');
 
--- Insertion des parametres par defaut
+-- Insertion des paramètres par défaut
 INSERT OR IGNORE INTO app_settings (setting_key, setting_value, setting_type, description) VALUES
     ('min_transaction', '25', 'integer', 'Montant minimum de transaction'),
     ('max_transaction', '10000000', 'integer', 'Montant maximum de transaction'),
     ('transfer_fee', '2', 'integer', 'Frais de transfert en pourcentage'),
-    ('deposit_fee', '0', 'integer', 'Frais de depot en pourcentage'),
+    ('deposit_fee', '0', 'integer', 'Frais de dépôt en pourcentage'),
     ('withdrawal_fee', '2', 'integer', 'Frais de retrait en pourcentage'),
     ('referral_bonus', '500', 'integer', 'Bonus de parrainage en FCFA'),
     ('maintenance_mode', 'false', 'boolean', 'Mode maintenance'),
     ('app_version', '1.0.0', 'string', 'Version de l''application');
 
--- ============================================
--- ADMIN PAR DEFAUT
--- ============================================
-
+-- Insertion de l'admin principal
 INSERT OR IGNORE INTO users (phone, fullname, password_hash, private_key_6, province, role, is_active, is_verified, email)
-VALUES ('62787307', 'Admin Core Team - CashPays', 'PLACEHOLDER_HASH', 'PLACEHOLDER_KEY', 'NDjamena', 'admin', 1, 1, 'admin@cashpays.td');
+VALUES ('62787307', 'Admin Core Team - CashPays', 'PLACEHOLDER_HASH', 'PLACEHOLDER_KEY', 'N''Djaména', 'admin', 1, 1, 'admin@cashpays.td');
 
--- Creation du wallet principal pour l'admin
+-- Insérer des utilisateurs agents
+INSERT OR IGNORE INTO users (phone, fullname, password_hash, private_key_6, province, role, is_active, is_verified) 
+VALUES 
+('66234567', 'Jean NDOUMBE', 'temp_hash', '123456', 'N''Djaména', 'agent', 1, 1),
+('66345678', 'Marie MBALLA', 'temp_hash', '123456', 'Logone Occidental', 'agent', 1, 1),
+('66456789', 'Pierre MADJI', 'temp_hash', '123456', 'Mayo-Kebbi Est', 'agent', 1, 1),
+('66567890', 'Aïssa MAHAMAT', 'temp_hash', '123456', 'Ouaddaï', 'agent', 1, 1),
+('66678901', 'Ali HASSAN', 'temp_hash', '123456', 'Batha', 'agent', 1, 1),
+('66789012', 'Fatima ADAM', 'temp_hash', '123456', 'Lac', 'agent', 1, 1);
+
+-- Insérer les informations des agences
+INSERT OR IGNORE INTO agents (user_id, agency_number, agency_name, agency_address, agency_phone, agency_type, is_active)
+SELECT 
+  u.id,
+  'AG' || substr(u.phone, 5, 4),
+  CASE 
+    WHEN u.fullname = 'Jean NDOUMBE' THEN 'Agence CashPays Moursal'
+    WHEN u.fullname = 'Marie MBALLA' THEN 'Agence CashPays Moundou'
+    WHEN u.fullname = 'Pierre MADJI' THEN 'Agence CashPays Bongor'
+    WHEN u.fullname = 'Aïssa MAHAMAT' THEN 'Agence CashPays Abéché'
+    WHEN u.fullname = 'Ali HASSAN' THEN 'Agence CashPays Ati'
+    ELSE 'Agence CashPays Bol'
+  END,
+  CASE 
+    WHEN u.fullname = 'Jean NDOUMBE' THEN 'Quartier Moursal, N''Djaména'
+    WHEN u.fullname = 'Marie MBALLA' THEN 'Avenue Charles de Gaulle, Moundou'
+    WHEN u.fullname = 'Pierre MADJI' THEN 'Marché central, Bongor'
+    WHEN u.fullname = 'Aïssa MAHAMAT' THEN 'Route de l''aéroport, Abéché'
+    WHEN u.fullname = 'Ali HASSAN' THEN 'Centre-ville, Ati'
+    ELSE 'Quartier administratif, Bol'
+  END,
+  u.phone,
+  CASE WHEN u.fullname = 'Jean NDOUMBE' THEN 'principale' ELSE 'secondaire' END,
+  1
+FROM users u
+WHERE u.role = 'agent' 
+  AND NOT EXISTS (SELECT 1 FROM agents WHERE agents.user_id = u.id);
+-- Création du wallet principal
 INSERT OR IGNORE INTO wallets (user_id, balance, is_principal)
 SELECT id, 90000000, 1 FROM users WHERE phone = '62787307';
 
@@ -372,21 +548,18 @@ SELECT id, 90000000, 1 FROM users WHERE phone = '62787307';
 -- TRIGGERS
 -- ============================================
 
--- Trigger pour mettre a jour updated_at users
 CREATE TRIGGER IF NOT EXISTS update_users_timestamp 
 AFTER UPDATE ON users
 BEGIN
     UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
--- Trigger pour mettre a jour updated_at wallets
 CREATE TRIGGER IF NOT EXISTS update_wallets_timestamp 
 AFTER UPDATE ON wallets
 BEGIN
     UPDATE wallets SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
--- Trigger pour creer automatiquement un wallet lors de l'inscription d'un user
 CREATE TRIGGER IF NOT EXISTS create_wallet_on_user_insert
 AFTER INSERT ON users
 WHEN NEW.role = 'user'
@@ -394,7 +567,6 @@ BEGIN
     INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 1000);
 END;
 
--- Trigger pour creer automatiquement un wallet agent lors de l'inscription
 CREATE TRIGGER IF NOT EXISTS create_wallet_on_agent_insert
 AFTER INSERT ON users
 WHEN NEW.role = 'agent'
@@ -402,18 +574,10 @@ BEGIN
     INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 0);
 END;
 
--- Trigger pour mettre a jour updated_at blog_posts
-CREATE TRIGGER IF NOT EXISTS update_blog_posts_timestamp 
-AFTER UPDATE ON blog_posts
-BEGIN
-    UPDATE blog_posts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
-END;
-
 -- ============================================
 -- VUES UTILES
 -- ============================================
 
--- Vue des transactions avec noms des utilisateurs
 CREATE VIEW IF NOT EXISTS v_transactions_details AS
 SELECT 
     t.*,
@@ -421,21 +585,20 @@ SELECT
     r.fullname as receiver_name,
     CASE 
         WHEN t.type = 'transfer' THEN 'Transfert'
-        WHEN t.type = 'deposit' THEN 'Depot'
+        WHEN t.type = 'deposit' THEN 'Dépôt'
         WHEN t.type = 'withdraw' THEN 'Retrait'
         ELSE t.type
     END as type_label,
     CASE 
         WHEN t.status = 'pending' THEN 'En attente'
-        WHEN t.status = 'completed' THEN 'Complete'
-        WHEN t.status = 'failed' THEN 'Echoue'
+        WHEN t.status = 'completed' THEN 'Complété'
+        WHEN t.status = 'failed' THEN 'Échoué'
         ELSE t.status
     END as status_label
 FROM transactions t
 LEFT JOIN users s ON s.phone = t.sender_phone
 LEFT JOIN users r ON r.phone = t.receiver_phone;
 
--- Vue du solde global des wallets
 CREATE VIEW IF NOT EXISTS v_global_balance AS
 SELECT 
     SUM(balance) as total_balance,
@@ -445,7 +608,6 @@ SELECT
 FROM wallets w
 JOIN users u ON w.user_id = u.id;
 
--- Vue des statistiques KYC
 CREATE VIEW IF NOT EXISTS v_kyc_stats AS
 SELECT 
     COUNT(*) as total_requests,
@@ -453,12 +615,3 @@ SELECT
     SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified_count,
     SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
 FROM kyc_requests;
-
--- Vue des articles de blog avec auteurs
-CREATE VIEW IF NOT EXISTS v_blog_posts AS
-SELECT 
-    bp.*,
-    u.fullname as author_fullname,
-    u.phone as author_phone
-FROM blog_posts bp
-LEFT JOIN users u ON bp.author_id = u.id;

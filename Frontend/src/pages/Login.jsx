@@ -1,19 +1,9 @@
 // src/pages/Login.jsx
 import React, { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
-import toast from 'react-hot-toast'
-import { 
-  FaPhone, 
-  FaLock, 
-  FaKey, 
-  FaMoneyBillWave, 
-  FaEye, 
-  FaEyeSlash, 
-  FaShieldAlt,
-  FaUserPlus,
-  FaArrowRight
-} from 'react-icons/fa'  // Imports corrects
+import { FaPhone, FaLock, FaKey, FaMoneyBillWave, FaEye, FaEyeSlash, FaShieldAlt, FaGift, FaUserPlus } from 'react-icons/fa'
+import { useToast } from '../context/ToastContext'
 
 function Login({ setUser }) {
   const [phone, setPhone] = useState('')
@@ -22,9 +12,15 @@ function Login({ setUser }) {
   const [loginMode, setLoginMode] = useState('password')
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const [showForgotModal, setShowForgotModal] = useState(false)
+  const [forgotPhone, setForgotPhone] = useState('')
+  const [sendingRequest, setSendingRequest] = useState(false)
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const { success, error, info } = useToast()
+  
+  const referralCode = searchParams.get('ref')
 
-  // Vérifier si déjà connecté au chargement
   useEffect(() => {
     const token = localStorage.getItem('accessToken')
     const savedUser = localStorage.getItem('user')
@@ -32,7 +28,11 @@ function Login({ setUser }) {
     if (token && savedUser) {
       verifyToken(token, savedUser)
     }
-  }, [])
+    
+    if (referralCode) {
+      info(`🎉 Code de parrainage détecté ! Inscrivez-vous pour bénéficier de 500 FCFA offerts.`, 8000)
+    }
+  }, [referralCode])
 
   const verifyToken = async (token, savedUser) => {
     try {
@@ -49,8 +49,8 @@ function Login({ setUser }) {
         localStorage.removeItem('refreshToken')
         localStorage.removeItem('user')
       }
-    } catch (error) {
-      console.error('Erreur vérification token:', error)
+    } catch (err) {
+      console.error('Erreur vérification token:', err)
     }
   }
 
@@ -64,14 +64,14 @@ function Login({ setUser }) {
 
       if (loginMode === 'password') {
         if (!password) {
-          toast.error('Veuillez saisir votre mot de passe')
+          error('Veuillez saisir votre mot de passe')
           setLoading(false)
           return
         }
         payload.password = password
       } else {
         if (!privateKey) {
-          toast.error('Veuillez saisir votre clé privée')
+          error('Veuillez saisir votre clé privée')
           setLoading(false)
           return
         }
@@ -81,20 +81,50 @@ function Login({ setUser }) {
 
       const response = await axios.post(endpoint, payload)
       
+      if (!response.data.tokens || !response.data.user) {
+        throw new Error('Données de connexion invalides')
+      }
+      
       localStorage.setItem('accessToken', response.data.tokens.accessToken)
       localStorage.setItem('refreshToken', response.data.tokens.refreshToken)
       localStorage.setItem('user', JSON.stringify(response.data.user))
       
       setUser(response.data.user)
       
-      toast.success('Connexion réussie !')
+      success('Connexion réussie !')
       navigate('/dashboard')
       
-    } catch (error) {
-      const errorMsg = error.response?.data?.error || 'Erreur de connexion. Vérifiez vos identifiants.'
-      toast.error(errorMsg)
+    } catch (err) {
+      console.error('Erreur connexion:', err)
+      const errorMsg = err.response?.data?.error || 'Erreur de connexion. Vérifiez vos identifiants.'
+      error(errorMsg)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleForgotPassword = async () => {
+    if (!forgotPhone || forgotPhone.length !== 8) {
+      error('Veuillez entrer un numéro de téléphone valide (8 chiffres)')
+      return
+    }
+    
+    setSendingRequest(true)
+    try {
+      const response = await axios.post('/api/auth/forgot-password', {
+        phone: forgotPhone
+      })
+      
+      success(response.data.message || 'Demande envoyée. L\'administrateur vous contactera sous 24h.')
+      setShowForgotModal(false)
+      setForgotPhone('')
+      
+    } catch (err) {
+      console.error('Erreur:', err)
+      const errorMsg = err.response?.data?.error || 'Erreur lors de l\'envoi de la demande'
+      error(errorMsg)
+    } finally {
+      setSendingRequest(false)
     }
   }
 
@@ -102,6 +132,13 @@ function Login({ setUser }) {
     setPhone('62787307')
     setPassword('08093Ali')
     setLoginMode('password')
+  }
+
+  const handleModeChange = (mode) => {
+    setLoginMode(mode)
+    setPassword('')
+    setPrivateKey('')
+    setShowPassword(false)
   }
 
   return (
@@ -115,12 +152,23 @@ function Login({ setUser }) {
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">CashPays</h1>
           <p className="text-blue-200 text-sm">GOUROUSDJA - Transfert d'argent instantané</p>
+          
+          {referralCode && (
+            <div className="mt-3 bg-gradient-to-r from-purple-600/30 to-pink-600/30 rounded-xl p-2 border border-purple-500/30">
+              <div className="flex items-center justify-center gap-2">
+                <FaGift className="text-purple-300" />
+                <p className="text-purple-200 text-xs">
+                  🎉 Code parrainage : <span className="font-mono font-bold text-white">{referralCode}</span>
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Mode de connexion */}
         <div className="flex gap-2 mb-6">
           <button
-            onClick={() => setLoginMode('password')}
+            onClick={() => handleModeChange('password')}
             className={`flex-1 py-2.5 rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
               loginMode === 'password'
                 ? 'bg-blue-600 text-white shadow-lg'
@@ -130,7 +178,7 @@ function Login({ setUser }) {
             <FaLock className="text-sm" /> Mot de passe
           </button>
           <button
-            onClick={() => setLoginMode('key')}
+            onClick={() => handleModeChange('key')}
             className={`flex-1 py-2.5 rounded-lg transition-all duration-200 flex items-center justify-center gap-2 ${
               loginMode === 'key'
                 ? 'bg-blue-600 text-white shadow-lg'
@@ -155,9 +203,10 @@ function Login({ setUser }) {
               maxLength="8"
               required
             />
+            <p className="text-white/40 text-xs mt-1">8 chiffres - Identifiant unique</p>
           </div>
 
-          <div>
+          <div key={loginMode}>
             <label className="block text-white/80 text-sm font-medium mb-2">
               {loginMode === 'password' ? (
                 <><FaLock className="inline mr-2" /> Mot de passe</>
@@ -188,16 +237,19 @@ function Login({ setUser }) {
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-white/50 hover:text-white/80"
                 >
-                  {showPassword ? <FaEyeSlash size={18} /> : <FaEye size={18} />}
+                  {showPassword ? <FaEyeSlash /> : <FaEye />}
                 </button>
               )}
             </div>
+            {loginMode === 'key' && (
+              <p className="text-white/40 text-xs mt-1">Clé à 6 chiffres reçue à l'inscription</p>
+            )}
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold py-3 rounded-xl transition-all duration-200 transform hover:scale-[1.02] disabled:opacity-70 disabled:cursor-not-allowed"
+            className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold py-3 rounded-xl transition-all duration-200 transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-blue-900 disabled:opacity-70 disabled:cursor-not-allowed"
           >
             {loading ? (
               <div className="flex items-center justify-center gap-2">
@@ -210,16 +262,99 @@ function Login({ setUser }) {
           </button>
         </form>
 
+        {/* Liens utiles */}
         <div className="mt-6 text-center">
-          <Link to="/register" className="text-blue-300 hover:text-blue-200 transition-colors text-sm inline-flex items-center gap-1">
-            Pas encore de compte ? S'inscrire <FaArrowRight size={12} />
+          <Link 
+            to={referralCode ? `/register?ref=${referralCode}` : "/register"} 
+            className="inline-flex items-center gap-2 text-blue-300 hover:text-blue-200 transition-colors text-sm"
+          >
+            <FaUserPlus /> Pas encore de compte ? S'inscrire gratuitement
+            {referralCode && (
+              <span className="bg-purple-500/30 text-purple-200 text-xs px-2 py-0.5 rounded-full ml-2">
+                +500 FCFA offerts
+              </span>
+            )}
           </Link>
         </div>
 
+        {/* Bouton Mot de passe oublié - ACTIF */}
+        <div className="mt-3 text-center">
+          <button
+            onClick={() => setShowForgotModal(true)}
+            className="text-white/40 hover:text-white/60 transition-colors text-xs"
+          >
+            Mot de passe ou clé privée oublié ?
+          </button>
+        </div>
+
+        {/* Bannière d'information parrainage */}
+        <div className="mt-4 pt-4 border-t border-white/10">
+          <div className="flex items-center justify-center gap-2 text-white/40 text-xs">
+            <FaGift size={12} />
+            <span>Parrainez vos amis et gagnez 500 FCFA par inscription</span>
+          </div>
+        </div>
+
+        {/* Version */}
         <div className="text-center text-white/30 text-xs mt-6">
           CashPays v1.0.0 - © 2026 GOUROUSDJA
         </div>
       </div>
+
+      {/* Modal Mot de passe oublié */}
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
+          <div className="relative max-w-md w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl">
+            <div className="p-4 border-b border-white/10 flex justify-between items-center">
+              <h3 className="text-xl font-bold text-white">Mot de passe oublié</h3>
+              <button
+                onClick={() => setShowForgotModal(false)}
+                className="text-white/60 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6">
+              <p className="text-white/70 text-sm mb-4">
+                Entrez votre numéro de téléphone. L'administrateur recevra votre demande 
+                et vous contactera pour réinitialiser votre accès.
+              </p>
+              <div>
+                <label className="block text-white/80 text-sm font-medium mb-2">
+                  <FaPhone className="inline mr-2" /> Numéro de téléphone
+                </label>
+                <input
+                  type="tel"
+                  value={forgotPhone}
+                  onChange={(e) => setForgotPhone(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  placeholder="Ex: 62787307"
+                  maxLength="8"
+                />
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => setShowForgotModal(false)}
+                  className="flex-1 btn-secondary"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleForgotPassword}
+                  disabled={sendingRequest}
+                  className="flex-1 btn-primary flex items-center justify-center gap-2"
+                >
+                  {sendingRequest ? (
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  ) : (
+                    'Envoyer la demande'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

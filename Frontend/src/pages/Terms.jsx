@@ -174,7 +174,7 @@ function Terms({ user }) {
 
         <div className="mt-8 pt-6 border-t border-white/10 text-center">
           <p className="text-white/50 text-sm">
-            Pour toute question concernant ces conditions, contactez-nous à <strong className="text-blue-300">contact@cashpays.td</strong>
+            Pour toute question concernant ces conditions, contactez-nous à <strong className="text-blue-300">cashpays@gmail.com</strong>
           </p>
         </div>
       </div>

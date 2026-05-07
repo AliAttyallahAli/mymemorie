@@ -7,7 +7,10 @@ import {
   FaCopy, FaEye, FaEyeSlash, FaWallet, FaEnvelope,
   FaEdit, FaSave, FaTimes, FaSpinner, FaCalendarAlt,
   FaIdCard, FaUpload, FaCheckCircle, FaFilePdf,
-  FaDownload, FaShieldAlt, FaUserCheck, FaClock
+  FaDownload, FaShieldAlt, FaUserCheck, FaClock,
+  FaShare, FaWhatsapp, FaTelegram, FaEnvelope as FaMail,
+  FaFacebook, FaGift, FaUsers, FaChartLine, FaQrcode,
+  FaLink, FaStar, FaRegStar, FaStarHalfAlt
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 
@@ -20,9 +23,22 @@ function Profile({ user }) {
   const [editMode, setEditMode] = useState(false)
   const [saving, setSaving] = useState(false)
   
+  // États pour le parrainage
+  const [referralCode, setReferralCode] = useState('')
+  const [referralLink, setReferralLink] = useState('')
+  const [referralQrUrl, setReferralQrUrl] = useState('')
+  const [referralStats, setReferralStats] = useState({
+    totalReferrals: 0,
+    totalBonus: 0,
+    pendingBonus: 0,
+    referrals: []
+  })
+  const [referralCopied, setReferralCopied] = useState(false)
+  const [showReferralQR, setShowReferralQR] = useState(false)
+  
   // États pour KYC
   const [kycStatus, setKycStatus] = useState({
-    status: 'pending', // pending, verified, rejected, none
+    status: 'pending',
     level: 1,
     submittedAt: null,
     verifiedAt: null,
@@ -64,6 +80,7 @@ function Profile({ user }) {
     fetchProvinces()
     fetchKycStatus()
     fetchKycHistory()
+    fetchReferralInfo()
   }, [])
 
   const fetchProfile = async () => {
@@ -79,6 +96,8 @@ function Profile({ user }) {
       })
       
       const userData = profileRes.data
+      const generatedCode = generateReferralCode(userData.phone)
+      
       setProfile({
         id: userData.id,
         fullname: userData.fullname,
@@ -88,7 +107,8 @@ function Profile({ user }) {
         city: userData.city || '',
         address: userData.address || '',
         private_key: '********',
-        created_at: userData.created_at
+        created_at: userData.created_at,
+        referral_code: userData.referral_code || generatedCode
       })
       
       setFormData({
@@ -100,8 +120,16 @@ function Profile({ user }) {
       })
       
       setBalance(balanceRes.data.balance)
+      
+      const code = userData.referral_code || generatedCode
+      setReferralCode(code)
+      const link = `${window.location.origin}/register?ref=${code}`
+      setReferralLink(link)
+      setReferralQrUrl(`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(link)}`)
+      
     } catch (error) {
       console.error('Erreur chargement profil:', error)
+      const generatedCode = generateReferralCode(user?.phone)
       setProfile({
         fullname: user?.fullname || 'Utilisateur',
         phone: user?.phone || 'Non renseigné',
@@ -109,12 +137,39 @@ function Profile({ user }) {
         province: 'N\'Djaména',
         city: '',
         address: '',
-        private_key: '********'
+        private_key: '********',
+        referral_code: generatedCode
       })
       setBalance(0)
+      setReferralCode(generatedCode)
+      setReferralLink(`${window.location.origin}/register?ref=${generatedCode}`)
+      setReferralQrUrl(`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(`${window.location.origin}/register?ref=${generatedCode}`)}`)
       toast.error('Erreur lors du chargement du profil')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const generateReferralCode = (phone) => {
+    if (!phone) return 'CASH' + Math.random().toString(36).substring(2, 8).toUpperCase()
+    return `CASH${phone.slice(-6)}`
+  }
+
+  const fetchReferralInfo = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/referral/stats', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setReferralStats(response.data)
+    } catch (error) {
+      console.error('Erreur chargement stats parrainage:', error)
+      setReferralStats({
+        totalReferrals: 0,
+        totalBonus: 0,
+        pendingBonus: 0,
+        referrals: []
+      })
     }
   }
 
@@ -137,7 +192,6 @@ function Profile({ user }) {
       })
       setKycStatus(response.data)
       
-      // Pré-remplir le formulaire KYC
       if (response.data.userData) {
         setKycForm(prev => ({
           ...prev,
@@ -261,7 +315,6 @@ function Profile({ user }) {
       fetchKycStatus()
       fetchKycHistory()
       
-      // Réinitialiser les fichiers
       setSelectedFiles({
         idFront: null,
         idBack: null,
@@ -299,13 +352,93 @@ function Profile({ user }) {
     }
   }
 
-  const copyToClipboard = (text, label) => {
+  // ============================================
+  // FONCTIONS DE COPIE SÉCURISÉES
+  // ============================================
+  
+  const fallbackCopyToClipboard = (text, label) => {
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+    
+    try {
+      const successful = document.execCommand('copy')
+      if (successful) {
+        toast.success(`${label} copié !`)
+      } else {
+        toast.error(`Impossible de copier ${label}`)
+      }
+    } catch (err) {
+      console.error('Erreur copie:', err)
+      toast.error(`Impossible de copier ${label}`)
+    }
+    
+    document.body.removeChild(textArea)
+  }
+
+  const safeCopyToClipboard = (text, label) => {
     if (!text) {
       toast.error('Aucune information à copier')
       return
     }
-    navigator.clipboard.writeText(text)
-    toast.success(`${label} copié dans le presse-papier`)
+    
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text)
+        .then(() => {
+          toast.success(`${label} copié !`)
+        })
+        .catch(() => {
+          fallbackCopyToClipboard(text, label)
+        })
+    } else {
+      fallbackCopyToClipboard(text, label)
+    }
+  }
+
+  // Copier le lien de parrainage
+  const copyReferralLink = () => {
+    if (!referralLink) {
+      toast.error('Lien de parrainage non disponible')
+      return
+    }
+    safeCopyToClipboard(referralLink, 'Lien de parrainage')
+    setReferralCopied(true)
+    setTimeout(() => setReferralCopied(false), 3000)
+  }
+
+  // Copier le code de parrainage
+  const copyReferralCode = () => {
+    if (!referralCode) {
+      toast.error('Code de parrainage non disponible')
+      return
+    }
+    safeCopyToClipboard(referralCode, 'Code de parrainage')
+    setReferralCopied(true)
+    setTimeout(() => setReferralCopied(false), 3000)
+  }
+
+  const shareReferral = (platform) => {
+    const message = `🌟 Rejoignez CashPays ! Utilisez mon code de parrainage : ${referralCode}\n\nInscrivez-vous ici : ${referralLink}\n\nChaque parrainage vous rapporte 500 FCFA ! 💰`
+    
+    const urls = {
+      whatsapp: `https://wa.me/?text=${encodeURIComponent(message)}`,
+      telegram: `https://t.me/share/url?url=${encodeURIComponent(referralLink)}&text=${encodeURIComponent('Rejoignez CashPays !')}`,
+      email: `mailto:?subject=${encodeURIComponent('Rejoignez CashPays')}&body=${encodeURIComponent(message)}`,
+      facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(referralLink)}&quote=${encodeURIComponent('Rejoignez CashPays !')}`
+    }
+    
+    if (urls[platform]) {
+      window.open(urls[platform], '_blank')
+    }
+  }
+
+  const copyToClipboard = (text, label) => {
+    safeCopyToClipboard(text, label)
   }
 
   const formatDate = (dateStr) => {
@@ -328,6 +461,24 @@ function Profile({ user }) {
       default:
         return { color: 'bg-gray-500/20 text-gray-400', text: 'Non soumis', icon: FaIdCard }
     }
+  }
+
+  const getRatingStars = (rating) => {
+    const stars = []
+    const fullStars = Math.floor(rating || 0)
+    const hasHalfStar = (rating || 0) % 1 >= 0.5
+    
+    for (let i = 0; i < fullStars; i++) {
+      stars.push(<FaStar key={i} className="text-yellow-400" />)
+    }
+    if (hasHalfStar) {
+      stars.push(<FaStarHalfAlt key="half" className="text-yellow-400" />)
+    }
+    const remainingStars = 5 - stars.length
+    for (let i = 0; i < remainingStars; i++) {
+      stars.push(<FaRegStar key={i + fullStars} className="text-white/30" />)
+    }
+    return stars
   }
 
   const kycBadge = getKycStatusBadge()
@@ -356,6 +507,125 @@ function Profile({ user }) {
             {balance.toLocaleString()} FCFA
           </h2>
           <p className="text-white/60 text-sm">Solde disponible</p>
+        </div>
+      </div>
+
+      {/* Section Parrainage */}
+      <div className="card mb-6 bg-gradient-to-r from-purple-600 to-purple-700">
+        <div className="text-center mb-4">
+          <div className="inline-flex p-3 bg-white/20 rounded-full mb-3">
+            <FaGift className="text-white text-2xl" />
+          </div>
+          <h3 className="text-white text-xl font-bold">Programme de parrainage</h3>
+          <p className="text-purple-100 text-sm">Parrainez vos amis et gagnez 500 FCFA par inscription !</p>
+        </div>
+        
+        {/* Statistiques */}
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="bg-white/10 rounded-xl p-2 text-center">
+            <FaUsers className="text-purple-200 mx-auto mb-1" />
+            <p className="text-white font-bold text-xl">{referralStats.totalReferrals}</p>
+            <p className="text-white/60 text-xs">Parrainages</p>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2 text-center">
+            <FaChartLine className="text-purple-200 mx-auto mb-1" />
+            <p className="text-white font-bold text-xl">{referralStats.totalBonus.toLocaleString()} FCFA</p>
+            <p className="text-white/60 text-xs">Gagnés</p>
+          </div>
+          <div className="bg-white/10 rounded-xl p-2 text-center">
+            <FaClock className="text-purple-200 mx-auto mb-1" />
+            <p className="text-white font-bold text-xl">{referralStats.pendingBonus.toLocaleString()} FCFA</p>
+            <p className="text-white/60 text-xs">En attente</p>
+          </div>
+        </div>
+        
+        {/* Code de parrainage */}
+        <div className="bg-white/10 rounded-xl p-3 mb-3">
+          <p className="text-white/60 text-xs mb-1">Votre code de parrainage</p>
+          <div className="flex items-center gap-2">
+            <code className="bg-white/20 rounded-lg px-3 py-2 text-white font-mono text-lg flex-1 text-center">
+              {referralCode}
+            </code>
+            <button
+              onClick={copyReferralCode}
+              className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-lg transition-all"
+              title="Copier le code"
+            >
+              {referralCopied ? <FaCheckCircle /> : <FaCopy />}
+            </button>
+            <button
+              onClick={() => setShowReferralQR(!showReferralQR)}
+              className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-lg transition-all"
+              title="Afficher QR code"
+            >
+              <FaQrcode />
+            </button>
+          </div>
+        </div>
+        
+        {/* QR Code */}
+        {showReferralQR && (
+          <div className="bg-white/10 rounded-xl p-4 mb-3 text-center">
+            <p className="text-white/60 text-xs mb-2">Scannez ce QR code pour partager</p>
+            <img
+              src={referralQrUrl}
+              alt="QR Code de parrainage"
+              className="w-32 h-32 mx-auto bg-white p-2 rounded-lg"
+            />
+          </div>
+        )}
+        
+        {/* Lien de parrainage */}
+        <div className="bg-white/10 rounded-xl p-3 mb-3">
+          <p className="text-white/60 text-xs mb-1">Votre lien de parrainage</p>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={referralLink}
+              readOnly
+              className="bg-white/20 rounded-lg px-3 py-2 text-white text-sm flex-1 font-mono truncate"
+            />
+            <button
+              onClick={copyReferralLink}
+              className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-lg transition-all"
+            >
+              <FaLink />
+            </button>
+          </div>
+        </div>
+        
+        {/* Boutons de partage */}
+        <div className="grid grid-cols-4 gap-2">
+          <button
+            onClick={() => shareReferral('whatsapp')}
+            className="bg-[#25d366]/20 hover:bg-[#25d366]/30 text-white py-2 rounded-lg flex items-center justify-center gap-1 text-sm transition-all"
+          >
+            <FaWhatsapp size={14} /> WhatsApp
+          </button>
+          <button
+            onClick={() => shareReferral('telegram')}
+            className="bg-[#0088cc]/20 hover:bg-[#0088cc]/30 text-white py-2 rounded-lg flex items-center justify-center gap-1 text-sm transition-all"
+          >
+            <FaTelegram size={14} /> Telegram
+          </button>
+          <button
+            onClick={() => shareReferral('email')}
+            className="bg-white/10 hover:bg-white/20 text-white py-2 rounded-lg flex items-center justify-center gap-1 text-sm transition-all"
+          >
+            <FaMail size={14} /> Email
+          </button>
+          <button
+            onClick={() => shareReferral('facebook')}
+            className="bg-[#1877f2]/20 hover:bg-[#1877f2]/30 text-white py-2 rounded-lg flex items-center justify-center gap-1 text-sm transition-all"
+          >
+            <FaFacebook size={14} /> Facebook
+          </button>
+        </div>
+        
+        <div className="mt-3 text-center">
+          <p className="text-white/40 text-xs">
+            💡 Chaque ami qui s'inscrit avec votre code vous rapporte 500 FCFA
+          </p>
         </div>
       </div>
 
@@ -642,18 +912,10 @@ function Profile({ user }) {
 
         <button
           onClick={() => {
-            toast((t) => (
-              <div className="flex flex-col gap-2">
-                <p className="font-semibold">🔐 Changer le mot de passe</p>
-                <p className="text-sm">Cette fonctionnalité sera bientôt disponible</p>
-                <button
-                  onClick={() => toast.dismiss(t.id)}
-                  className="mt-2 bg-blue-500 text-white px-3 py-1 rounded-lg text-sm"
-                >
-                  OK
-                </button>
-              </div>
-            ), { duration: 3000 })
+            toast('Changement de mot de passe bientôt disponible', {
+              duration: 3000,
+              icon: '🔐'
+            })
           }}
           className="mt-4 w-full btn-secondary text-sm"
         >
@@ -687,6 +949,7 @@ function Profile({ user }) {
               </div>
 
               <form onSubmit={handleSubmitKyc} className="space-y-4">
+                {/* ... contenu du formulaire KYC existant ... */}
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
                     <label className="label">Nom complet *</label>
@@ -739,38 +1002,13 @@ function Profile({ user }) {
 
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
-                    <label className="label">Nationalité *</label>
-                    <select
-                      name="nationality"
-                      value={kycForm.nationality}
-                      onChange={handleKycFormChange}
-                      className="input-field"
-                    >
-                      <option value="Tchadienne">Tchadienne</option>
-                      <option value="Autre">Autre</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label">Profession</label>
-                    <input
-                      type="text"
-                      name="occupation"
-                      value={kycForm.occupation}
-                      onChange={handleKycFormChange}
-                      className="input-field"
-                      placeholder="Ex: Commerçant, Étudiant..."
-                    />
-                  </div>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
                     <label className="label">Type de pièce d'identité *</label>
                     <select
                       name="idType"
                       value={kycForm.idType}
                       onChange={handleKycFormChange}
                       className="input-field"
+                      required
                     >
                       <option value="cni">Carte Nationale d'Identité (CNI)</option>
                       <option value="passeport">Passeport</option>
@@ -790,29 +1028,6 @@ function Profile({ user }) {
                   </div>
                 </div>
 
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="label">Date de délivrance</label>
-                    <input
-                      type="date"
-                      name="idIssueDate"
-                      value={kycForm.idIssueDate}
-                      onChange={handleKycFormChange}
-                      className="input-field"
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Date d'expiration</label>
-                    <input
-                      type="date"
-                      name="idExpiryDate"
-                      value={kycForm.idExpiryDate}
-                      onChange={handleKycFormChange}
-                      className="input-field"
-                    />
-                  </div>
-                </div>
-
                 <div>
                   <label className="label">Adresse *</label>
                   <textarea
@@ -827,93 +1042,52 @@ function Profile({ user }) {
 
                 <div className="border-t border-white/10 pt-4">
                   <h4 className="text-white font-semibold mb-3">Documents à fournir</h4>
-                  
                   <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="label">Recto de la CNI/Passeport *</label>
-                      <div className="border-2 border-dashed border-white/20 rounded-xl p-4 text-center hover:border-blue-400 transition-all">
-                        <input
-                          type="file"
-                          accept="image/*,.pdf"
-                          onChange={(e) => handleFileChange(e, 'idFront')}
-                          className="hidden"
-                          id="idFront"
-                          required={kycStatus.status === 'none'}
-                        />
-                        <label htmlFor="idFront" className="cursor-pointer flex flex-col items-center gap-2">
-                          <FaUpload className="text-blue-400 text-2xl" />
-                          <span className="text-white/60 text-sm">
-                            {selectedFiles.idFront ? selectedFiles.idFront.name : 'Cliquez pour télécharger'}
-                          </span>
-                        </label>
-                      </div>
+                    <div className="border-2 border-dashed border-white/20 rounded-xl p-4 text-center">
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        onChange={(e) => handleFileChange(e, 'idFront')}
+                        className="hidden"
+                        id="idFront"
+                      />
+                      <label htmlFor="idFront" className="cursor-pointer flex flex-col items-center gap-2">
+                        <FaUpload className="text-blue-400 text-2xl" />
+                        <span className="text-white/60 text-sm">CNI/Passeport (Recto)</span>
+                      </label>
                     </div>
-
-                    <div>
-                      <label className="label">Verso de la CNI (optionnel)</label>
-                      <div className="border-2 border-dashed border-white/20 rounded-xl p-4 text-center hover:border-blue-400 transition-all">
-                        <input
-                          type="file"
-                          accept="image/*,.pdf"
-                          onChange={(e) => handleFileChange(e, 'idBack')}
-                          className="hidden"
-                          id="idBack"
-                        />
-                        <label htmlFor="idBack" className="cursor-pointer flex flex-col items-center gap-2">
-                          <FaUpload className="text-blue-400 text-2xl" />
-                          <span className="text-white/60 text-sm">
-                            {selectedFiles.idBack ? selectedFiles.idBack.name : 'Cliquez pour télécharger'}
-                          </span>
-                        </label>
-                      </div>
+                    <div className="border-2 border-dashed border-white/20 rounded-xl p-4 text-center">
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        onChange={(e) => handleFileChange(e, 'selfie')}
+                        className="hidden"
+                        id="selfie"
+                      />
+                      <label htmlFor="selfie" className="cursor-pointer flex flex-col items-center gap-2">
+                        <FaUpload className="text-blue-400 text-2xl" />
+                        <span className="text-white/60 text-sm">Selfie avec la pièce</span>
+                      </label>
                     </div>
-
-                    <div>
-                      <label className="label">Selfie avec la pièce *</label>
-                      <div className="border-2 border-dashed border-white/20 rounded-xl p-4 text-center hover:border-blue-400 transition-all">
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) => handleFileChange(e, 'selfie')}
-                          className="hidden"
-                          id="selfie"
-                          required={kycStatus.status === 'none'}
-                        />
-                        <label htmlFor="selfie" className="cursor-pointer flex flex-col items-center gap-2">
-                          <FaUpload className="text-blue-400 text-2xl" />
-                          <span className="text-white/60 text-sm">
-                            {selectedFiles.selfie ? selectedFiles.selfie.name : 'Photo tenant la pièce'}
-                          </span>
-                        </label>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="label">Justificatif de domicile *</label>
-                      <div className="border-2 border-dashed border-white/20 rounded-xl p-4 text-center hover:border-blue-400 transition-all">
-                        <input
-                          type="file"
-                          accept="image/*,.pdf"
-                          onChange={(e) => handleFileChange(e, 'proofOfAddress')}
-                          className="hidden"
-                          id="proofOfAddress"
-                          required={kycStatus.status === 'none'}
-                        />
-                        <label htmlFor="proofOfAddress" className="cursor-pointer flex flex-col items-center gap-2">
-                          <FaUpload className="text-blue-400 text-2xl" />
-                          <span className="text-white/60 text-sm">
-                            {selectedFiles.proofOfAddress ? selectedFiles.proofOfAddress.name : 'Facture d\'électricité, eau...'}
-                          </span>
-                        </label>
-                      </div>
+                    <div className="border-2 border-dashed border-white/20 rounded-xl p-4 text-center">
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        onChange={(e) => handleFileChange(e, 'proofOfAddress')}
+                        className="hidden"
+                        id="proofOfAddress"
+                      />
+                      <label htmlFor="proofOfAddress" className="cursor-pointer flex flex-col items-center gap-2">
+                        <FaUpload className="text-blue-400 text-2xl" />
+                        <span className="text-white/60 text-sm">Justificatif de domicile</span>
+                      </label>
                     </div>
                   </div>
                 </div>
 
                 <div className="bg-yellow-500/10 rounded-xl p-4">
-                  <p className="text-yellow-400 text-xs flex items-start gap-2">
-                    <span>ℹ️</span>
-                    <span>Les documents doivent être clairs et lisibles. Le traitement peut prendre 24-48h.</span>
+                  <p className="text-yellow-400 text-xs">
+                    ℹ️ Les documents doivent être clairs et lisibles. Le traitement peut prendre 24-48h.
                   </p>
                 </div>
 

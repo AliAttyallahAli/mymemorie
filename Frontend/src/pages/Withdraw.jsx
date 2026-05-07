@@ -1,4 +1,4 @@
-// src/pages/Withdraw.jsx - Version corrigée avec montant min/max cohérents
+// src/pages/Withdraw.jsx - Version corrigée avec PIN
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
@@ -9,9 +9,10 @@ import {
   FaArrowRight, FaHistory, FaHome, FaReceipt,
   FaWhatsapp, FaEnvelope, FaDownload, FaTimes,
   FaSpinner, FaInfoCircle, FaStore, FaExclamationTriangle,
-  FaWallet
+  FaWallet, FaKey
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
+import PinModal from '../components/PinModal'
 
 function Withdraw({ user, socket }) {
   const navigate = useNavigate()
@@ -30,18 +31,23 @@ function Withdraw({ user, socket }) {
   const [selectedCity, setSelectedCity] = useState('all')
   const [cities, setCities] = useState([])
   
+  // États pour le PIN
+  const [hasPin, setHasPin] = useState(false)
+  const [showPinModal, setShowPinModal] = useState(false)
+  const [pendingWithdraw, setPendingWithdraw] = useState(null)
+  const [checkingPin, setCheckingPin] = useState(true)
+  
   // Paramètres de transaction
   const WITHDRAWAL_MIN = 25
-  const WITHDRAWAL_FEE = 2 // 2%
-  const WITHDRAWAL_MAX = 10000000 // 10 millions FCFA
+  const WITHDRAWAL_FEE = 2
+  const WITHDRAWAL_MAX = 10000000
 
-  // Charger le solde et les agents au chargement
   useEffect(() => {
     fetchBalance()
     fetchAgents()
+    checkUserPin()
   }, [])
 
-  // Écouter les mises à jour de solde via socket
   useEffect(() => {
     if (socket) {
       socket.on('balance_updated', (data) => {
@@ -57,7 +63,6 @@ function Withdraw({ user, socket }) {
     }
   }, [socket, user])
 
-  // Auto-fermeture de la notification
   useEffect(() => {
     if (showNotification && notificationType === 'success') {
       const timer = setInterval(() => {
@@ -72,6 +77,21 @@ function Withdraw({ user, socket }) {
       return () => clearInterval(timer)
     }
   }, [showNotification, notificationType])
+
+  const checkUserPin = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/user/pin-status', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setHasPin(response.data.hasPin || false)
+    } catch (error) {
+      console.error('Erreur vérification PIN:', error)
+      setHasPin(false)
+    } finally {
+      setCheckingPin(false)
+    }
+  }
 
   const fetchBalance = async () => {
     setLoadingBalance(true)
@@ -96,14 +116,13 @@ function Withdraw({ user, socket }) {
       const response = await axios.get('/api/agents', {
         headers: { Authorization: `Bearer ${token}` }
       })
-      const agentsData = response.data || []
+      const agentsData = response.data.agents || response.data || []
       setAgents(agentsData)
       
       const uniqueCities = [...new Set(agentsData.map(a => a.city || a.province).filter(Boolean))]
       setCities(uniqueCities)
     } catch (error) {
       console.error('Erreur chargement agents:', error)
-      // Données fictives pour la démonstration
       const mockAgents = [
         { id: 1, fullname: 'Jean NDOUMBE', phone: '66234567', province: 'N\'Djaména', city: 'N\'Djaména', agency_name: 'Agence CashPays Moursal', agency_address: 'Quartier Moursal' },
         { id: 2, fullname: 'Marie MBALLA', phone: '66345678', province: 'Logone Occidental', city: 'Moundou', agency_name: 'Agence CashPays Moundou', agency_address: 'Avenue Charles de Gaulle' },
@@ -116,8 +135,8 @@ function Withdraw({ user, socket }) {
   }
 
   const filteredAgents = agents.filter(agent => {
-    const matchesSearch = agent.fullname.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         agent.phone.includes(searchTerm) ||
+    const matchesSearch = agent.fullname?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         agent.phone?.includes(searchTerm) ||
                          (agent.agency_name && agent.agency_name.toLowerCase().includes(searchTerm.toLowerCase()))
     const matchesCity = selectedCity === 'all' || agent.city === selectedCity || agent.province === selectedCity
     return matchesSearch && matchesCity
@@ -130,62 +149,83 @@ function Withdraw({ user, socket }) {
     return { fee, netAmount }
   }
 
-  const handleWithdraw = async (e) => {
-    e.preventDefault()
-    
+  const prepareWithdraw = () => {
     const amountNum = parseInt(amount)
     
-    // Validation du montant minimum
     if (isNaN(amountNum) || amountNum < WITHDRAWAL_MIN) {
       toast.error(`Le montant minimum est de ${WITHDRAWAL_MIN.toLocaleString()} FCFA`)
-      return
+      return false
     }
     
-    // Validation du montant maximum
     if (amountNum > WITHDRAWAL_MAX) {
       toast.error(`Le montant maximum est de ${WITHDRAWAL_MAX.toLocaleString()} FCFA`)
-      return
+      return false
     }
     
     if (!selectedAgent) {
       toast.error('Veuillez sélectionner un agent')
-      return
+      return false
     }
     
     if (amountNum > balance) {
       toast.error('Solde insuffisant')
-      return
+      return false
     }
+    
+    setPendingWithdraw({
+      amount: amountNum,
+      agent_id: selectedAgent.id,
+      agent_name: selectedAgent.fullname,
+      agent_phone: selectedAgent.phone,
+      description: `Retrait de ${amountNum} FCFA chez ${selectedAgent.fullname}`
+    })
+    
+    return true
+  }
+
+  const handleWithdraw = async (e) => {
+    e.preventDefault()
+    
+    if (!prepareWithdraw()) return
+    
+    if (!hasPin) {
+      setShowPinModal(true)
+    } else {
+      setShowPinModal(true)
+    }
+  }
+
+  const processWithdraw = async () => {
+    if (!pendingWithdraw) return
     
     setLoading(true)
     
     try {
       const token = localStorage.getItem('accessToken')
       const response = await axios.post('/api/withdraw', {
-        amount: amountNum,
-        agent_id: selectedAgent.id,
-        agent_phone: selectedAgent.phone,
-        description: `Retrait de ${amountNum} FCFA chez ${selectedAgent.fullname}`
+        amount: pendingWithdraw.amount,
+        agent_id: pendingWithdraw.agent_id,
+        agent_phone: pendingWithdraw.agent_phone,
+        description: pendingWithdraw.description
       }, {
         headers: { Authorization: `Bearer ${token}` }
       })
       
       const { fee, netAmount } = calculateFees()
       
-      // Mettre à jour le solde localement
-      setBalance(prev => prev - amountNum)
+      setBalance(prev => prev - pendingWithdraw.amount)
       
       setTransactionData({
         reference: response.data.reference || `WDR-${Date.now()}`,
-        amount: amountNum,
+        amount: pendingWithdraw.amount,
         fee: fee,
         netAmount: netAmount,
-        agent_name: selectedAgent.fullname,
-        agent_phone: selectedAgent.phone,
+        agent_name: pendingWithdraw.agent_name,
+        agent_phone: pendingWithdraw.agent_phone,
         status: 'completed',
         type: 'withdraw',
         date: new Date().toISOString(),
-        new_balance: balance - amountNum
+        new_balance: balance - pendingWithdraw.amount
       })
       
       setNotificationType('success')
@@ -194,6 +234,7 @@ function Withdraw({ user, socket }) {
       
       setAmount('')
       setSelectedAgent(null)
+      setPendingWithdraw(null)
       
     } catch (error) {
       console.error('Erreur retrait:', error)
@@ -244,85 +285,61 @@ function Withdraw({ user, socket }) {
   const TransactionNotification = () => {
     if (notificationType === 'success') {
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
-          <div className="relative max-w-md w-full bg-gradient-to-br from-green-900 to-green-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-green-400 animate-pulse"></div>
-            
-            <div className="text-center pt-6 pb-2">
-              <div className="inline-flex p-3 bg-green-500/20 rounded-full mb-3 animate-bounce">
-                <FaCheckCircle className="text-green-400 text-5xl" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="relative max-w-md w-full bg-green-800 rounded-2xl shadow-2xl">
+            <div className="p-6">
+              <div className="text-center mb-4">
+                <div className="inline-flex p-3 bg-green-500/20 rounded-full mb-3">
+                  <FaCheckCircle className="text-green-400 text-4xl" />
+                </div>
+                <h2 className="text-xl font-bold text-white">Retrait effectué !</h2>
+                <p className="text-green-200 text-sm mt-1">
+                  {formatAmount(transactionData?.netAmount)} retirés
+                </p>
               </div>
-              <h2 className="text-2xl font-bold text-white">Retrait effectué !</h2>
-              <p className="text-green-200 text-sm mt-1">
-                {formatAmount(transactionData?.netAmount)} retirés
-              </p>
-            </div>
 
-            <div className="bg-white/10 mx-4 rounded-xl p-4 mb-4">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Référence</span>
-                  <span className="text-white text-xs font-mono">{transactionData?.reference}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Agent</span>
-                  <span className="text-white text-sm">{transactionData?.agent_name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Téléphone agent</span>
-                  <span className="text-white text-sm">{transactionData?.agent_phone}</span>
-                </div>
-                <div className="border-t border-white/20 my-2"></div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Montant retiré</span>
-                  <span className="text-white font-bold">{formatAmount(transactionData?.amount)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-sm">Frais ({WITHDRAWAL_FEE}%)</span>
-                  <span className="text-yellow-300">{formatAmount(transactionData?.fee)}</span>
-                </div>
-                <div className="flex justify-between pt-2 border-t border-white/20">
-                  <span className="text-white font-semibold">Net reçu</span>
-                  <span className="text-white font-bold text-lg">{formatAmount(transactionData?.netAmount)}</span>
+              <div className="bg-white/10 rounded-lg p-3 mb-4">
+                <div className="space-y-1 text-sm">
+                  <p className="text-white/60">Référence: {transactionData?.reference}</p>
+                  <p className="text-white/60">Agent: {transactionData?.agent_name}</p>
+                  <p className="text-white/60">Téléphone: {transactionData?.agent_phone}</p>
+                  <div className="border-t border-white/20 my-2"></div>
+                  <p className="text-white/60">Montant retiré: {formatAmount(transactionData?.amount)}</p>
+                  <p className="text-yellow-300">Frais: {formatAmount(transactionData?.fee)}</p>
+                  <p className="text-white font-bold mt-1">Net reçu: {formatAmount(transactionData?.netAmount)}</p>
+                  <div className="border-t border-white/20 my-2"></div>
+                  <p className="text-white">Nouveau solde: {formatAmount(transactionData?.new_balance)}</p>
                 </div>
               </div>
-            </div>
 
-            <div className="mx-4 mb-4 p-3 bg-white/10 rounded-xl text-center">
-              <p className="text-white/60 text-xs">Nouveau solde</p>
-              <p className="text-white font-bold text-xl">{formatAmount(transactionData?.new_balance)}</p>
-            </div>
-
-            <div className="px-4 pb-4">
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <button onClick={() => window.print()} className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-sm">
-                  <FaDownload /> Reçu
+              <div className="flex gap-2 mb-3">
+                <button onClick={() => window.print()} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaDownload className="inline mr-1" /> Reçu
                 </button>
                 <button onClick={() => {
-                  const message = `🏦 *CASHPAYS - Retrait effectué* ✅\n\n📋 Référence: ${transactionData?.reference}\n💰 Montant: ${formatAmount(transactionData?.amount)}\n📊 Frais (${WITHDRAWAL_FEE}%): ${formatAmount(transactionData?.fee)}\n💰 Net reçu: ${formatAmount(transactionData?.netAmount)}\n👤 Agent: ${transactionData?.agent_name}\n📅 Date: ${formatDate(new Date())}\n\n✅ Statut: COMPLÉTÉ`
+                  const message = `🏦 CASHPAYS - Retrait effectué ✅\n\n💰 Montant: ${formatAmount(transactionData?.amount)}\n📊 Frais: ${formatAmount(transactionData?.fee)}\n💰 Net: ${formatAmount(transactionData?.netAmount)}\n👤 Agent: ${transactionData?.agent_name}`
                   window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
-                }} className="flex items-center justify-center gap-2 bg-[#25d366]/20 hover:bg-[#25d366]/30 text-white py-2 rounded-xl text-sm">
-                  <FaWhatsapp /> Partager
+                }} className="flex-1 bg-[#25d366]/20 text-white py-2 rounded-lg text-sm">
+                  <FaWhatsapp className="inline mr-1" /> Partager
                 </button>
               </div>
               
-              <div className="grid grid-cols-3 gap-2">
-                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
-                  <FaHome size={14} /> Accueil
+              <div className="flex gap-2">
+                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaHome className="inline mr-1" /> Accueil
                 </button>
-                <button onClick={() => { setShowNotification(false); setAmount(''); setSelectedAgent(null) }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
-                  <FaArrowRight size={14} /> Nouveau
+                <button onClick={() => { setShowNotification(false); setAmount(''); setSelectedAgent(null) }} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaArrowRight className="inline mr-1" /> Nouveau
                 </button>
-                <button onClick={() => { setShowNotification(false); navigate('/history') }} className="flex flex-col items-center gap-1 bg-white/10 hover:bg-white/20 text-white py-2 rounded-xl text-xs">
-                  <FaHistory size={14} /> Historique
+                <button onClick={() => { setShowNotification(false); navigate('/history') }} className="flex-1 bg-white/20 text-white py-2 rounded-lg text-sm">
+                  <FaHistory className="inline mr-1" /> Historique
                 </button>
               </div>
-            </div>
 
-            <div className="text-center py-2 bg-black/20">
-              <p className="text-white/40 text-xs">Fermeture dans {countdown} seconde{countdown > 1 ? 's' : ''}...</p>
+              <div className="text-center mt-3">
+                <p className="text-white/40 text-xs">Fermeture dans {countdown} secondes...</p>
+              </div>
             </div>
-
             <button onClick={() => setShowNotification(false)} className="absolute top-4 right-4 text-white/40 hover:text-white">
               <FaTimes />
             </button>
@@ -333,29 +350,26 @@ function Withdraw({ user, socket }) {
 
     if (notificationType === 'error') {
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
-          <div className="relative max-w-md w-full bg-gradient-to-br from-red-900 to-red-800 rounded-2xl shadow-2xl overflow-hidden">
-            <div className="text-center pt-6 pb-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="relative max-w-md w-full bg-red-800 rounded-2xl shadow-2xl">
+            <div className="p-6 text-center">
               <div className="inline-flex p-3 bg-red-500/20 rounded-full mb-3">
-                <FaExclamationTriangle className="text-red-400 text-5xl" />
+                <FaExclamationTriangle className="text-red-400 text-4xl" />
               </div>
-              <h2 className="text-2xl font-bold text-white">Retrait échoué</h2>
-              <p className="text-red-200 text-sm mt-1">{transactionData?.error}</p>
+              <h2 className="text-xl font-bold text-white mb-2">Retrait échoué</h2>
+              <p className="text-red-200 text-sm">{transactionData?.error}</p>
+              <div className="bg-white/10 rounded-lg p-3 my-4">
+                <p className="text-red-300 text-sm">{transactionData?.suggestion}</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setShowNotification(false)} className="flex-1 bg-white/20 text-white py-2 rounded-lg">
+                  Réessayer
+                </button>
+                <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 bg-white text-red-800 py-2 rounded-lg font-semibold">
+                  Retour
+                </button>
+              </div>
             </div>
-
-            <div className="bg-white/10 mx-4 rounded-xl p-4 mb-4">
-              <p className="text-red-300 text-sm">{transactionData?.suggestion || 'Vérifiez votre solde ou réessayez plus tard.'}</p>
-            </div>
-
-            <div className="p-4 flex gap-3">
-              <button onClick={() => setShowNotification(false)} className="flex-1 btn-primary">
-                Réessayer
-              </button>
-              <button onClick={() => { setShowNotification(false); navigate('/dashboard') }} className="flex-1 btn-secondary">
-                Retour
-              </button>
-            </div>
-
             <button onClick={() => setShowNotification(false)} className="absolute top-4 right-4 text-white/40 hover:text-white">
               <FaTimes />
             </button>
@@ -365,6 +379,16 @@ function Withdraw({ user, socket }) {
     }
 
     return null
+  }
+
+  if (checkingPin) {
+    return (
+      <Layout user={user}>
+        <div className="flex justify-center items-center h-64">
+          <div className="w-12 h-12 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+        </div>
+      </Layout>
+    )
   }
 
   return (
@@ -380,8 +404,7 @@ function Withdraw({ user, socket }) {
             <p className="text-white/50 text-sm">Retirez de l'argent chez un agent CashPays</p>
           </div>
 
-          {/* Solde disponible */}
-          <div className={`rounded-xl p-4 mb-6 text-center transition-all duration-300 ${
+          <div className={`rounded-xl p-4 mb-6 text-center ${
             balance < WITHDRAWAL_MIN 
               ? 'bg-red-500/20 border border-red-500/30' 
               : balance < 10000 
@@ -403,7 +426,7 @@ function Withdraw({ user, socket }) {
                 </p>
                 {balance < WITHDRAWAL_MIN && (
                   <p className="text-red-400/70 text-xs mt-2">
-                    ⚠️ Solde insuffisant pour un retrait (minimum {WITHDRAWAL_MIN} FCFA)
+                    ⚠️ Solde insuffisant pour un retrait
                   </p>
                 )}
               </>
@@ -430,44 +453,9 @@ function Withdraw({ user, socket }) {
                 <p className="text-white/40 text-xs">
                   Minimum: {WITHDRAWAL_MIN.toLocaleString()} FCFA | Frais: {WITHDRAWAL_FEE}%
                 </p>
-                <p className="text-white/40 text-xs">
-                  Max: {formatAmount(Math.min(balance, WITHDRAWAL_MAX))}
-                </p>
+                <p className="text-white/40 text-xs">Max: {formatAmount(Math.min(balance, WITHDRAWAL_MAX))}</p>
               </div>
             </div>
-
-            {amount && parseInt(amount) >= WITHDRAWAL_MIN && (
-              <div className="bg-white/5 rounded-xl p-4 space-y-2">
-                <div className="flex justify-between text-white/80">
-                  <span>Montant demandé</span>
-                  <span>{formatAmount(parseInt(amount))}</span>
-                </div>
-                <div className="flex justify-between text-white/60 text-sm">
-                  <span>Frais ({WITHDRAWAL_FEE}%)</span>
-                  <span className={fee > 0 ? 'text-yellow-400' : 'text-white/40'}>
-                    {formatAmount(fee)}
-                  </span>
-                </div>
-                <div className="border-t border-white/20 pt-2 flex justify-between text-white font-bold">
-                  <span>Net à recevoir</span>
-                  <span className="text-green-400">{formatAmount(netAmount)}</span>
-                </div>
-                {parseInt(amount) > balance && (
-                  <div className="bg-red-500/20 rounded-lg p-2 mt-2">
-                    <p className="text-red-400 text-xs text-center">
-                      ❌ Montant supérieur au solde disponible
-                    </p>
-                  </div>
-                )}
-                {parseInt(amount) > WITHDRAWAL_MAX && (
-                  <div className="bg-red-500/20 rounded-lg p-2 mt-2">
-                    <p className="text-red-400 text-xs text-center">
-                      ❌ Montant supérieur à la limite maximum de {WITHDRAWAL_MAX.toLocaleString()} FCFA
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
 
             {selectedAgent && (
               <div className="bg-yellow-500/10 rounded-xl p-4 border border-yellow-500/20">
@@ -489,6 +477,34 @@ function Withdraw({ user, socket }) {
               </div>
             )}
 
+            {amount && parseInt(amount) >= WITHDRAWAL_MIN && (
+              <div className="bg-white/5 rounded-xl p-4 space-y-2">
+                <div className="flex justify-between text-white/80">
+                  <span>Montant demandé</span>
+                  <span>{formatAmount(parseInt(amount))}</span>
+                </div>
+                <div className="flex justify-between text-white/60 text-sm">
+                  <span>Frais ({WITHDRAWAL_FEE}%)</span>
+                  <span className={fee > 0 ? 'text-yellow-400' : 'text-white/40'}>
+                    {formatAmount(fee)}
+                  </span>
+                </div>
+                <div className="border-t border-white/20 pt-2 flex justify-between text-white font-bold">
+                  <span>Net à recevoir</span>
+                  <span className="text-green-400">{formatAmount(netAmount)}</span>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-blue-500/10 rounded-xl p-3 flex items-center gap-2">
+              <FaShieldAlt className="text-blue-400" />
+              <p className="text-blue-300 text-xs">
+                {hasPin 
+                  ? '🔐 Vos opérations sont sécurisées par votre code PIN' 
+                  : '🔒 Définissez votre code PIN pour sécuriser vos transactions'}
+              </p>
+            </div>
+
             <button
               type="submit"
               disabled={loading || !selectedAgent || !isAmountValid()}
@@ -506,8 +522,7 @@ function Withdraw({ user, socket }) {
 
           <div className="mt-4 p-3 bg-yellow-500/10 rounded-xl">
             <p className="text-yellow-300 text-xs flex items-center gap-2">
-              <FaInfoCircle /> Les retraits sont soumis à des frais de {WITHDRAWAL_FEE}%. 
-              Présentez-vous chez l'agent avec votre téléphone et votre pièce d'identité.
+              <FaInfoCircle /> Frais de {WITHDRAWAL_FEE}%. Présentez-vous chez l'agent avec votre téléphone.
             </p>
           </div>
         </div>
@@ -582,6 +597,22 @@ function Withdraw({ user, socket }) {
           )}
         </div>
       </div>
+
+      {showPinModal && (
+        <PinModal
+          isOpen={showPinModal}
+          onClose={() => {
+            setShowPinModal(false)
+            setPendingWithdraw(null)
+          }}
+          onSuccess={() => {
+            setHasPin(true)
+            processWithdraw()
+          }}
+          type={hasPin ? 'verify' : 'set'}
+          amount={pendingWithdraw?.amount}
+        />
+      )}
 
       {showNotification && <TransactionNotification />}
     </Layout>

@@ -1,4 +1,4 @@
-// src/components/Layout.jsx - Version stable sans erreur DOM
+// src/components/Layout.jsx - Version corrigée avec scroll sidebar et settings activé
 import React, { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { 
@@ -34,7 +34,7 @@ function Layout({ user, children, socket }) {
   const [copied, setCopied] = useState(false)
   const [generating, setGenerating] = useState(false)
 
-  // Navigation items
+  // ✅ Navigation items avec Settings inclus
   const navItems = [
     { path: '/dashboard', icon: FaHome, label: 'Accueil' },
     { path: '/transfer', icon: FaExchangeAlt, label: 'Transfert' },
@@ -42,7 +42,7 @@ function Layout({ user, children, socket }) {
     { path: '/withdraw', icon: FaMoneyBillWave, label: 'Retrait' },
     { path: '/history', icon: FaHistory, label: 'Historique' },
     { path: '/profile', icon: FaUser, label: 'Profil' },
-    { path: '/settings', icon: FaCog, label: 'Paramètres' },
+    { path: '/settings', icon: FaCog, label: 'Paramètres' }, // ✅ Settings activé
     { path: '/announcements', icon: FaBullhorn, label: 'Annonces' },
   ]
 
@@ -75,20 +75,11 @@ function Layout({ user, children, socket }) {
     if (socket) {
       socket.on('notification', (notification) => {
         console.log('📢 Nouvelle notification reçue:', notification)
-        toast.custom((t) => (
-          <div key={t.id} className={`${t.visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-[-100%]'} transition-all duration-300 max-w-md w-full bg-gradient-to-r from-blue-900 to-blue-800 rounded-xl shadow-2xl p-4 border-l-4 border-blue-500`}>
-            <div className="flex items-start gap-3">
-              <div className="text-2xl">🔔</div>
-              <div className="flex-1">
-                <p className="text-white font-semibold">{notification.title}</p>
-                <p className="text-white/70 text-sm">{notification.message}</p>
-              </div>
-              <button onClick={() => toast.dismiss(t.id)} className="text-white/40 hover:text-white">
-                <FaTimes />
-              </button>
-            </div>
-          </div>
-        ), { duration: 5000 })
+        toast.success(notification.message, {
+          duration: 5000,
+          position: 'top-right',
+          icon: '🔔'
+        })
       })
       
       socket.on('transaction_update', () => fetchBalance())
@@ -236,7 +227,7 @@ function Layout({ user, children, socket }) {
       <header className={`sticky top-0 z-40 border-b ${isDark ? 'bg-blue-900/80 border-white/10' : 'bg-white/90 border-gray-200'} backdrop-blur-md`}>
         <div className="container mx-auto px-4 py-3">
           <div className="flex justify-between items-center">
-            <Link to="/dashboard" className="flex items-center gap-2 group">
+            <Link to="/home" className="flex items-center gap-2 group">
               <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-2 rounded-xl group-hover:scale-105 transition-transform">
                 <FaMoneyBillWave className="text-white text-xl" />
               </div>
@@ -336,15 +327,7 @@ function Layout({ user, children, socket }) {
       <nav className={`fixed bottom-0 left-0 right-0 border-t z-40 md:hidden ${isDark ? 'bg-blue-900/95 border-white/10' : 'bg-white/95 border-gray-200'} backdrop-blur-lg`}>
         <div className="container mx-auto px-2">
           <div className="flex justify-around py-2">
-            {navItems.slice(0, 5).map((item) => (
-              <Link key={item.path} to={item.path} className={`flex flex-col items-center py-2 px-3 rounded-lg ${isActiveLink(item.path) ? 'text-blue-400' : isDark ? 'text-white/50' : 'text-gray-500'}`}>
-                <item.icon className="text-xl" />
-                <span className="text-xs mt-1">{item.label}</span>
-              </Link>
-            ))}
-          </div>
-          <div className="flex justify-around py-2 border-t border-white/10 pt-2">
-            {navItems.slice(5).map((item) => (
+            {navItems.slice(0, 4).map((item) => (
               <Link key={item.path} to={item.path} className={`flex flex-col items-center py-2 px-3 rounded-lg ${isActiveLink(item.path) ? 'text-blue-400' : isDark ? 'text-white/50' : 'text-gray-500'}`}>
                 <item.icon className="text-xl" />
                 <span className="text-xs mt-1">{item.label}</span>
@@ -354,10 +337,11 @@ function Layout({ user, children, socket }) {
         </div>
       </nav>
 
-      {/* Sidebar Desktop */}
+      {/* ✅ Sidebar Desktop AVEC SCROLL */}
       <aside className={`hidden md:block fixed left-0 top-[73px] bottom-0 w-64 border-r z-30 ${isDark ? 'bg-blue-900/40 border-white/10' : 'bg-white/80 border-gray-200'} backdrop-blur-sm`}>
         <div className="p-4 h-full flex flex-col">
-          <div className={`mb-6 p-3 rounded-xl ${isDark ? 'bg-white/5' : 'bg-gray-100'}`}>
+          {/* User info - fixe en haut */}
+          <div className={`mb-6 p-3 rounded-xl flex-shrink-0 ${isDark ? 'bg-white/5' : 'bg-gray-100'}`}>
             <div className="flex items-center gap-3">
               <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-2 rounded-full">
                 <FaUser className="text-white" />
@@ -377,16 +361,31 @@ function Layout({ user, children, socket }) {
             )}
           </div>
 
-          <div className="flex-1 space-y-1">
+          {/* ✅ Navigation items avec SCROLL */}
+          <div className="flex-1 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
             {navItems.map((item) => (
-              <Link key={item.path} to={item.path} className={`flex items-center gap-3 px-4 py-3 rounded-lg ${isActiveLink(item.path) ? 'bg-blue-600 text-white' : isDark ? 'text-white/70 hover:bg-white/10' : 'text-gray-600 hover:bg-gray-100'}`}>
+              <Link
+                key={item.path}
+                to={item.path}
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                  isActiveLink(item.path)
+                    ? 'bg-blue-600 text-white'
+                    : isDark ? 'text-white/70 hover:bg-white/10' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
                 <item.icon />
                 <span>{item.label}</span>
               </Link>
             ))}
           </div>
 
-          <button onClick={handleLogout} className={`w-full flex items-center gap-3 px-4 py-3 mt-6 rounded-lg ${isDark ? 'text-white/50 hover:bg-white/10' : 'text-gray-500 hover:bg-gray-100'}`}>
+          {/* Logout - fixe en bas */}
+          <button
+            onClick={handleLogout}
+            className={`w-full flex items-center gap-3 px-4 py-3 mt-6 rounded-lg flex-shrink-0 ${
+              isDark ? 'text-white/50 hover:bg-white/10' : 'text-gray-500 hover:bg-gray-100'
+            }`}
+          >
             <FaSignOutAlt />
             <span>Déconnexion</span>
           </button>
@@ -399,7 +398,7 @@ function Layout({ user, children, socket }) {
       {mobileMenuOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div className={`absolute inset-0 ${isDark ? 'bg-black/60' : 'bg-black/30'}`} onClick={() => setMobileMenuOpen(false)} />
-          <div className={`absolute right-0 top-0 bottom-0 w-64 shadow-xl p-4 ${isDark ? 'bg-blue-900' : 'bg-white'}`}>
+          <div className={`absolute right-0 top-0 bottom-0 w-64 shadow-xl p-4 overflow-y-auto ${isDark ? 'bg-blue-900' : 'bg-white'}`}>
             <div className="flex justify-between items-center mb-6">
               <h3 className={`font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Menu</h3>
               <button onClick={() => setMobileMenuOpen(false)} className={isDark ? 'text-white/60' : 'text-gray-500'}>

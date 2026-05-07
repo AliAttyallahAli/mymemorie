@@ -1,6 +1,6 @@
 // src/pages/Settings.jsx
 import React, { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'  // ← AJOUTER Link ici
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { 
@@ -8,14 +8,44 @@ import {
   FaMoneyBillWave, FaShieldAlt, FaPalette, FaMobile, 
   FaExchangeAlt, FaDatabase, FaSave, FaUndo, FaKey,
   FaEnvelope, FaSms, FaMoon, FaSun, FaQrcode, FaFingerprint,
-  FaChartLine, FaPercent, FaMinusCircle, FaPlusCircle
+  FaChartLine, FaPercent, FaMinusCircle, FaPlusCircle,
+  FaDownload, FaWhatsapp, FaCopy, FaShare, FaLockOpen,
+  FaClock, FaCheckCircle, FaExclamationTriangle, FaChevronRight
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 
 function Settings({ user }) {
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState('profile')
   const [loading, setLoading] = useState(false)
   const [provinces, setProvinces] = useState([])
+  
+  // États pour le QR code dynamique
+  const [qrAmount, setQrAmount] = useState('')
+  const [qrDescription, setQrDescription] = useState('')
+  const [qrGenerated, setQrGenerated] = useState(false)
+  const [qrImageUrl, setQrImageUrl] = useState('')
+  const [paymentLink, setPaymentLink] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [copied, setCopied] = useState(false)
+  
+  // États pour le PIN de transaction
+  const [transactionPin, setTransactionPin] = useState({
+    currentPin: '',
+    newPin: '',
+    confirmPin: '',
+    isPinSet: false
+  })
+  const [showPinModal, setShowPinModal] = useState(false)
+  const [pinMode, setPinMode] = useState('create')
+  const [pinError, setPinError] = useState('')
+  const [pinSuccess, setPinSuccess] = useState('')
+  const [resetRequestSent, setResetRequestSent] = useState(false)
+  const [resetReason, setResetReason] = useState('')
+  const [showResetModal, setShowResetModal] = useState(false)
+  
+  // États pour la 2FA
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false)
   
   // États des différents paramètres
   const [profileData, setProfileData] = useState({
@@ -70,6 +100,8 @@ function Settings({ user }) {
     fetchProvinces()
     fetchUserProfile()
     fetchUserPreferences()
+    fetchTransactionPinStatus()
+    fetch2FAStatus()
     if (user?.role === 'admin') {
       fetchAppSettings()
     }
@@ -105,6 +137,33 @@ function Settings({ user }) {
     }
   }
 
+  const fetchTransactionPinStatus = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/user/pin-status', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setTransactionPin(prev => ({
+        ...prev,
+        isPinSet: response.data.isPinSet || false
+      }))
+    } catch (error) {
+      console.error('Erreur chargement statut PIN:', error)
+    }
+  }
+
+  const fetch2FAStatus = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.get('/api/user/2fa/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setTwoFactorEnabled(response.data.enabled || false)
+    } catch (error) {
+      console.error('Erreur chargement statut 2FA:', error)
+    }
+  }
+
   const fetchUserPreferences = async () => {
     try {
       const token = localStorage.getItem('accessToken')
@@ -116,7 +175,6 @@ function Settings({ user }) {
         setPreferences(prev => ({ ...prev, ...response.data }))
       }
       
-      // Charger le thème depuis localStorage
       const savedTheme = localStorage.getItem('theme')
       if (savedTheme) {
         setPreferences(prev => ({ ...prev, theme: savedTheme }))
@@ -153,7 +211,6 @@ function Settings({ user }) {
         headers: { Authorization: `Bearer ${token}` }
       })
       toast.success('Profil mis à jour avec succès')
-      // Mettre à jour l'utilisateur dans localStorage
       const savedUser = JSON.parse(localStorage.getItem('user') || '{}')
       savedUser.fullname = profileData.fullname
       localStorage.setItem('user', JSON.stringify(savedUser))
@@ -193,6 +250,114 @@ function Settings({ user }) {
     }
   }
 
+  // ========== FONCTIONS PIN DE TRANSACTION ==========
+  
+  const handleCreatePin = async (e) => {
+    e.preventDefault()
+    setPinError('')
+    setPinSuccess('')
+    
+    if (transactionPin.newPin.length !== 4 || !/^\d{4}$/.test(transactionPin.newPin)) {
+      setPinError('Le PIN doit contenir 4 chiffres')
+      return
+    }
+    
+    if (transactionPin.newPin !== transactionPin.confirmPin) {
+      setPinError('Les PIN ne correspondent pas')
+      return
+    }
+    
+    setLoading(true)
+    try {
+      const token = localStorage.getItem('accessToken')
+      await axios.post('/api/user/set-transaction-pin', {
+        pin: transactionPin.newPin
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      setPinSuccess('PIN de transaction créé avec succès !')
+      toast.success('PIN de transaction créé')
+      setShowPinModal(false)
+      fetchTransactionPinStatus()
+      setTransactionPin({ currentPin: '', newPin: '', confirmPin: '', isPinSet: true })
+      
+    } catch (error) {
+      setPinError(error.response?.data?.error || 'Erreur lors de la création du PIN')
+    } finally {
+      setLoading(false)
+    }
+  }
+  
+  const handleChangePin = async (e) => {
+    e.preventDefault()
+    setPinError('')
+    setPinSuccess('')
+    
+    if (!transactionPin.currentPin || transactionPin.currentPin.length !== 4) {
+      setPinError('Veuillez entrer votre PIN actuel')
+      return
+    }
+    
+    if (transactionPin.newPin.length !== 4 || !/^\d{4}$/.test(transactionPin.newPin)) {
+      setPinError('Le nouveau PIN doit contenir 4 chiffres')
+      return
+    }
+    
+    if (transactionPin.newPin !== transactionPin.confirmPin) {
+      setPinError('Les nouveaux PIN ne correspondent pas')
+      return
+    }
+    
+    setLoading(true)
+    try {
+      const token = localStorage.getItem('accessToken')
+      await axios.post('/api/user/change-transaction-pin', {
+        currentPin: transactionPin.currentPin,
+        newPin: transactionPin.newPin
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      setPinSuccess('PIN de transaction modifié avec succès !')
+      toast.success('PIN modifié')
+      setShowPinModal(false)
+      setTransactionPin({ currentPin: '', newPin: '', confirmPin: '', isPinSet: true })
+      
+    } catch (error) {
+      setPinError(error.response?.data?.error || 'Erreur lors du changement de PIN')
+    } finally {
+      setLoading(false)
+    }
+  }
+  
+  const handleResetPinRequest = async () => {
+    if (!resetReason.trim()) {
+      toast.error('Veuillez indiquer une raison')
+      return
+    }
+    
+    setLoading(true)
+    try {
+      const token = localStorage.getItem('accessToken')
+      await axios.post('/api/user/request-pin-reset', {
+        reason: resetReason
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      setResetRequestSent(true)
+      toast.success('Demande de réinitialisation envoyée. L\'administrateur vous contactera.')
+      setShowResetModal(false)
+      setResetReason('')
+      
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erreur lors de la demande')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const updatePreferences = async () => {
     setLoading(true)
     try {
@@ -201,7 +366,6 @@ function Settings({ user }) {
         headers: { Authorization: `Bearer ${token}` }
       })
       
-      // Appliquer le thème
       document.documentElement.classList.toggle('light', preferences.theme === 'light')
       localStorage.setItem('theme', preferences.theme)
       
@@ -241,6 +405,88 @@ function Settings({ user }) {
         allowInternationalTransfer: false
       })
       toast.success('Paramètres réinitialisés')
+    }
+  }
+
+  // ========== FONCTIONS QR CODE DYNAMIQUE ==========
+  const generatePaymentLink = () => {
+    const amountNum = parseInt(qrAmount)
+    if (amountNum && amountNum < 25) {
+      toast.error('Le montant minimum est de 25 FCFA')
+      return null
+    }
+    
+    const params = new URLSearchParams()
+    if (user?.phone) params.append('phone', user.phone)
+    if (amountNum) params.append('amount', amountNum)
+    if (qrDescription) params.append('description', qrDescription)
+    
+    return `${window.location.origin}/transfer?${params.toString()}`
+  }
+
+  const generateDynamicQR = async () => {
+    const link = generatePaymentLink()
+    if (!link) return
+    
+    setGenerating(true)
+    
+    try {
+      const encodedLink = encodeURIComponent(link)
+      const qrApiUrl = `https://quickchart.io/qr?text=${encodedLink}&size=250&margin=2`
+      
+      const response = await fetch(qrApiUrl)
+      if (response.ok) {
+        setPaymentLink(link)
+        setQrImageUrl(qrApiUrl)
+        setQrGenerated(true)
+        toast.success('QR code généré avec succès !')
+      } else {
+        throw new Error('Erreur génération QR code')
+      }
+    } catch (error) {
+      console.error('Erreur:', error)
+      toast.error('Erreur lors de la génération')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const resetQRGenerator = () => {
+    setQrGenerated(false)
+    setQrAmount('')
+    setQrDescription('')
+    setQrImageUrl('')
+    setPaymentLink('')
+  }
+
+  const copyToClipboard = (text) => {
+    if (!text) return
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    toast.success('Lien copié !')
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const shareViaWhatsApp = () => {
+    if (!paymentLink) return
+    const message = `💰 *Demande de paiement CashPays*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
+  }
+
+  const shareViaEmail = () => {
+    if (!paymentLink) return
+    const subject = 'Demande de paiement CashPays'
+    const body = `Bonjour,\n\nLien de paiement: ${paymentLink}\n\nMerci !`
+    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+  }
+
+  const downloadQRCode = () => {
+    if (qrImageUrl) {
+      const link = document.createElement('a')
+      link.download = `cashpays-payment-${user?.phone}.png`
+      link.href = qrImageUrl
+      link.click()
+      toast.success('QR code téléchargé')
     }
   }
 
@@ -365,9 +611,9 @@ function Settings({ user }) {
         {/* Tab Sécurité */}
         {activeTab === 'security' && (
           <div className="space-y-6 max-w-2xl">
+            {/* Changer le mot de passe */}
             <form onSubmit={updatePassword} className="space-y-4">
               <h3 className="text-white text-lg font-semibold">Changer le mot de passe</h3>
-              
               <div>
                 <label className="label">Mot de passe actuel</label>
                 <input
@@ -378,7 +624,6 @@ function Settings({ user }) {
                   required
                 />
               </div>
-              
               <div>
                 <label className="label">Nouveau mot de passe</label>
                 <input
@@ -389,7 +634,6 @@ function Settings({ user }) {
                   required
                 />
               </div>
-              
               <div>
                 <label className="label">Confirmer le nouveau mot de passe</label>
                 <input
@@ -400,21 +644,109 @@ function Settings({ user }) {
                   required
                 />
               </div>
-              
               <button type="submit" disabled={loading} className="btn-primary">
                 Changer le mot de passe
               </button>
             </form>
-            
+
+            {/* Authentification à deux facteurs - AVEC LIEN VERS 2FA */}
             <div className="border-t border-white/10 pt-6">
-              <h3 className="text-white text-lg font-semibold mb-4">Authentification à deux facteurs</h3>
-              <div className="bg-yellow-500/10 rounded-xl p-4">
-                <p className="text-yellow-400 text-sm">
-                  🔐 Bientôt disponible : Sécurisez votre compte avec l'authentification à deux facteurs.
-                </p>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-white text-lg font-semibold">Authentification à deux facteurs</h3>
+                <Link 
+                  to="/settings/2fa" 
+                  className="text-blue-400 text-sm hover:text-blue-300 flex items-center gap-1"
+                >
+                  Configurer <FaChevronRight size={12} />
+                </Link>
+              </div>
+              <div className={`rounded-xl p-4 ${twoFactorEnabled ? 'bg-green-500/10 border border-green-500/30' : 'bg-yellow-500/10 border border-yellow-500/30'}`}>
+                <div className="flex items-center gap-3">
+                  <FaShieldAlt className={`text-xl ${twoFactorEnabled ? 'text-green-400' : 'text-yellow-400'}`} />
+                  <div>
+                    <p className="text-white font-medium">
+                      {twoFactorEnabled ? '2FA activée' : '2FA désactivée'}
+                    </p>
+                    <p className="text-white/50 text-xs">
+                      {twoFactorEnabled 
+                        ? 'Votre compte est protégé par double authentification'
+                        : 'Activez la 2FA pour plus de sécurité'}
+                    </p>
+                  </div>
+                  {twoFactorEnabled && <FaCheckCircle className="text-green-400 ml-auto" />}
+                </div>
+              </div>
+            </div>
+
+            {/* Section PIN de transaction */}
+            <div className="border-t border-white/10 pt-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-white text-lg font-semibold">PIN de transaction</h3>
+                <div className="flex gap-2">
+                  {transactionPin.isPinSet && (
+                    <button
+                      onClick={() => {
+                        setPinMode('change')
+                        setShowPinModal(true)
+                        setPinError('')
+                        setPinSuccess('')
+                        setTransactionPin({ currentPin: '', newPin: '', confirmPin: '', isPinSet: true })
+                      }}
+                      className="text-blue-400 text-sm hover:text-blue-300"
+                    >
+                      Modifier le PIN
+                    </button>
+                  )}
+                  {!transactionPin.isPinSet && (
+                    <button
+                      onClick={() => {
+                        setPinMode('create')
+                        setShowPinModal(true)
+                        setPinError('')
+                        setPinSuccess('')
+                      }}
+                      className="btn-primary text-sm py-1 px-3"
+                    >
+                      Créer un PIN
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              <div className="bg-white/5 rounded-xl p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <FaLock className="text-blue-400" />
+                    <div>
+                      <p className="text-white font-medium">PIN de transaction</p>
+                      <p className="text-white/40 text-xs">
+                        {transactionPin.isPinSet 
+                          ? "✓ PIN activé - Utilisé pour sécuriser vos transactions" 
+                          : "PIN non défini - Activez-le pour plus de sécurité"}
+                      </p>
+                    </div>
+                  </div>
+                  {transactionPin.isPinSet ? (
+                    <FaCheckCircle className="text-green-400 text-xl" />
+                  ) : (
+                    <FaExclamationTriangle className="text-yellow-400 text-xl" />
+                  )}
+                </div>
+              </div>
+              
+              {/* Bouton PIN oublié */}
+              <div className="mt-3">
+                <button
+                  onClick={() => setShowResetModal(true)}
+                  className="text-yellow-400 text-sm hover:text-yellow-300 flex items-center gap-2"
+                >
+                  <FaLockOpen size={14} />
+                  PIN oublié ? Demander une réinitialisation
+                </button>
               </div>
             </div>
             
+            {/* Appareils connectés */}
             <div className="border-t border-white/10 pt-6">
               <h3 className="text-white text-lg font-semibold mb-4">Appareils connectés</h3>
               <div className="bg-white/5 rounded-xl p-4">
@@ -430,9 +762,163 @@ function Settings({ user }) {
           </div>
         )}
 
+        {/* MODAL PIN DE TRANSACTION */}
+        {showPinModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+            <div className="relative max-w-md w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl">
+              <div className="p-4 border-b border-white/10 flex justify-between items-center">
+                <h3 className="text-xl font-bold text-white">
+                  {pinMode === 'create' ? 'Créer un PIN de transaction' : 'Modifier le PIN'}
+                </h3>
+                <button
+                  onClick={() => setShowPinModal(false)}
+                  className="text-white/60 hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+              
+              <div className="p-6">
+                {pinSuccess && (
+                  <div className="bg-green-500/20 rounded-xl p-3 mb-4 flex items-center gap-2">
+                    <FaCheckCircle className="text-green-400" />
+                    <p className="text-green-400 text-sm">{pinSuccess}</p>
+                  </div>
+                )}
+                
+                {pinError && (
+                  <div className="bg-red-500/20 rounded-xl p-3 mb-4 flex items-center gap-2">
+                    <FaExclamationTriangle className="text-red-400" />
+                    <p className="text-red-400 text-sm">{pinError}</p>
+                  </div>
+                )}
+                
+                <form onSubmit={pinMode === 'create' ? handleCreatePin : handleChangePin} className="space-y-4">
+                  {pinMode === 'change' && (
+                    <div>
+                      <label className="label">PIN actuel</label>
+                      <input
+                        type="password"
+                        maxLength={4}
+                        pattern="\d{4}"
+                        value={transactionPin.currentPin}
+                        onChange={(e) => setTransactionPin({...transactionPin, currentPin: e.target.value})}
+                        className="input-field text-center text-2xl tracking-widest"
+                        placeholder="••••"
+                        required
+                      />
+                    </div>
+                  )}
+                  
+                  <div>
+                    <label className="label">
+                      {pinMode === 'create' ? 'Nouveau PIN' : 'Nouveau PIN'}
+                    </label>
+                    <input
+                      type="password"
+                      maxLength={4}
+                      pattern="\d{4}"
+                      value={transactionPin.newPin}
+                      onChange={(e) => setTransactionPin({...transactionPin, newPin: e.target.value})}
+                      className="input-field text-center text-2xl tracking-widest"
+                      placeholder="••••"
+                      required
+                    />
+                    <p className="text-white/40 text-xs mt-1">Code à 4 chiffres</p>
+                  </div>
+                  
+                  <div>
+                    <label className="label">Confirmer le PIN</label>
+                    <input
+                      type="password"
+                      maxLength={4}
+                      pattern="\d{4}"
+                      value={transactionPin.confirmPin}
+                      onChange={(e) => setTransactionPin({...transactionPin, confirmPin: e.target.value})}
+                      className="input-field text-center text-2xl tracking-widest"
+                      placeholder="••••"
+                      required
+                    />
+                  </div>
+                  
+                  <button type="submit" disabled={loading} className="btn-primary w-full">
+                    {loading ? 'Traitement...' : (pinMode === 'create' ? 'Créer le PIN' : 'Modifier le PIN')}
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DEMANDE RÉINITIALISATION PIN */}
+        {showResetModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+            <div className="relative max-w-md w-full bg-gradient-to-br from-yellow-900 to-yellow-800 rounded-2xl shadow-2xl">
+              <div className="p-4 border-b border-white/10 flex justify-between items-center">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                  <FaLockOpen className="text-yellow-400" />
+                  Demande de réinitialisation du PIN
+                </h3>
+                <button
+                  onClick={() => setShowResetModal(false)}
+                  className="text-white/60 hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+              
+              <div className="p-6">
+                <p className="text-white/80 text-sm mb-4">
+                  Vous avez oublié votre PIN de transaction ? Une demande sera envoyée à l'administrateur qui vous contactera après vérification de votre identité.
+                </p>
+                
+                <div className="bg-yellow-500/20 rounded-xl p-3 mb-4">
+                  <p className="text-yellow-300 text-xs flex items-center gap-2">
+                    <FaClock size={12} />
+                    Le traitement peut prendre quelques minutes.
+                  </p>
+                </div>
+                
+                <textarea
+                  value={resetReason}
+                  onChange={(e) => setResetReason(e.target.value)}
+                  className="input-field w-full mb-4"
+                  rows="3"
+                  placeholder="Raison de la demande (optionnel)..."
+                />
+                
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowResetModal(false)}
+                    className="flex-1 btn-secondary"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={handleResetPinRequest}
+                    disabled={loading}
+                    className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white py-2 rounded-lg font-semibold transition-all"
+                  >
+                    {loading ? 'Envoi...' : 'Envoyer la demande'}
+                  </button>
+                </div>
+                
+                {resetRequestSent && (
+                  <div className="mt-4 bg-green-500/20 rounded-xl p-3">
+                    <p className="text-green-400 text-sm text-center">
+                      ✓ Demande envoyée. L'administrateur vous contactera.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Tab Préférences */}
         {activeTab === 'preferences' && (
           <div className="space-y-6 max-w-2xl">
+            {/* Contenu existant */}
             <div>
               <label className="label">Langue</label>
               <select
@@ -516,6 +1002,7 @@ function Settings({ user }) {
         {/* Tab Notifications */}
         {activeTab === 'notifications' && (
           <div className="space-y-4 max-w-2xl">
+            {/* Contenu existant */}
             <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl">
               <div className="flex items-center gap-3">
                 <FaEnvelope className="text-blue-400" />
@@ -638,60 +1125,115 @@ function Settings({ user }) {
         {/* Tab QR Code */}
         {activeTab === 'qr' && (
           <div className="space-y-6 max-w-2xl">
-            <div className="text-center">
-              <div className="inline-block p-4 bg-white rounded-xl mb-4">
-                <img 
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=${qrSettings.qrSize}x${qrSettings.qrSize}&data=${encodeURIComponent(JSON.stringify({
-                    type: 'payment',
-                    recipient: user?.phone,
-                    amount: qrSettings.showAmountInQR ? '{{amount}}' : undefined
-                  }))}`}
-                  alt="QR Code"
-                  className="mx-auto"
-                />
+            {!qrGenerated ? (
+              <div className="space-y-4">
+                <div className="text-center mb-4">
+                  <div className="w-20 h-20 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center mb-3">
+                    <FaQrcode className="text-blue-400 text-3xl" />
+                  </div>
+                  <p className="text-white/60 text-sm">
+                    Générez un QR code pour recevoir un paiement
+                  </p>
+                </div>
+
+                <div>
+                  <label className="label">Montant (optionnel)</label>
+                  <input
+                    type="number"
+                    value={qrAmount}
+                    onChange={(e) => setQrAmount(e.target.value)}
+                    className="input-field"
+                    placeholder="Ex: 5000"
+                    min="25"
+                  />
+                  <p className="text-white/40 text-xs mt-1">Minimum: 25 FCFA</p>
+                </div>
+
+                <div>
+                  <label className="label">Description</label>
+                  <input
+                    type="text"
+                    value={qrDescription}
+                    onChange={(e) => setQrDescription(e.target.value)}
+                    className="input-field"
+                    placeholder="Ex: Paiement service"
+                  />
+                </div>
+
+                <button 
+                  onClick={generateDynamicQR} 
+                  disabled={generating}
+                  className="btn-primary w-full flex items-center justify-center gap-2"
+                >
+                  {generating ? 'Génération...' : 'Générer mon QR code'}
+                </button>
               </div>
-              <p className="text-white/60 text-sm">Scannez ce QR code pour recevoir un paiement</p>
-            </div>
-            
-            <div className="border-t border-white/10 pt-6">
-              <h3 className="text-white font-semibold mb-4">Personnalisation du QR code</h3>
-              
-              <div>
-                <label className="label">Taille du QR code</label>
-                <input
-                  type="range"
-                  min="100"
-                  max="400"
-                  value={qrSettings.qrSize}
-                  onChange={(e) => setQrSettings({...qrSettings, qrSize: parseInt(e.target.value)})}
-                  className="w-full"
-                />
-                <span className="text-white/60 text-sm">{qrSettings.qrSize}px</span>
-              </div>
-              
-              <div className="mt-4">
-                <label className="label">Afficher le montant dans le QR code</label>
-                <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl">
-                  <p className="text-white">Inclure un montant par défaut</p>
-                  <button
-                    onClick={() => setQrSettings({...qrSettings, showAmountInQR: !qrSettings.showAmountInQR})}
-                    className={`w-12 h-6 rounded-full transition-all ${
-                      qrSettings.showAmountInQR ? 'bg-blue-500' : 'bg-white/20'
-                    }`}
-                  >
-                    <div className={`w-5 h-5 rounded-full bg-white transition-all ${
-                      qrSettings.showAmountInQR ? 'translate-x-6' : 'translate-x-1'
-                    }`} />
+            ) : (
+              <div className="space-y-4">
+                <div className="text-center">
+                  {qrImageUrl && (
+                    <img
+                      src={qrImageUrl}
+                      alt="QR Code"
+                      className="w-48 h-48 mx-auto bg-white p-4 rounded-xl shadow-lg"
+                    />
+                  )}
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/5">
+                  <div className="flex justify-between text-sm">
+                    <span>Votre numéro</span>
+                    <span className="font-mono font-bold">{user?.phone}</span>
+                  </div>
+                  {qrAmount && (
+                    <div className="flex justify-between text-sm mt-2">
+                      <span>Montant</span>
+                      <span className="text-green-400 font-bold">{parseInt(qrAmount).toLocaleString()} FCFA</span>
+                    </div>
+                  )}
+                  {qrDescription && (
+                    <div className="flex justify-between text-sm mt-2">
+                      <span>Description</span>
+                      <span className="text-white/70">{qrDescription}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-sm mt-2 pt-2 border-t">
+                    <button onClick={() => copyToClipboard(paymentLink)} className="text-blue-400 text-xs flex items-center gap-1">
+                      <FaCopy size={10} /> Copier le lien
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button onClick={downloadQRCode} className="flex-1 btn-secondary text-sm flex items-center justify-center gap-2">
+                    <FaDownload /> Télécharger
+                  </button>
+                  <button onClick={shareViaWhatsApp} className="flex-1 bg-[#25d366]/20 hover:bg-[#25d366]/30 text-white text-sm py-2 rounded-lg flex items-center justify-center gap-2">
+                    <FaWhatsapp /> WhatsApp
                   </button>
                 </div>
+
+                <div className="flex gap-2">
+                  <button onClick={shareViaEmail} className="flex-1 btn-secondary text-sm flex items-center justify-center gap-2">
+                    <FaEnvelope /> Email
+                  </button>
+                  <button onClick={() => copyToClipboard(paymentLink)} className="flex-1 btn-secondary text-sm flex items-center justify-center gap-2">
+                    <FaCopy /> Copier le lien
+                  </button>
+                </div>
+
+                <button onClick={resetQRGenerator} className="w-full text-sm text-white/40 hover:text-white/60">
+                  Générer un nouveau QR code
+                </button>
               </div>
-            </div>
+            )}
           </div>
         )}
 
         {/* Tab Application (Admin) */}
         {activeTab === 'app' && user?.role === 'admin' && (
           <div className="space-y-6 max-w-2xl">
+            {/* Contenu existant */}
             <div className="flex items-center justify-between p-3 bg-white/5 rounded-xl">
               <div>
                 <p className="text-white">Mode maintenance</p>
@@ -750,6 +1292,7 @@ function Settings({ user }) {
         {/* Tab Frais & Limites (Admin) */}
         {activeTab === 'fees' && user?.role === 'admin' && (
           <div className="space-y-6 max-w-2xl">
+            {/* Contenu existant */}
             <div>
               <label className="label">Montant minimum de transaction (FCFA)</label>
               <input
@@ -824,6 +1367,7 @@ function Settings({ user }) {
         {/* Tab Système (Admin) */}
         {activeTab === 'system' && user?.role === 'admin' && (
           <div className="space-y-6 max-w-2xl">
+            {/* Contenu existant */}
             <div className="bg-green-500/10 rounded-xl p-4">
               <h3 className="text-green-400 font-semibold mb-2">✓ Système opérationnel</h3>
               <p className="text-white/70 text-sm">Tous les services sont actifs</p>

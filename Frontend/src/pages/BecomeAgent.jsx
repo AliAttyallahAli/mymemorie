@@ -464,7 +464,7 @@ function BecomeAgent({ user }) {
           <div className="bg-yellow-500/10 rounded-xl p-4 border border-yellow-500/20">
             <p className="text-yellow-400 text-sm flex items-start gap-2">
               <FaInfoCircle className="mt-0.5 flex-shrink-0" />
-              <span>Une question ? Contactez-nous au <strong className="text-white">62 78 73 07</strong> ou par email à <strong className="text-white">agents@cashpays.td</strong></span>
+              <span>Une question ? Contactez-nous au <strong className="text-white">62 78 73 07</strong> ou par email à <strong className="text-white">cashpays@gmail.com</strong></span>
             </p>
           </div>
         </div>

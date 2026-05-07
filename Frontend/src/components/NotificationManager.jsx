@@ -1,21 +1,25 @@
 // src/components/NotificationManager.jsx
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import { 
   FaBell, FaMoneyBillWave, FaIdCard, FaExclamationTriangle,
   FaCheckCircle, FaTimes, FaSpinner, FaArrowUp, FaArrowDown,
-  FaStore, FaReceipt, FaUserCheck, FaClock, FaEye
+  FaStore, FaReceipt, FaUserCheck, FaClock, FaTrash,
+  FaEye, FaExternalLinkAlt
 } from 'react-icons/fa'
 import { useTheme } from '../context/ThemeContext'
 
 function NotificationManager({ user, socket }) {
+  const navigate = useNavigate()
   const [notifications, setNotifications] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [showDropdown, setShowDropdown] = useState(false)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
   const { isDark } = useTheme()
+  const dropdownRef = useRef(null)
 
   useEffect(() => {
     fetchNotifications()
@@ -23,7 +27,7 @@ function NotificationManager({ user, socket }) {
     if (socket) {
       socket.on('notification', (notification) => {
         addNotification(notification)
-        showToastNotification(notification)
+        showBrowserNotification(notification)
       })
     }
     
@@ -34,16 +38,59 @@ function NotificationManager({ user, socket }) {
     }
   }, [socket])
 
+  // Fermer le dropdown quand on clique en dehors
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setShowDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Notification du navigateur (push)
+  const showBrowserNotification = (notification) => {
+    if (!("Notification" in window)) return
+    
+    if (Notification.permission === "granted") {
+      new Notification(notification.title, {
+        body: notification.message,
+        icon: '/cashpays-icon.png',
+        silent: false
+      })
+    }
+  }
+
+  // Demander la permission pour les notifications
+  useEffect(() => {
+    if (Notification.permission === "default") {
+      Notification.requestPermission()
+    }
+  }, [])
+
   const fetchNotifications = async () => {
+    setLoading(true)
     try {
       const token = localStorage.getItem('accessToken')
       const response = await axios.get('/api/notifications', {
         headers: { Authorization: `Bearer ${token}` }
       })
-      setNotifications(response.data || [])
-      setUnreadCount(response.data.filter(n => !n.is_read).length)
+      
+      let notificationsList = []
+      if (response.data && Array.isArray(response.data.notifications)) {
+        notificationsList = response.data.notifications
+      } else if (Array.isArray(response.data)) {
+        notificationsList = response.data
+      }
+      
+      setNotifications(notificationsList)
+      const unread = notificationsList.filter(n => !n.is_read).length
+      setUnreadCount(unread)
     } catch (error) {
       console.error('Erreur chargement notifications:', error)
+      setNotifications([])
+      setUnreadCount(0)
     } finally {
       setLoading(false)
     }
@@ -56,70 +103,11 @@ function NotificationManager({ user, socket }) {
       is_read: false,
       created_at: new Date().toISOString()
     }
-    setNotifications(prev => [newNotif, ...prev.slice(0, 49)])
+    setNotifications(prev => {
+      const newList = [newNotif, ...prev]
+      return newList.slice(0, 100)
+    })
     setUnreadCount(prev => prev + 1)
-  }
-
-  const showToastNotification = (notification) => {
-    // Afficher un toast différent selon le type
-    let icon = ''
-    let bgColor = ''
-    let soundFile = ''
-    
-    switch(notification.category) {
-      case 'transaction':
-        if (notification.title.includes('Transfert reçu')) {
-          icon = '💰'
-          bgColor = 'bg-green-500'
-          soundFile = '/sounds/coins.mp3'
-        } else if (notification.title.includes('Transfert envoyé')) {
-          icon = '💸'
-          bgColor = 'bg-blue-500'
-          soundFile = '/sounds/send.mp3'
-        } else if (notification.title.includes('Dépôt')) {
-          icon = '🏦'
-          bgColor = 'bg-green-500'
-          soundFile = '/sounds/deposit.mp3'
-        } else if (notification.title.includes('Retrait')) {
-          icon = '💵'
-          bgColor = 'bg-yellow-500'
-          soundFile = '/sounds/withdraw.mp3'
-        }
-        break
-      case 'kyc':
-        icon = '🆔'
-        bgColor = 'bg-purple-500'
-        soundFile = '/sounds/kyc.mp3'
-        break
-      case 'alert':
-        icon = '⚠️'
-        bgColor = 'bg-red-500'
-        soundFile = '/sounds/alert.mp3'
-        break
-      default:
-        icon = '🔔'
-        bgColor = 'bg-blue-500'
-    }
-    
-    // Jouer le son
-    const audio = new Audio(soundFile)
-    audio.play().catch(e => console.log('Son non joué'))
-    
-    // Afficher le toast
-    toast.custom((t) => (
-      <div className={`${t.visible ? 'animate-slide-down' : 'hidden'} max-w-md w-full bg-gradient-to-r from-blue-900 to-blue-800 rounded-xl shadow-2xl p-4 border-l-4 border-blue-500`}>
-        <div className="flex items-start gap-3">
-          <div className="text-2xl">{icon}</div>
-          <div className="flex-1">
-            <p className="text-white font-semibold">{notification.title}</p>
-            <p className="text-white/70 text-sm">{notification.message}</p>
-          </div>
-          <button onClick={() => toast.dismiss(t.id)} className="text-white/40 hover:text-white">
-            <FaTimes />
-          </button>
-        </div>
-      </div>
-    ), { duration: 5000 })
   }
 
   const markAsRead = async (id) => {
@@ -148,20 +136,50 @@ function NotificationManager({ user, socket }) {
       toast.success('Toutes les notifications ont été marquées comme lues')
     } catch (error) {
       console.error('Erreur:', error)
+      toast.error('Erreur lors du marquage')
     }
   }
 
-  const deleteNotification = async (id) => {
+  const deleteNotification = async (id, e) => {
+    e.stopPropagation()
     try {
       const token = localStorage.getItem('accessToken')
       await axios.delete(`/api/notifications/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       setNotifications(prev => prev.filter(n => n.id !== id))
+      const wasUnread = notifications.find(n => n.id === id)?.is_read === false
+      if (wasUnread) {
+        setUnreadCount(prev => Math.max(0, prev - 1))
+      }
       toast.success('Notification supprimée')
     } catch (error) {
       console.error('Erreur suppression:', error)
+      toast.error('Erreur lors de la suppression')
     }
+  }
+
+  const handleNotificationClick = (notification) => {
+    // Marquer comme lu
+    if (!notification.is_read) {
+      markAsRead(notification.id)
+    }
+    
+    // Rediriger selon le type
+    const title = notification.title || ''
+    const metadata = notification.metadata ? JSON.parse(notification.metadata) : {}
+    
+    if (title.includes('KYC')) {
+      navigate('/profile')
+    } else if (title.includes('Candidature') || title.includes('agent')) {
+      navigate('/admin/agent-applications')
+    } else if (notification.type === 'transaction' && metadata.reference) {
+      navigate(`/history?ref=${metadata.reference}`)
+    } else {
+      navigate(`/notifications/${notification.id}`)
+    }
+    
+    setShowDropdown(false)
   }
 
   const getNotificationIcon = (notification) => {
@@ -172,23 +190,13 @@ function NotificationManager({ user, socket }) {
     if (title.includes('Retrait')) return <FaMoneyBillWave className="text-yellow-400" size={18} />
     if (title.includes('Frais')) return <FaReceipt className="text-purple-400" size={18} />
     if (title.includes('KYC')) return <FaIdCard className="text-purple-400" size={18} />
-    if (title.includes('Alerte') || notification.type === 'alert') return <FaExclamationTriangle className="text-yellow-400" size={18} />
-    if (title.includes('Demande')) return <FaUserCheck className="text-blue-400" size={18} />
+    if (title.includes('Candidature') || title.includes('agent')) return <FaUserCheck className="text-blue-400" size={18} />
+    if (notification.type === 'alert') return <FaExclamationTriangle className="text-yellow-400" size={18} />
     return <FaBell className="text-blue-400" size={18} />
   }
 
-  const getNotificationBgColor = (notification) => {
-    const title = notification.title || ''
-    if (title.includes('Transfert reçu')) return 'bg-green-900/30 border-green-500/30'
-    if (title.includes('Transfert envoyé')) return 'bg-blue-900/30 border-blue-500/30'
-    if (title.includes('Dépôt')) return 'bg-green-900/30 border-green-500/30'
-    if (title.includes('Retrait')) return 'bg-yellow-900/30 border-yellow-500/30'
-    if (title.includes('KYC')) return 'bg-purple-900/30 border-purple-500/30'
-    if (notification.type === 'alert') return 'bg-red-900/30 border-red-500/30'
-    return 'bg-blue-900/30 border-blue-500/30'
-  }
-
   const formatTime = (timestamp) => {
+    if (!timestamp) return ''
     const date = new Date(timestamp)
     const now = new Date()
     const diff = now - date
@@ -200,28 +208,29 @@ function NotificationManager({ user, socket }) {
     return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })
   }
 
-  const filteredNotifications = notifications.filter(n => {
-    if (filter === 'all') return true
-    if (filter === 'transaction') return n.category === 'transaction' || n.type === 'transaction'
-    if (filter === 'kyc') return n.category === 'kyc'
-    if (filter === 'alert') return n.category === 'alert' || n.type === 'alert'
-    return true
-  })
-
-  const getFilterCount = (filterType) => {
-    if (filterType === 'all') return notifications.length
-    if (filterType === 'transaction') return notifications.filter(n => n.category === 'transaction' || n.type === 'transaction').length
-    if (filterType === 'kyc') return notifications.filter(n => n.category === 'kyc').length
-    if (filterType === 'alert') return notifications.filter(n => n.category === 'alert' || n.type === 'alert').length
-    return 0
+  const getFilteredNotifications = () => {
+    if (!Array.isArray(notifications)) return []
+    
+    if (filter === 'all') return notifications
+    if (filter === 'transaction') return notifications.filter(n => n.category === 'transaction' || n.type === 'transaction')
+    if (filter === 'kyc') return notifications.filter(n => n.category === 'kyc')
+    if (filter === 'alert') return notifications.filter(n => n.type === 'alert')
+    return notifications
   }
 
+  const filteredNotifications = getFilteredNotifications()
+  const totalCount = Array.isArray(notifications) ? notifications.length : 0
+  const transactionCount = Array.isArray(notifications) ? notifications.filter(n => n.category === 'transaction' || n.type === 'transaction').length : 0
+  const kycCount = Array.isArray(notifications) ? notifications.filter(n => n.category === 'kyc').length : 0
+  const alertCount = Array.isArray(notifications) ? notifications.filter(n => n.type === 'alert').length : 0
+
   return (
-    <div className="relative" onClick={(e) => e.stopPropagation()}>
+    <div className="relative" ref={dropdownRef}>
       {/* Bouton de notification */}
       <button
         onClick={() => setShowDropdown(!showDropdown)}
         className="relative p-2 rounded-full transition-all hover:bg-white/10"
+        aria-label="Notifications"
       >
         <FaBell size={18} />
         {unreadCount > 0 && (
@@ -248,10 +257,10 @@ function NotificationManager({ user, socket }) {
                   </span>
                 )}
               </div>
-              {notifications.length > 0 && (
+              {totalCount > 0 && (
                 <button
                   onClick={markAllAsRead}
-                  className="text-blue-400 text-xs hover:text-blue-300"
+                  className="text-blue-400 text-xs hover:text-blue-300 transition-colors"
                 >
                   Tout marquer lu
                 </button>
@@ -259,46 +268,46 @@ function NotificationManager({ user, socket }) {
             </div>
 
             {/* Filtres */}
-            <div className="flex gap-2 mt-3">
+            <div className="flex gap-2 mt-3 overflow-x-auto pb-1">
               <button
                 onClick={() => setFilter('all')}
-                className={`px-3 py-1 rounded-full text-xs transition-all ${
+                className={`px-3 py-1 rounded-full text-xs transition-all whitespace-nowrap ${
                   filter === 'all' 
                     ? 'bg-blue-600 text-white' 
                     : `${isDark ? 'bg-white/10 text-white/60' : 'bg-gray-100 text-gray-600'}`
                 }`}
               >
-                Toutes ({getFilterCount('all')})
+                Toutes ({totalCount})
               </button>
               <button
                 onClick={() => setFilter('transaction')}
-                className={`px-3 py-1 rounded-full text-xs transition-all flex items-center gap-1 ${
+                className={`px-3 py-1 rounded-full text-xs transition-all flex items-center gap-1 whitespace-nowrap ${
                   filter === 'transaction' 
                     ? 'bg-green-600 text-white' 
                     : `${isDark ? 'bg-white/10 text-white/60' : 'bg-gray-100 text-gray-600'}`
                 }`}
               >
-                <FaMoneyBillWave size={10} /> Transactions ({getFilterCount('transaction')})
+                <FaMoneyBillWave size={10} /> Transactions ({transactionCount})
               </button>
               <button
                 onClick={() => setFilter('kyc')}
-                className={`px-3 py-1 rounded-full text-xs transition-all flex items-center gap-1 ${
+                className={`px-3 py-1 rounded-full text-xs transition-all flex items-center gap-1 whitespace-nowrap ${
                   filter === 'kyc' 
                     ? 'bg-purple-600 text-white' 
                     : `${isDark ? 'bg-white/10 text-white/60' : 'bg-gray-100 text-gray-600'}`
                 }`}
               >
-                <FaIdCard size={10} /> KYC ({getFilterCount('kyc')})
+                <FaIdCard size={10} /> KYC ({kycCount})
               </button>
               <button
                 onClick={() => setFilter('alert')}
-                className={`px-3 py-1 rounded-full text-xs transition-all flex items-center gap-1 ${
+                className={`px-3 py-1 rounded-full text-xs transition-all flex items-center gap-1 whitespace-nowrap ${
                   filter === 'alert' 
                     ? 'bg-red-600 text-white' 
                     : `${isDark ? 'bg-white/10 text-white/60' : 'bg-gray-100 text-gray-600'}`
                 }`}
               >
-                <FaExclamationTriangle size={10} /> Alertes ({getFilterCount('alert')})
+                <FaExclamationTriangle size={10} /> Alertes ({alertCount})
               </button>
             </div>
           </div>
@@ -318,8 +327,8 @@ function NotificationManager({ user, socket }) {
               filteredNotifications.map((notif) => (
                 <div
                   key={notif.id}
-                  onClick={() => !notif.is_read && markAsRead(notif.id)}
-                  className={`p-4 border-b cursor-pointer transition-all ${
+                  onClick={() => handleNotificationClick(notif)}
+                  className={`p-4 border-b cursor-pointer transition-all group ${
                     isDark ? 'border-white/10 hover:bg-white/5' : 'border-gray-100 hover:bg-gray-50'
                   } ${!notif.is_read ? (isDark ? 'bg-blue-700/30' : 'bg-blue-50') : ''}`}
                 >
@@ -332,33 +341,39 @@ function NotificationManager({ user, socket }) {
                         <p className={`text-sm font-medium ${isDark ? 'text-white' : 'text-gray-900'}`}>
                           {notif.title}
                         </p>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            deleteNotification(notif.id)
-                          }}
-                          className="text-white/30 hover:text-white/60 transition-all"
-                        >
-                          <FaTimes size={10} />
-                        </button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => handleNotificationClick(notif)}
+                            className={`p-1 rounded ${isDark ? 'text-white/40 hover:text-white' : 'text-gray-400 hover:text-gray-600'}`}
+                            title="Voir détails"
+                          >
+                            <FaEye size={12} />
+                          </button>
+                          <button
+                            onClick={(e) => deleteNotification(notif.id, e)}
+                            className={`p-1 rounded ${isDark ? 'text-white/30 hover:text-white/60' : 'text-gray-400 hover:text-gray-600'}`}
+                            title="Supprimer"
+                          >
+                            <FaTrash size={12} />
+                          </button>
+                        </div>
                       </div>
                       <p className={`text-xs mt-1 ${isDark ? 'text-white/60' : 'text-gray-600'}`}>
-                        {notif.message}
+                        {notif.message?.length > 100 ? notif.message.substring(0, 100) + '...' : notif.message}
                       </p>
-                      <div className="flex items-center gap-2 mt-2">
-                        <FaClock className="text-white/30 text-xs" />
-                        <p className={`text-xs ${isDark ? 'text-white/30' : 'text-gray-400'}`}>
-                          {formatTime(notif.created_at)}
-                        </p>
-                        {notif.category && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            notif.category === 'transaction' ? 'bg-green-500/20 text-green-400' :
-                            notif.category === 'kyc' ? 'bg-purple-500/20 text-purple-400' :
-                            'bg-red-500/20 text-red-400'
-                          }`}>
-                            {notif.category === 'transaction' ? 'Transaction' : notif.category === 'kyc' ? 'KYC' : 'Alerte'}
-                          </span>
-                        )}
+                      <div className="flex items-center justify-between mt-2">
+                        <div className="flex items-center gap-2">
+                          <FaClock className="text-white/30 text-xs" />
+                          <p className={`text-xs ${isDark ? 'text-white/30' : 'text-gray-400'}`}>
+                            {formatTime(notif.created_at)}
+                          </p>
+                          {!notif.is_read && (
+                            <span className="w-2 h-2 bg-blue-400 rounded-full"></span>
+                          )}
+                        </div>
+                        <span className="text-blue-400 text-xs flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <FaExternalLinkAlt size={10} /> Détails
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -366,6 +381,21 @@ function NotificationManager({ user, socket }) {
               ))
             )}
           </div>
+
+          {/* Pied du dropdown */}
+          {totalCount > 0 && (
+            <div className={`p-3 text-center border-t ${isDark ? 'border-white/10' : 'border-gray-200'}`}>
+              <button
+                onClick={() => {
+                  setShowDropdown(false)
+                  navigate('/notifications')
+                }}
+                className="text-blue-400 text-sm hover:text-blue-300 transition-colors"
+              >
+                Voir toutes les notifications
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
