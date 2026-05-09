@@ -1,21 +1,19 @@
-FROM node:18-slim
+# Dockerfile pour le backend Node.js
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Copier package.json d'abord (meilleur cache)
+# Copier les fichiers de dépendances
 COPY package*.json ./
 
 # Installer les dépendances
-RUN npm ci --production
+RUN npm ci --only=production
 
-# Copier le code source
+# Copier le reste du code
 COPY . .
 
-# Créer le dossier uploads
-RUN mkdir -p uploads/kyc uploads/agent_applications
-
 # Exposer le port
-EXPOSE 5000
+EXPOSE 5001
 
 # Démarrer l'application
 CMD ["node", "server.js"]
