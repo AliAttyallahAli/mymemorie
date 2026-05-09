@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import toast from 'react-hot-toast'
+import { toast } from '../utils/toast'
 import { 
   FaUserTie, FaBuilding, FaPhone, FaEnvelope, FaMapMarkerAlt,
   FaCheckCircle, FaMoneyBillWave, FaUsers, FaChartLine,
@@ -89,6 +89,11 @@ function BecomeAgent({ user }) {
     
     if (!formData.agency_address) {
       toast.error('Veuillez entrer l\'adresse de votre agence')
+      return
+    }
+    
+    if (!formData.motivation) {
+      toast.error('Veuillez expliquer votre motivation')
       return
     }
     

@@ -5236,4 +5236,360 @@ app.post('/api/admin/reset-password/:userId', authenticateToken, requireAdmin, a
   }
 });
 
+// backend/server.js - Ajouter cet endpoint
+
+// Récupérer une demande KYC spécifique par son ID
+app.get('/api/admin/kyc/requests/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    // Récupérer la demande KYC
+    const kycRequest = await get(`
+      SELECT kr.*, 
+             u.fullname as user_name, 
+             u.phone as user_phone,
+             u.email as user_email
+      FROM kyc_requests kr
+      JOIN users u ON kr.user_id = u.id
+      WHERE kr.id = ?
+    `, [id]);
+    
+    if (!kycRequest) {
+      return res.status(404).json({ error: 'Demande KYC non trouvée' });
+    }
+    
+    // Récupérer les documents associés
+    const documents = await query(`
+      SELECT id, document_type, filename, file_path, file_size, mime_type, uploaded_at
+      FROM kyc_documents 
+      WHERE kyc_request_id = ?
+      ORDER BY uploaded_at DESC
+    `, [id]);
+    
+    // Récupérer l'historique
+    const history = await query(`
+      SELECT kh.*, u.fullname as created_by_name
+      FROM kyc_history kh
+      LEFT JOIN users u ON kh.created_by = u.id
+      WHERE kh.user_id = ?
+      ORDER BY kh.created_at DESC
+    `, [kycRequest.user_id]);
+    
+    res.json({
+      ...kycRequest,
+      documents: documents || [],
+      history: history || []
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération demande KYC:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération de la demande' });
+  }
+});
+
+// Récupérer une candidature agent spécifique par son ID
+app.get('/api/admin/agent-applications/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  
+  try {
+    const application = await get(`
+      SELECT * FROM agent_applications 
+      WHERE id = ?
+    `, [id]);
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Candidature non trouvée' });
+    }
+    
+    // Récupérer l'utilisateur associé si la candidature a été approuvée
+    if (application.status === 'approved') {
+      const user = await get(`
+        SELECT id, phone, fullname, email, role 
+        FROM users 
+        WHERE phone = ?
+      `, [application.phone]);
+      application.user = user;
+    }
+    
+    res.json(application);
+    
+  } catch (error) {
+    console.error('Erreur récupération candidature:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération' });
+  }
+});
+// backend/server.js - Ajouter ces endpoints
+
+// ============================================
+// ADMIN - GESTION DES UTILISATEURS
+// ============================================
+
+// Récupérer tous les utilisateurs (admin)
+app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  const { role, is_active, search, limit = 50, offset = 0 } = req.query;
+  
+  try {
+    let sql = `
+      SELECT u.*, w.balance 
+      FROM users u
+      LEFT JOIN wallets w ON u.id = w.user_id
+      WHERE 1=1
+    `;
+    const params = [];
+    
+    if (role && role !== 'all') {
+      sql += ' AND u.role = ?';
+      params.push(role);
+    }
+    
+    if (is_active !== undefined) {
+      sql += ' AND u.is_active = ?';
+      params.push(parseInt(is_active));
+    }
+    
+    if (search) {
+      sql += ' AND (u.phone LIKE ? OR u.fullname LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    
+    sql += ' ORDER BY u.created_at DESC LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    const users = await query(sql, params);
+    
+    const totalSql = `
+      SELECT COUNT(*) as count FROM users u
+      WHERE 1=1
+      ${role && role !== 'all' ? 'AND role = ?' : ''}
+      ${is_active !== undefined ? 'AND is_active = ?' : ''}
+      ${search ? 'AND (phone LIKE ? OR fullname LIKE ?)' : ''}
+    `;
+    const totalParams = [];
+    if (role && role !== 'all') totalParams.push(role);
+    if (is_active !== undefined) totalParams.push(parseInt(is_active));
+    if (search) totalParams.push(`%${search}%`, `%${search}%`);
+    
+    const total = await get(totalSql, totalParams);
+    
+    res.json({
+      users: users || [],
+      total: total?.count || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+    
+  } catch (error) {
+    console.error('Erreur récupération utilisateurs:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération des utilisateurs' });
+  }
+});
+
+// Créer un nouvel utilisateur (admin)
+app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
+  const { phone, fullname, password, email, province, city, address, role } = req.body;
+  
+  // Validation
+  if (!phone || !fullname || !password) {
+    return res.status(400).json({ error: 'Tous les champs obligatoires sont requis' });
+  }
+  
+  if (!/^\d{8}$/.test(phone)) {
+    return res.status(400).json({ error: 'Le numéro de téléphone doit contenir 8 chiffres' });
+  }
+  
+  if (password.length < 4) {
+    return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 4 caractères' });
+  }
+  
+  const validRoles = ['user', 'admin', 'agent'];
+  const userRole = validRoles.includes(role) ? role : 'user';
+  
+  try {
+    // Vérifier si l'utilisateur existe déjà
+    const existingUser = await get('SELECT id FROM users WHERE phone = ?', [phone]);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Ce numéro de téléphone est déjà utilisé' });
+    }
+    
+    // Générer clé privée
+    const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPrivateKey = await bcrypt.hash(privateKey, 10);
+    
+    // Créer l'utilisateur
+    const result = await run(`
+      INSERT INTO users (phone, fullname, password_hash, private_key_6, province, city, address, email, role, is_active, is_verified, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP)
+    `, [phone, fullname, hashedPassword, hashedPrivateKey, province || null, city || null, address || null, email || null, userRole]);
+    
+    // Le trigger crée automatiquement le wallet avec 1000 FCFA
+    
+    // Log
+    await run(`
+      INSERT INTO system_logs (user_id, action, details, created_at)
+      VALUES (?, 'USER_CREATED', ?, CURRENT_TIMESTAMP)
+    `, [req.user.userId, `Création de l'utilisateur ${fullname} (${phone}) avec le rôle ${userRole}`]);
+    
+    res.status(201).json({
+      success: true,
+      user: {
+        id: result.lastID,
+        phone,
+        fullname,
+        role: userRole,
+        private_key: privateKey
+      }
+    });
+    
+  } catch (error) {
+    console.error('Erreur création utilisateur:', error);
+    res.status(500).json({ error: 'Erreur lors de la création de l\'utilisateur' });
+  }
+});
+
+// Mettre à jour un utilisateur (admin)
+app.put('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { fullname, email, province, city, address, role, is_active } = req.body;
+  
+  try {
+    const updates = [];
+    const params = [];
+    
+    if (fullname !== undefined) {
+      updates.push('fullname = ?');
+      params.push(fullname);
+    }
+    if (email !== undefined) {
+      updates.push('email = ?');
+      params.push(email);
+    }
+    if (province !== undefined) {
+      updates.push('province = ?');
+      params.push(province);
+    }
+    if (city !== undefined) {
+      updates.push('city = ?');
+      params.push(city);
+    }
+    if (address !== undefined) {
+      updates.push('address = ?');
+      params.push(address);
+    }
+    if (role !== undefined) {
+      updates.push('role = ?');
+      params.push(role);
+    }
+    if (is_active !== undefined) {
+      updates.push('is_active = ?');
+      params.push(is_active ? 1 : 0);
+    }
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Aucune donnée à mettre à jour' });
+    }
+    
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    params.push(userId);
+    
+    await run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Erreur mise à jour utilisateur:', error);
+    res.status(500).json({ error: 'Erreur lors de la mise à jour' });
+  }
+});
+
+
+// Supprimer un utilisateur (admin)
+app.delete('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  
+  // Ne pas permettre la suppression de son propre compte
+  if (parseInt(userId) === req.user.userId) {
+    return res.status(400).json({ error: 'Vous ne pouvez pas supprimer votre propre compte' });
+  }
+  
+  try {
+    const user = await get('SELECT id, role FROM users WHERE id = ?', [userId]);
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    
+    // Ne pas permettre la suppression du dernier admin
+    if (user.role === 'admin') {
+      const adminCount = await get('SELECT COUNT(*) as count FROM users WHERE role = "admin"');
+      if (adminCount.count <= 1) {
+        return res.status(400).json({ error: 'Impossible de supprimer le dernier administrateur' });
+      }
+    }
+    
+    await run('DELETE FROM users WHERE id = ?', [userId]);
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Erreur suppression utilisateur:', error);
+    res.status(500).json({ error: 'Erreur lors de la suppression' });
+  }
+});
+
+// Obtenir les détails d'un utilisateur (admin)
+app.get('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  
+  try {
+    const user = await get(`
+      SELECT u.*, w.balance 
+      FROM users u
+      LEFT JOIN wallets w ON u.id = w.user_id
+      WHERE u.id = ?
+    `, [userId]);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    
+    res.json(user);
+    
+  } catch (error) {
+    console.error('Erreur récupération utilisateur:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération' });
+  }
+});
+
+// Réinitialiser le mot de passe d'un utilisateur (admin)
+app.post('/api/admin/users/:userId/reset-password', authenticateToken, requireAdmin, async (req, res) => {
+  const { userId } = req.params;
+  const { newPassword } = req.body;
+  
+  if (!newPassword || newPassword.length < 4) {
+    return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 4 caractères' });
+  }
+  
+  try {
+    const user = await get('SELECT id, fullname FROM users WHERE id = ?', [userId]);
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await run('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, userId]);
+    
+    // Créer une notification pour l'utilisateur
+    await run(`
+      INSERT INTO notifications (user_id, title, message, type, created_at)
+      VALUES (?, '🔐 Mot de passe réinitialisé', 'Votre mot de passe a été réinitialisé par l\'administrateur.', 'alert', CURRENT_TIMESTAMP)
+    `, [userId]);
+    
+    res.json({ success: true, message: 'Mot de passe réinitialisé avec succès' });
+    
+  } catch (error) {
+    console.error('Erreur réinitialisation mot de passe:', error);
+    res.status(500).json({ error: 'Erreur lors de la réinitialisation' });
+  }
+});
+
 module.exports = { app, io };

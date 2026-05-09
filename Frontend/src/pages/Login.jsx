@@ -2,8 +2,7 @@
 import React, { useState, useEffect } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
-import { FaPhone, FaLock, FaKey, FaMoneyBillWave, FaEye, FaEyeSlash, FaShieldAlt, FaGift, FaUserPlus } from 'react-icons/fa'
-import { useToast } from '../context/ToastContext'
+import { FaPhone, FaLock, FaKey, FaMoneyBillWave, FaEye, FaEyeSlash, FaGift, FaUserPlus, FaCheckCircle, FaTimes } from 'react-icons/fa'
 
 function Login({ setUser }) {
   const [phone, setPhone] = useState('')
@@ -15,9 +14,9 @@ function Login({ setUser }) {
   const [showForgotModal, setShowForgotModal] = useState(false)
   const [forgotPhone, setForgotPhone] = useState('')
   const [sendingRequest, setSendingRequest] = useState(false)
+  const [forgotSuccess, setForgotSuccess] = useState(false)
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const { success, error, info } = useToast()
   
   const referralCode = searchParams.get('ref')
 
@@ -28,11 +27,7 @@ function Login({ setUser }) {
     if (token && savedUser) {
       verifyToken(token, savedUser)
     }
-    
-    if (referralCode) {
-      info(`🎉 Code de parrainage détecté ! Inscrivez-vous pour bénéficier de 500 FCFA offerts.`, 8000)
-    }
-  }, [referralCode])
+  }, [])
 
   const verifyToken = async (token, savedUser) => {
     try {
@@ -64,14 +59,14 @@ function Login({ setUser }) {
 
       if (loginMode === 'password') {
         if (!password) {
-          error('Veuillez saisir votre mot de passe')
+          showMessage('Veuillez saisir votre mot de passe', 'error')
           setLoading(false)
           return
         }
         payload.password = password
       } else {
         if (!privateKey) {
-          error('Veuillez saisir votre clé privée')
+          showMessage('Veuillez saisir votre clé privée', 'error')
           setLoading(false)
           return
         }
@@ -91,13 +86,13 @@ function Login({ setUser }) {
       
       setUser(response.data.user)
       
-      success('Connexion réussie !')
+      showMessage('Connexion réussie !', 'success')
       navigate('/dashboard')
       
     } catch (err) {
       console.error('Erreur connexion:', err)
       const errorMsg = err.response?.data?.error || 'Erreur de connexion. Vérifiez vos identifiants.'
-      error(errorMsg)
+      showMessage(errorMsg, 'error')
     } finally {
       setLoading(false)
     }
@@ -105,27 +100,36 @@ function Login({ setUser }) {
 
   const handleForgotPassword = async () => {
     if (!forgotPhone || forgotPhone.length !== 8) {
-      error('Veuillez entrer un numéro de téléphone valide (8 chiffres)')
+      showMessage('Veuillez entrer un numéro de téléphone valide (8 chiffres)', 'error')
       return
     }
     
     setSendingRequest(true)
     try {
-      const response = await axios.post('/api/auth/forgot-password', {
-        phone: forgotPhone
-      })
-      
-      success(response.data.message || 'Demande envoyée. L\'administrateur vous contactera sous 24h.')
-      setShowForgotModal(false)
-      setForgotPhone('')
-      
+      await axios.post('/api/auth/forgot-password', { phone: forgotPhone })
+      setForgotSuccess(true)
+      setTimeout(() => {
+        setShowForgotModal(false)
+        setForgotSuccess(false)
+        setForgotPhone('')
+      }, 3000)
     } catch (err) {
-      console.error('Erreur:', err)
       const errorMsg = err.response?.data?.error || 'Erreur lors de l\'envoi de la demande'
-      error(errorMsg)
+      showMessage(errorMsg, 'error')
     } finally {
       setSendingRequest(false)
     }
+  }
+
+  const showMessage = (message, type) => {
+    // Créer un toast temporaire
+    const toast = document.createElement('div')
+    toast.className = `fixed top-20 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-white ${
+      type === 'success' ? 'bg-green-500' : 'bg-red-500'
+    } animate-slide-down`
+    toast.textContent = message
+    document.body.appendChild(toast)
+    setTimeout(() => toast.remove(), 3000)
   }
 
   const handleDemoLogin = () => {
@@ -262,7 +266,6 @@ function Login({ setUser }) {
           </button>
         </form>
 
-        {/* Liens utiles */}
         <div className="mt-6 text-center">
           <Link 
             to={referralCode ? `/register?ref=${referralCode}` : "/register"} 
@@ -277,7 +280,6 @@ function Login({ setUser }) {
           </Link>
         </div>
 
-        {/* Bouton Mot de passe oublié - ACTIF */}
         <div className="mt-3 text-center">
           <button
             onClick={() => setShowForgotModal(true)}
@@ -287,7 +289,6 @@ function Login({ setUser }) {
           </button>
         </div>
 
-        {/* Bannière d'information parrainage */}
         <div className="mt-4 pt-4 border-t border-white/10">
           <div className="flex items-center justify-center gap-2 text-white/40 text-xs">
             <FaGift size={12} />
@@ -295,18 +296,19 @@ function Login({ setUser }) {
           </div>
         </div>
 
-        {/* Version */}
         <div className="text-center text-white/30 text-xs mt-6">
           CashPays v1.0.0 - © 2026 GOUROUSDJA
         </div>
       </div>
 
-      {/* Modal Mot de passe oublié */}
+      {/* Modal Mot de passe oublié - Version améliorée */}
       {showForgotModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
           <div className="relative max-w-md w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl">
             <div className="p-4 border-b border-white/10 flex justify-between items-center">
-              <h3 className="text-xl font-bold text-white">Mot de passe oublié</h3>
+              <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                <FaKey className="text-blue-400" /> Mot de passe oublié
+              </h3>
               <button
                 onClick={() => setShowForgotModal(false)}
                 className="text-white/60 hover:text-white"
@@ -314,43 +316,59 @@ function Login({ setUser }) {
                 ✕
               </button>
             </div>
+            
             <div className="p-6">
-              <p className="text-white/70 text-sm mb-4">
-                Entrez votre numéro de téléphone. L'administrateur recevra votre demande 
-                et vous contactera pour réinitialiser votre accès.
-              </p>
-              <div>
-                <label className="block text-white/80 text-sm font-medium mb-2">
-                  <FaPhone className="inline mr-2" /> Numéro de téléphone
-                </label>
-                <input
-                  type="tel"
-                  value={forgotPhone}
-                  onChange={(e) => setForgotPhone(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  placeholder="Ex: 62787307"
-                  maxLength="8"
-                />
-              </div>
-              <div className="flex gap-3 mt-6">
-                <button
-                  onClick={() => setShowForgotModal(false)}
-                  className="flex-1 btn-secondary"
-                >
-                  Annuler
-                </button>
-                <button
-                  onClick={handleForgotPassword}
-                  disabled={sendingRequest}
-                  className="flex-1 btn-primary flex items-center justify-center gap-2"
-                >
-                  {sendingRequest ? (
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                  ) : (
-                    'Envoyer la demande'
-                  )}
-                </button>
-              </div>
+              {forgotSuccess ? (
+                <div className="text-center">
+                  <div className="inline-flex p-3 bg-green-500/20 rounded-full mb-4">
+                    <FaCheckCircle className="text-green-400 text-4xl" />
+                  </div>
+                  <h4 className="text-white text-xl font-bold mb-2">Demande envoyée !</h4>
+                  <p className="text-white/70 text-sm">
+                    Votre demande a été transmise à l'administrateur. 
+                    Vous serez contacté sous 24h pour réinitialiser votre accès.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-white/70 text-sm mb-4">
+                    Entrez votre numéro de téléphone. L'administrateur recevra votre demande 
+                    et vous contactera pour réinitialiser votre accès.
+                  </p>
+                  <div>
+                    <label className="block text-white/80 text-sm font-medium mb-2">
+                      <FaPhone className="inline mr-2" /> Numéro de téléphone
+                    </label>
+                    <input
+                      type="tel"
+                      value={forgotPhone}
+                      onChange={(e) => setForgotPhone(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      placeholder="Ex: 62787307"
+                      maxLength="8"
+                    />
+                  </div>
+                  <div className="flex gap-3 mt-6">
+                    <button
+                      onClick={() => setShowForgotModal(false)}
+                      className="flex-1 btn-secondary"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      onClick={handleForgotPassword}
+                      disabled={sendingRequest}
+                      className="flex-1 btn-primary flex items-center justify-center gap-2"
+                    >
+                      {sendingRequest ? (
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                      ) : (
+                        'Envoyer la demande'
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

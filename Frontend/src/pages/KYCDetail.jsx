@@ -7,7 +7,8 @@ import {
   FaArrowLeft, FaIdCard, FaCheckCircle, FaTimesCircle,
   FaClock, FaDownload, FaEye, FaUser, FaPhone,
   FaEnvelope, FaMapMarkerAlt, FaCalendarAlt,
-  FaSpinner, FaShieldAlt, FaFilePdf, FaImage
+  FaSpinner, FaShieldAlt, FaFilePdf, FaImage,
+  FaHistory, FaUserCheck, FaTrash
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 
@@ -17,6 +18,7 @@ function KYCDetail({ user }) {
   const [kycRequest, setKycRequest] = useState(null)
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
+  const [activeTab, setActiveTab] = useState('details')
 
   useEffect(() => {
     fetchKycRequest()
@@ -32,7 +34,11 @@ function KYCDetail({ user }) {
       setKycRequest(response.data)
     } catch (error) {
       console.error('Erreur chargement KYC:', error)
-      toast.error('Demande KYC non trouvée')
+      if (error.response?.status === 404) {
+        toast.error('Demande KYC non trouvée')
+      } else {
+        toast.error('Erreur lors du chargement de la demande')
+      }
       navigate('/admin')
     } finally {
       setLoading(false)
@@ -45,7 +51,7 @@ function KYCDetail({ user }) {
     setProcessing(true)
     try {
       const token = localStorage.getItem('accessToken')
-      await axios.post(`/api/admin/kyc/${id}/verify`, 
+      const response = await axios.post(`/api/admin/kyc/verify/${id}`, 
         { action: 'approve', level: 1 },
         { headers: { Authorization: `Bearer ${token}` } }
       )
@@ -65,7 +71,7 @@ function KYCDetail({ user }) {
     setProcessing(true)
     try {
       const token = localStorage.getItem('accessToken')
-      await axios.post(`/api/admin/kyc/${id}/verify`, 
+      await axios.post(`/api/admin/kyc/verify/${id}`, 
         { action: 'reject', rejection_reason: reason },
         { headers: { Authorization: `Bearer ${token}` } }
       )
@@ -130,7 +136,7 @@ function KYCDetail({ user }) {
     return (
       <Layout user={user}>
         <div className="flex justify-center items-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+          <FaSpinner className="text-white text-4xl animate-spin" />
         </div>
       </Layout>
     )
@@ -142,7 +148,8 @@ function KYCDetail({ user }) {
 
   return (
     <Layout user={user}>
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-5xl mx-auto">
+        {/* Bouton retour */}
         <button
           onClick={() => navigate('/admin')}
           className="flex items-center gap-2 text-white/60 hover:text-white mb-4 transition-colors"
@@ -150,6 +157,7 @@ function KYCDetail({ user }) {
           <FaArrowLeft /> Retour à l'administration
         </button>
 
+        {/* En-tête */}
         <div className="card mb-6">
           <div className="flex items-start justify-between flex-wrap gap-4">
             <div className="flex items-center gap-4">
@@ -170,7 +178,7 @@ function KYCDetail({ user }) {
                   <button
                     onClick={handleApprove}
                     disabled={processing}
-                    className="px-4 py-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg flex items-center gap-2"
+                    className="px-4 py-2 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg flex items-center gap-2 transition-all"
                   >
                     {processing ? <FaSpinner className="animate-spin" /> : <FaCheckCircle />}
                     Approuver
@@ -178,7 +186,7 @@ function KYCDetail({ user }) {
                   <button
                     onClick={handleReject}
                     disabled={processing}
-                    className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg flex items-center gap-2"
+                    className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg flex items-center gap-2 transition-all"
                   >
                     <FaTimesCircle /> Rejeter
                   </button>
@@ -188,133 +196,216 @@ function KYCDetail({ user }) {
           </div>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-6">
-          <div className="card">
-            <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
-              <FaUser className="text-blue-400" /> Informations personnelles
-            </h3>
-            <div className="space-y-3">
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Nom complet</span>
-                <span className="text-white font-medium">{kycRequest.fullname}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Date de naissance</span>
-                <span className="text-white">{kycRequest.birth_date || '-'}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Lieu de naissance</span>
-                <span className="text-white">{kycRequest.birth_place || '-'}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Nationalité</span>
-                <span className="text-white">{kycRequest.nationality || 'Tchadienne'}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Profession</span>
-                <span className="text-white">{kycRequest.occupation || '-'}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
-              <FaPhone className="text-blue-400" /> Contact
-            </h3>
-            <div className="space-y-3">
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Téléphone</span>
-                <span className="text-white">{kycRequest.user_phone || kycRequest.phone_number}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Email</span>
-                <span className="text-white">{kycRequest.user_email || '-'}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Adresse</span>
-                <span className="text-white">{kycRequest.address || '-'}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
-              <FaIdCard className="text-blue-400" /> Pièce d'identité
-            </h3>
-            <div className="space-y-3">
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Type de pièce</span>
-                <span className="text-white">{kycRequest.id_type?.toUpperCase() || 'CNI'}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Numéro</span>
-                <span className="text-white font-mono">{kycRequest.id_number}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Date de délivrance</span>
-                <span className="text-white">{kycRequest.id_issue_date || '-'}</span>
-              </div>
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Date d'expiration</span>
-                <span className="text-white">{kycRequest.id_expiry_date || '-'}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
-              <FaCalendarAlt className="text-blue-400" /> Dates
-            </h3>
-            <div className="space-y-3">
-              <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                <span className="text-white/60">Soumis le</span>
-                <span className="text-white">{formatDate(kycRequest.submitted_at)}</span>
-              </div>
-              {kycRequest.verified_at && (
-                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                  <span className="text-white/60">Vérifié le</span>
-                  <span className="text-white">{formatDate(kycRequest.verified_at)}</span>
-                </div>
-              )}
-            </div>
-          </div>
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6 border-b border-white/10 pb-2">
+          <button
+            onClick={() => setActiveTab('details')}
+            className={`px-4 py-2 rounded-lg transition-all ${
+              activeTab === 'details' ? 'bg-blue-600 text-white' : 'text-white/60 hover:text-white'
+            }`}
+          >
+            <FaUser className="inline mr-2" /> Détails
+          </button>
+          <button
+            onClick={() => setActiveTab('documents')}
+            className={`px-4 py-2 rounded-lg transition-all ${
+              activeTab === 'documents' ? 'bg-blue-600 text-white' : 'text-white/60 hover:text-white'
+            }`}
+          >
+            <FaFilePdf className="inline mr-2" /> Documents
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`px-4 py-2 rounded-lg transition-all ${
+              activeTab === 'history' ? 'bg-blue-600 text-white' : 'text-white/60 hover:text-white'
+            }`}
+          >
+            <FaHistory className="inline mr-2" /> Historique
+          </button>
         </div>
 
-        {/* Documents */}
-        {kycRequest.documents && kycRequest.documents.length > 0 && (
-          <div className="card mt-6">
-            <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
-              <FaFilePdf className="text-blue-400" /> Documents joints
-            </h3>
-            <div className="grid md:grid-cols-2 gap-3">
-              {kycRequest.documents.map((doc, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => downloadDocument(doc.id, doc.filename)}
-                  className="flex items-center gap-3 p-3 bg-white/5 hover:bg-white/10 rounded-lg transition-all"
-                >
-                  {doc.mime_type?.includes('pdf') ? (
-                    <FaFilePdf className="text-red-400 text-xl" />
-                  ) : (
-                    <FaImage className="text-blue-400 text-xl" />
-                  )}
-                  <div className="flex-1 text-left">
-                    <p className="text-white text-sm">{doc.document_type}</p>
-                    <p className="text-white/40 text-xs">{new Date(doc.uploaded_at).toLocaleDateString('fr-FR')}</p>
-                  </div>
-                  <FaDownload className="text-white/40" />
-                </button>
-              ))}
+        {/* Onglet Détails */}
+        {activeTab === 'details' && (
+          <div className="grid lg:grid-cols-2 gap-6">
+            <div className="card">
+              <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
+                <FaUser className="text-blue-400" /> Informations personnelles
+              </h3>
+              <div className="space-y-3">
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Nom complet</span>
+                  <span className="text-white font-medium">{kycRequest.fullname}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Date de naissance</span>
+                  <span className="text-white">{kycRequest.birth_date || '-'}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Lieu de naissance</span>
+                  <span className="text-white">{kycRequest.birth_place || '-'}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Nationalité</span>
+                  <span className="text-white">{kycRequest.nationality || 'Tchadienne'}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Profession</span>
+                  <span className="text-white">{kycRequest.occupation || '-'}</span>
+                </div>
+              </div>
             </div>
+
+            <div className="card">
+              <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
+                <FaPhone className="text-blue-400" /> Contact
+              </h3>
+              <div className="space-y-3">
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Téléphone</span>
+                  <span className="text-white">{kycRequest.user_phone || kycRequest.phone_number}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Email</span>
+                  <span className="text-white">{kycRequest.user_email || '-'}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Adresse</span>
+                  <span className="text-white">{kycRequest.address || '-'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="card">
+              <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
+                <FaIdCard className="text-blue-400" /> Pièce d'identité
+              </h3>
+              <div className="space-y-3">
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Type de pièce</span>
+                  <span className="text-white">{kycRequest.id_type?.toUpperCase() || 'CNI'}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Numéro</span>
+                  <span className="text-white font-mono">{kycRequest.id_number}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Date de délivrance</span>
+                  <span className="text-white">{kycRequest.id_issue_date || '-'}</span>
+                </div>
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Date d'expiration</span>
+                  <span className="text-white">{kycRequest.id_expiry_date || '-'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="card">
+              <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
+                <FaCalendarAlt className="text-blue-400" /> Dates
+              </h3>
+              <div className="space-y-3">
+                <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                  <span className="text-white/60">Soumis le</span>
+                  <span className="text-white">{formatDate(kycRequest.submitted_at)}</span>
+                </div>
+                {kycRequest.verified_at && (
+                  <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                    <span className="text-white/60">Vérifié le</span>
+                    <span className="text-white">{formatDate(kycRequest.verified_at)}</span>
+                  </div>
+                )}
+                {kycRequest.verified_by && (
+                  <div className="flex justify-between p-3 bg-white/5 rounded-xl">
+                    <span className="text-white/60">Vérifié par</span>
+                    <span className="text-white">{kycRequest.verified_by_name || 'Admin'}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {kycRequest.status === 'rejected' && kycRequest.rejection_reason && (
+              <div className="lg:col-span-2 card border-red-500/30 bg-red-500/10">
+                <h3 className="text-red-400 text-lg font-semibold mb-2 flex items-center gap-2">
+                  <FaTimesCircle /> Motif du rejet
+                </h3>
+                <p className="text-red-300">{kycRequest.rejection_reason}</p>
+              </div>
+            )}
           </div>
         )}
 
-        {kycRequest.status === 'rejected' && kycRequest.rejection_reason && (
-          <div className="card mt-6 border-red-500/30 bg-red-500/10">
-            <h3 className="text-red-400 text-lg font-semibold mb-2 flex items-center gap-2">
-              <FaTimesCircle /> Motif du rejet
+        {/* Onglet Documents */}
+        {activeTab === 'documents' && (
+          <div className="card">
+            <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
+              <FaFilePdf className="text-blue-400" /> Documents joints
             </h3>
-            <p className="text-red-300">{kycRequest.rejection_reason}</p>
+            {kycRequest.documents && kycRequest.documents.length > 0 ? (
+              <div className="grid md:grid-cols-2 gap-3">
+                {kycRequest.documents.map((doc, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => downloadDocument(doc.id, doc.filename)}
+                    className="flex items-center gap-3 p-3 bg-white/5 hover:bg-white/10 rounded-lg transition-all group"
+                  >
+                    {doc.mime_type?.includes('pdf') ? (
+                      <FaFilePdf className="text-red-400 text-xl group-hover:scale-110 transition-transform" />
+                    ) : (
+                      <FaImage className="text-blue-400 text-xl group-hover:scale-110 transition-transform" />
+                    )}
+                    <div className="flex-1 text-left">
+                      <p className="text-white text-sm capitalize">
+                        {doc.document_type?.replace(/_/g, ' ')}
+                      </p>
+                      <p className="text-white/40 text-xs">
+                        {new Date(doc.uploaded_at).toLocaleDateString('fr-FR')}
+                      </p>
+                    </div>
+                    <FaDownload className="text-white/40 group-hover:text-white transition-colors" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <FaFilePdf className="text-white/20 text-5xl mx-auto mb-3" />
+                <p className="text-white/50">Aucun document joint</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Onglet Historique */}
+        {activeTab === 'history' && (
+          <div className="card">
+            <h3 className="text-white text-lg font-semibold mb-4 flex items-center gap-2">
+              <FaHistory className="text-blue-400" /> Historique des actions
+            </h3>
+            {kycRequest.history && kycRequest.history.length > 0 ? (
+              <div className="space-y-3">
+                {kycRequest.history.map((item, idx) => (
+                  <div key={idx} className="flex items-start gap-3 p-3 bg-white/5 rounded-lg">
+                    <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center">
+                      {item.action === 'submit' ? '📤' : item.action === 'approve' ? '✅' : '❌'}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-white font-medium">
+                        {item.action === 'submit' ? 'Soumission' : 
+                         item.action === 'approve' ? 'Approbation' : 'Rejet'}
+                      </p>
+                      <p className="text-white/60 text-sm">{item.description}</p>
+                      <p className="text-white/30 text-xs mt-1">
+                        {formatDate(item.created_at)} par {item.created_by_name || 'Système'}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <FaHistory className="text-white/20 text-5xl mx-auto mb-3" />
+                <p className="text-white/50">Aucun historique disponible</p>
+              </div>
+            )}
           </div>
         )}
       </div>

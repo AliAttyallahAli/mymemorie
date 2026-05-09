@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
-    FOREIGN KEY (referred_by) REFERENCES users(id)
+    FOREIGN KEY (referred_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
 
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS agents (
     created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (created_by) REFERENCES users(id)
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- ============================================
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_by_agent INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME,
-    FOREIGN KEY (created_by_agent) REFERENCES agents(id)
+    FOREIGN KEY (created_by_agent) REFERENCES agents(id) ON DELETE SET NULL
 );
 
 -- ============================================
@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS announcements (
     created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME,
-    FOREIGN KEY (created_by) REFERENCES users(id)
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- ============================================
@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS system_logs (
     user_agent TEXT,
     details TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- ============================================
@@ -224,8 +224,8 @@ CREATE TABLE IF NOT EXISTS kyc_requests (
     verified_by INTEGER,
     rejection_reason TEXT,
     notes TEXT,
-    FOREIGN KEY (user_id) REFERENCES users(id),
-    FOREIGN KEY (verified_by) REFERENCES users(id)
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- ============================================

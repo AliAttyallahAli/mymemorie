@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import axios from 'axios'
-import toast from 'react-hot-toast'
+import { toast } from '../utils/toast'
 import { 
   FaUserTie, FaMapMarkerAlt, FaPhone, FaStar, FaSearch,
   FaWhatsapp, FaEnvelope, FaChevronLeft, FaChevronRight,

@@ -10,7 +10,7 @@ import {
   FaCopy, FaBan, FaCheck, FaTrashAlt, FaEdit, FaPlus, FaNewspaper,
   FaSave, FaArrowLeft, FaImage, FaIdCard, FaTag, FaCalendarAlt, FaSpinner,
   FaDownload, FaEnvelope, FaUserCheck, FaUserTimes, FaInfoCircle,
-  FaFilePdf, FaFileAlt
+  FaFilePdf, FaFileAlt, FaQuestionCircle, FaUserCog, FaUserShield
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 import AgentApplicationsManager from '../components/AgentApplicationsManager'
@@ -45,8 +45,28 @@ function AdminPanel({ user }) {
   const [kycLoading, setKycLoading] = useState(false)
   const [selectedKyc, setSelectedKyc] = useState(null)
   const [showKycDetailModal, setShowKycDetailModal] = useState(false)
+  const [showKycApprovalModal, setShowKycApprovalModal] = useState(false)
+  const [kycAction, setKycAction] = useState(null)
+  const [kycRejectionReason, setKycRejectionReason] = useState('')
   const [kycFilter, setKycFilter] = useState('all')
   const [processingKyc, setProcessingKyc] = useState(false)
+  
+  // États pour le modal de création d'utilisateur
+  const [showUserModal, setShowUserModal] = useState(false)
+  const [creatingUser, setCreatingUser] = useState(false)
+  const [createdUser, setCreatedUser] = useState(null)
+  const [showUserPassword, setShowUserPassword] = useState(false)
+  const [userForm, setUserForm] = useState({
+    phone: '',
+    fullname: '',
+    password: '',
+    confirmPassword: '',
+    email: '',
+    province: '',
+    city: '',
+    address: '',
+    role: 'user'
+  })
   
   // États pour le modal de création d'agent
   const [showAgentModal, setShowAgentModal] = useState(false)
@@ -54,9 +74,6 @@ function AdminPanel({ user }) {
   const [createdAgent, setCreatedAgent] = useState(null)
   const [showPassword, setShowPassword] = useState(false)
   const [showPrivateKey, setShowPrivateKey] = useState(false)
-  const [provinces, setProvinces] = useState([])
-  
-  // Formulaire agent
   const [agentForm, setAgentForm] = useState({
     phone: '',
     fullname: '',
@@ -68,6 +85,7 @@ function AdminPanel({ user }) {
     agency_phone: '',
     agency_type: 'secondaire'
   })
+  const [provinces, setProvinces] = useState([])
 
   useEffect(() => {
     if (user?.role === 'admin') {
@@ -159,6 +177,98 @@ function AdminPanel({ user }) {
     }
   }
 
+  // Gestion des utilisateurs
+  const handleUserFormChange = (e) => {
+    setUserForm({ ...userForm, [e.target.name]: e.target.value })
+  }
+
+  const handleCreateUser = async (e) => {
+    e.preventDefault()
+    
+    if (userForm.password !== userForm.confirmPassword) {
+      toast.error('Les mots de passe ne correspondent pas')
+      return
+    }
+    
+    if (userForm.password.length < 4) {
+      toast.error('Le mot de passe doit contenir au moins 4 caractères')
+      return
+    }
+    
+    if (!/^\d{8}$/.test(userForm.phone)) {
+      toast.error('Le numéro de téléphone doit contenir 8 chiffres')
+      return
+    }
+    
+    if (!userForm.fullname) {
+      toast.error('Le nom complet est requis')
+      return
+    }
+    
+    if (!userForm.province) {
+      toast.error('La province est requise')
+      return
+    }
+    
+    setCreatingUser(true)
+    
+    try {
+      const token = localStorage.getItem('accessToken')
+      const response = await axios.post('/api/admin/users', {
+        phone: userForm.phone,
+        fullname: userForm.fullname,
+        password: userForm.password,
+        email: userForm.email,
+        province: userForm.province,
+        city: userForm.city,
+        address: userForm.address,
+        role: userForm.role
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      setCreatedUser(response.data.user)
+      toast.success('Utilisateur créé avec succès !')
+      
+      setUserForm({
+        phone: '',
+        fullname: '',
+        password: '',
+        confirmPassword: '',
+        email: '',
+        province: '',
+        city: '',
+        address: '',
+        role: 'user'
+      })
+      
+      fetchAdminData()
+      
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Erreur lors de la création de l\'utilisateur')
+    } finally {
+      setCreatingUser(false)
+    }
+  }
+
+  const resetUserModal = () => {
+    setShowUserModal(false)
+    setCreatedUser(null)
+    setUserForm({
+      phone: '',
+      fullname: '',
+      password: '',
+      confirmPassword: '',
+      email: '',
+      province: '',
+      city: '',
+      address: '',
+      role: 'user'
+    })
+    setShowUserPassword(false)
+  }
+
+  // Gestion des agents
   const handleAgentFormChange = (e) => {
     setAgentForm({ ...agentForm, [e.target.name]: e.target.value })
   }
@@ -261,169 +371,6 @@ function AdminPanel({ user }) {
     setShowPrivateKey(false)
   }
 
-  const handleBlogFormChange = (e) => {
-    const { name, value, type, checked } = e.target
-    setBlogForm(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }))
-  }
-
-  const handleCreateBlogPost = async (e) => {
-    e.preventDefault()
-    setSavingPost(true)
-    
-    try {
-      const token = localStorage.getItem('accessToken')
-      const data = {
-        title: blogForm.title,
-        content: blogForm.content,
-        excerpt: blogForm.excerpt,
-        category: blogForm.category,
-        tags: blogForm.tags,
-        image_url: blogForm.image_url,
-        status: blogForm.status
-      }
-      
-      if (editingPost) {
-        await axios.put(`/api/blog/posts/${editingPost.id}`, data, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        toast.success('Article modifié avec succès')
-      } else {
-        await axios.post('/api/blog/posts', data, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        toast.success('Article créé avec succès')
-      }
-      
-      setShowBlogForm(false)
-      setEditingPost(null)
-      setBlogForm({
-        title: '',
-        excerpt: '',
-        content: '',
-        category: 'actualite',
-        tags: '',
-        image_url: '',
-        status: 'published'
-      })
-      fetchBlogPosts()
-      
-    } catch (error) {
-      console.error('Erreur:', error)
-      toast.error(error.response?.data?.error || 'Erreur lors de l\'enregistrement')
-    } finally {
-      setSavingPost(false)
-    }
-  }
-
-  const handleDeleteBlogPost = async (postId, postTitle) => {
-    if (!window.confirm(`Supprimer l'article "${postTitle}" ?`)) return
-    
-    try {
-      const token = localStorage.getItem('accessToken')
-      await axios.delete(`/api/blog/posts/${postId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      toast.success('Article supprimé')
-      fetchBlogPosts()
-    } catch (error) {
-      toast.error('Erreur lors de la suppression')
-    }
-  }
-
-  const handleEditBlogPost = (post) => {
-    setEditingPost(post)
-    setBlogForm({
-      title: post.title || '',
-      excerpt: post.excerpt || '',
-      content: post.content || '',
-      category: post.category || 'actualite',
-      tags: post.tags || '',
-      image_url: post.image_url || '',
-      status: post.status || 'published'
-    })
-    setShowBlogForm(true)
-  }
-
-  const handleKycAction = async (requestId, action, rejectionReason = '') => {
-    if (!window.confirm(`Êtes-vous sûr de vouloir ${action === 'approve' ? 'approuver' : 'rejeter'} cette demande KYC ?`)) return
-    
-    setProcessingKyc(true)
-    try {
-      const token = localStorage.getItem('accessToken')
-      await axios.post(`/api/admin/kyc/verify/${requestId}`, {
-        action,
-        rejectionReason: rejectionReason || null,
-        level: 1
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      
-      toast.success(`Demande ${action === 'approve' ? 'approuvée' : 'rejetée'} avec succès`)
-      fetchKycRequests()
-      setShowKycDetailModal(false)
-      setSelectedKyc(null)
-      
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Erreur lors du traitement')
-    } finally {
-      setProcessingKyc(false)
-    }
-  }
-
-  const downloadKycDocument = async (documentId, filename) => {
-    try {
-      const token = localStorage.getItem('accessToken')
-      const response = await axios.get(`/api/kyc/download/${documentId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob'
-      })
-      
-      const url = window.URL.createObjectURL(new Blob([response.data]))
-      const link = document.createElement('a')
-      link.href = url
-      link.setAttribute('download', filename)
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      window.URL.revokeObjectURL(url)
-      
-      toast.success('Document téléchargé')
-    } catch (error) {
-      toast.error('Erreur lors du téléchargement')
-    }
-  }
-
-  const toggleUserStatus = async (userId, currentStatus) => {
-    try {
-      const token = localStorage.getItem('accessToken')
-      await axios.put(`/api/admin/users/${userId}/toggle-status`, 
-        { is_active: !currentStatus },
-        { headers: { Authorization: `Bearer ${token}` } }
-      )
-      toast.success(`Utilisateur ${!currentStatus ? 'activé' : 'désactivé'}`)
-      fetchAdminData()
-    } catch (error) {
-      toast.error('Erreur lors du changement de statut')
-    }
-  }
-
-  const recoverUserKey = async (userId, userName) => {
-    if (!window.confirm(`Générer une nouvelle clé pour ${userName} ?`)) return
-    
-    try {
-      const token = localStorage.getItem('accessToken')
-      const response = await axios.get(`/api/admin/users/${userId}/key`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      toast.success(`Nouvelle clé: ${response.data.private_key}`, { duration: 10000 })
-    } catch (error) {
-      toast.error('Erreur lors de la récupération de la clé')
-    }
-  }
-
   const copyToClipboard = (text, label) => {
     navigator.clipboard.writeText(text)
     toast.success(`${label} copié !`)
@@ -484,7 +431,7 @@ function AdminPanel({ user }) {
               }}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${
                 activeTab === tab.id
-                  ? 'bg-blue-600 text-white'
+                  ? 'bg-primary-500 text-white'
                   : 'text-white/60 hover:text-white hover:bg-white/10'
               }`}
             >
@@ -515,61 +462,60 @@ function AdminPanel({ user }) {
           </div>
         )}
 
-        {/* Users Tab */}
+        {/* Users Tab - Ajout d'utilisateurs */}
         {activeTab === 'users' && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-white">
-              <thead className="border-b border-white/20">
-                <tr className="text-left text-white/60">
-                  <th className="pb-3">Nom</th>
-                  <th className="pb-3">Téléphone</th>
-                  <th className="pb-3">Province</th>
-                  <th className="pb-3">Solde</th>
-                  <th className="pb-3">Statut</th>
-                  <th className="pb-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.filter(u => u.role === 'user').map(u => (
-                  <tr key={u.id} className="border-b border-white/10">
-                    <td className="py-3">{u.fullname}</td>
-                    <td className="py-3">{u.phone}</td>
-                    <td className="py-3">{u.province}</td>
-                    <td className="py-3">{(u.balance || 0).toLocaleString()} FCFA</td>
-                    <td className="py-3">
-                      <span className={`px-2 py-1 rounded-full text-xs ${
-                        u.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                      }`}>
-                        {u.is_active ? 'Actif' : 'Inactif'}
-                      </span>
-                    </td>
-                    <td className="py-3">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => toggleUserStatus(u.id, u.is_active)}
-                          className={`px-2 py-1 rounded text-xs flex items-center gap-1 ${
-                            u.is_active ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
-                          }`}
-                        >
-                          {u.is_active ? <FaBan size={10} /> : <FaCheck size={10} />}
-                          {u.is_active ? 'Bloquer' : 'Débloquer'}
-                        </button>
-                        <button
-                          onClick={() => recoverUserKey(u.id, u.fullname)}
-                          className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1"
-                        >
-                          <FaKey size={10} /> Clé
-                        </button>
-                      </div>
-                    </td>
+          <div>
+            <button
+              onClick={() => setShowUserModal(true)}
+              className="btn-primary mb-4 inline-flex items-center gap-2"
+            >
+              <FaUserPlus /> Nouvel utilisateur
+            </button>
+            
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="border-b border-white/20">
+                  <tr className="text-left text-white/60">
+                    <th className="pb-3">Nom</th>
+                    <th className="pb-3">Téléphone</th>
+                    <th className="pb-3">Rôle</th>
+                    <th className="pb-3">Province</th>
+                    <th className="pb-3">Solde</th>
+                    <th className="pb-3">Statut</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {users.map(u => (
+                    <tr key={u.id} className="border-b border-white/10">
+                      <td className="py-3 text-white">{u.fullname}</td>
+                      <td className="py-3 text-white/80">{u.phone}</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-1 rounded-full text-xs ${
+                          u.role === 'admin' ? 'bg-red-500/20 text-red-400' :
+                          u.role === 'agent' ? 'bg-blue-500/20 text-blue-400' :
+                          'bg-green-500/20 text-green-400'
+                        }`}>
+                          {u.role === 'admin' ? 'Admin' : u.role === 'agent' ? 'Agent' : 'Utilisateur'}
+                        </span>
+                      </td>
+                      <td className="py-3 text-white/80">{u.province}</td>
+                      <td className="py-3 text-white">{(u.balance || 0).toLocaleString()} FCFA</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-1 rounded-full text-xs ${
+                          u.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                        }`}>
+                          {u.is_active ? 'Actif' : 'Inactif'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
-        {/* Agents Tab */}
+        {/* Agents Tab - Ajout d'agents */}
         {activeTab === 'agents' && (
           <div>
             <button
@@ -580,46 +526,27 @@ function AdminPanel({ user }) {
             </button>
             
             <div className="overflow-x-auto">
-              <table className="w-full text-white">
+              <table className="w-full">
                 <thead className="border-b border-white/20">
                   <tr className="text-left text-white/60">
                     <th className="pb-3">Nom</th>
                     <th className="pb-3">Téléphone</th>
                     <th className="pb-3">Agence</th>
                     <th className="pb-3">Statut</th>
-                    <th className="pb-3">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {agents.map(a => (
                     <tr key={a.id} className="border-b border-white/10">
-                      <td className="py-3">{a.fullname} </td>
-                      <td className="py-3">{a.phone} </td>
-                      <td className="py-3">{a.agency_name || '-'} </td>
+                      <td className="py-3 text-white">{a.fullname}</td>
+                      <td className="py-3 text-white/80">{a.phone}</td>
+                      <td className="py-3 text-white/80">{a.agency_name || '-'}</td>
                       <td className="py-3">
                         <span className={`px-2 py-1 rounded-full text-xs ${
                           a.is_active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
                         }`}>
                           {a.is_active ? 'Actif' : 'Inactif'}
                         </span>
-                      </td>
-                      <td className="py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => toggleUserStatus(a.id, a.is_active)}
-                            className={`px-2 py-1 rounded text-xs ${
-                              a.is_active ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
-                            }`}
-                          >
-                            {a.is_active ? 'Bloquer' : 'Débloquer'}
-                          </button>
-                          <button
-                            onClick={() => recoverUserKey(a.id, a.fullname)}
-                            className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400"
-                          >
-                            <FaKey className="inline mr-1" size={10} /> Clé
-                          </button>
-                        </div>
                       </td>
                     </tr>
                   ))}
@@ -635,7 +562,7 @@ function AdminPanel({ user }) {
             <div className="bg-gradient-to-r from-yellow-600 to-yellow-700 rounded-2xl p-8 mb-6">
               <p className="text-white/80 text-sm">Wallet Principal (Frais 2%)</p>
               <h2 className="text-5xl font-bold text-white my-4">
-                {stats.totalBalance ? (stats.totalBalance * 0.02).toLocaleString() : '0'} FCFA
+                {stats.totalBalance ? Math.floor(stats.totalBalance * 0.02).toLocaleString() : '0'} FCFA
               </h2>
               <p className="text-white/60 text-sm">Frais accumulés sur les transactions</p>
             </div>
@@ -684,223 +611,37 @@ function AdminPanel({ user }) {
         {/* Blog Tab */}
         {activeTab === 'blog' && (
           <div>
-            {!showBlogForm ? (
-              <>
-                <button
-                  onClick={() => {
-                    setEditingPost(null)
-                    setBlogForm({
-                      title: '',
-                      excerpt: '',
-                      content: '',
-                      category: 'actualite',
-                      tags: '',
-                      image_url: '',
-                      status: 'published'
-                    })
-                    setShowBlogForm(true)
-                  }}
-                  className="btn-primary mb-4 inline-flex items-center gap-2"
-                >
-                  <FaPlus /> Nouvel article
-                </button>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-white text-lg">Articles du blog</h3>
+              <button
+                onClick={() => { setShowBlogForm(true); setEditingPost(null); setBlogForm({ title: '', excerpt: '', content: '', category: 'actualite', tags: '', image_url: '', status: 'published' }) }}
+                className="btn-primary inline-flex items-center gap-2 text-sm"
+              >
+                <FaPlus /> Nouvel article
+              </button>
+            </div>
 
-                {blogLoading ? (
-                  <div className="flex justify-center py-12">
-                    <FaSpinner className="text-white text-4xl animate-spin" />
-                  </div>
-                ) : blogPosts.length === 0 ? (
-                  <div className="text-center py-12 bg-white/5 rounded-xl">
-                    <FaNewspaper className="text-white/20 text-5xl mx-auto mb-3" />
-                    <p className="text-white/50">Aucun article de blog</p>
-                    <button
-                      onClick={() => {
-                        setEditingPost(null)
-                        setBlogForm({
-                          title: '',
-                          excerpt: '',
-                          content: '',
-                          category: 'actualite',
-                          tags: '',
-                          image_url: '',
-                          status: 'published'
-                        })
-                        setShowBlogForm(true)
-                      }}
-                      className="text-blue-400 text-sm mt-2 hover:underline"
-                    >
-                      Créer le premier article
-                    </button>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-white">
-                      <thead className="border-b border-white/20">
-                        <tr className="text-left text-white/60">
-                          <th className="pb-3">Titre</th>
-                          <th className="pb-3">Catégorie</th>
-                          <th className="pb-3">Date</th>
-                          <th className="pb-3">Statut</th>
-                          <th className="pb-3">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {blogPosts.map((post) => (
-                          <tr key={post.id} className="border-b border-white/10 hover:bg-white/5">
-                            <td className="py-3 max-w-xs">
-                              <p className="truncate">{post.title}</p>
-                            </td>
-                            <td className="py-3">
-                              <span className="px-2 py-1 rounded-full text-xs bg-blue-500/20 text-blue-400">
-                                {post.category || 'actualite'}
-                              </span>
-                            </td>
-                            <td className="py-3 text-white/60 text-sm">
-                              {post.created_at ? new Date(post.created_at).toLocaleDateString('fr-FR') : '-'}
-                            </td>
-                            <td className="py-3">
-                              <span className={`px-2 py-1 rounded-full text-xs ${
-                                post.status === 'published'
-                                  ? 'bg-green-500/20 text-green-400'
-                                  : 'bg-yellow-500/20 text-yellow-400'
-                              }`}>
-                                {post.status === 'published' ? 'Publié' : 'Brouillon'}
-                              </span>
-                            </td>
-                            <td className="py-3">
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleEditBlogPost(post)}
-                                  className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 flex items-center gap-1 hover:bg-blue-500/30"
-                                >
-                                  <FaEdit size={10} /> Modifier
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteBlogPost(post.id, post.title)}
-                                  className="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 flex items-center gap-1 hover:bg-red-500/30"
-                                >
-                                  <FaTrashAlt size={10} /> Supprimer
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
+            {blogLoading ? (
+              <div className="flex justify-center py-12"><FaSpinner className="text-white text-4xl animate-spin" /></div>
+            ) : blogPosts.length === 0 ? (
+              <div className="text-center py-12 bg-white/5 rounded-xl">
+                <FaNewspaper className="text-white/20 text-5xl mx-auto mb-3" />
+                <p className="text-white/50">Aucun article. Créez le premier !</p>
+              </div>
             ) : (
-              <div>
-                <button
-                  onClick={() => {
-                    setShowBlogForm(false)
-                    setEditingPost(null)
-                  }}
-                  className="btn-secondary mb-4 inline-flex items-center gap-2"
-                >
-                  <FaArrowLeft /> Retour à la liste
-                </button>
-
-                <form onSubmit={handleCreateBlogPost} className="space-y-4">
-                  <h3 className="text-white text-xl font-semibold mb-4">
-                    {editingPost ? 'Modifier l\'article' : 'Nouvel article'}
-                  </h3>
-                  <div>
-                    <label className="label">Titre *</label>
-                    <input
-                      type="text"
-                      name="title"
-                      value={blogForm.title}
-                      onChange={handleBlogFormChange}
-                      className="input-field"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Extrait *</label>
-                    <textarea
-                      name="excerpt"
-                      value={blogForm.excerpt}
-                      onChange={handleBlogFormChange}
-                      className="input-field"
-                      rows="2"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Contenu *</label>
-                    <textarea
-                      name="content"
-                      value={blogForm.content}
-                      onChange={handleBlogFormChange}
-                      className="input-field"
-                      rows="8"
-                      required
-                    />
-                  </div>
-                  <div className="grid md:grid-cols-2 gap-4">
+              <div className="space-y-3">
+                {blogPosts.map(post => (
+                  <div key={post.id} className="bg-white/5 rounded-xl p-4 flex justify-between items-center">
                     <div>
-                      <label className="label">Catégorie</label>
-                      <select
-                        name="category"
-                        value={blogForm.category}
-                        onChange={handleBlogFormChange}
-                        className="input-field"
-                      >
-                        <option value="tutoriel">Tutoriel</option>
-                        <option value="actualite">Actualité</option>
-                        <option value="securite">Sécurité</option>
-                        <option value="promotion">Promotion</option>
-                        <option value="opportunite">Opportunité</option>
-                      </select>
+                      <p className="text-white font-medium">{post.title}</p>
+                      <p className="text-white/50 text-sm">{new Date(post.created_at).toLocaleDateString('fr-FR')} • {post.category}</p>
                     </div>
-                    <div>
-                      <label className="label">Tags (séparés par des virgules)</label>
-                      <input
-                        type="text"
-                        name="tags"
-                        value={blogForm.tags}
-                        onChange={handleBlogFormChange}
-                        className="input-field"
-                        placeholder="ex: transfert, argent, tchad"
-                      />
+                    <div className="flex gap-2">
+                      <button onClick={() => handleEditBlogPost(post)} className="text-blue-400 hover:text-blue-300"><FaEdit /></button>
+                      <button onClick={() => handleDeleteBlogPost(post.id, post.title)} className="text-red-400 hover:text-red-300"><FaTrashAlt /></button>
                     </div>
                   </div>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="label">URL de l'image</label>
-                      <input
-                        type="text"
-                        name="image_url"
-                        value={blogForm.image_url}
-                        onChange={handleBlogFormChange}
-                        className="input-field"
-                        placeholder="https://..."
-                      />
-                    </div>
-                    <div>
-                      <label className="label">Statut</label>
-                      <select
-                        name="status"
-                        value={blogForm.status}
-                        onChange={handleBlogFormChange}
-                        className="input-field"
-                      >
-                        <option value="published">Publié</option>
-                        <option value="draft">Brouillon</option>
-                      </select>
-                    </div>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={savingPost}
-                    className="btn-primary w-full flex items-center justify-center gap-2"
-                  >
-                    {savingPost ? <FaSpinner className="animate-spin" /> : <FaSave />}
-                    {editingPost ? 'Mettre à jour' : 'Publier'}
-                  </button>
-                </form>
+                ))}
               </div>
             )}
           </div>
@@ -911,64 +652,26 @@ function AdminPanel({ user }) {
           <div>
             <div className="flex justify-between items-center mb-4">
               <div className="flex gap-2">
-                <button
-                  onClick={() => setKycFilter('all')}
-                  className={`px-3 py-1 rounded-lg text-sm ${
-                    kycFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-white/10 text-white/60'
-                  }`}
-                >
-                  Toutes
-                </button>
-                <button
-                  onClick={() => setKycFilter('pending')}
-                  className={`px-3 py-1 rounded-lg text-sm ${
-                    kycFilter === 'pending' ? 'bg-yellow-600 text-white' : 'bg-white/10 text-white/60'
-                  }`}
-                >
-                  En attente
-                </button>
-                <button
-                  onClick={() => setKycFilter('verified')}
-                  className={`px-3 py-1 rounded-lg text-sm ${
-                    kycFilter === 'verified' ? 'bg-green-600 text-white' : 'bg-white/10 text-white/60'
-                  }`}
-                >
-                  Vérifiés
-                </button>
-                <button
-                  onClick={() => setKycFilter('rejected')}
-                  className={`px-3 py-1 rounded-lg text-sm ${
-                    kycFilter === 'rejected' ? 'bg-red-600 text-white' : 'bg-white/10 text-white/60'
-                  }`}
-                >
-                  Rejetés
-                </button>
+                <button onClick={() => { setKycFilter('all'); fetchKycRequests() }} className={`px-3 py-1 rounded-lg text-sm ${kycFilter === 'all' ? 'bg-primary-500 text-white' : 'bg-white/10 text-white/60'}`}>Toutes</button>
+                <button onClick={() => { setKycFilter('pending'); fetchKycRequests() }} className={`px-3 py-1 rounded-lg text-sm ${kycFilter === 'pending' ? 'bg-yellow-600 text-white' : 'bg-white/10 text-white/60'}`}>En attente</button>
+                <button onClick={() => { setKycFilter('verified'); fetchKycRequests() }} className={`px-3 py-1 rounded-lg text-sm ${kycFilter === 'verified' ? 'bg-green-600 text-white' : 'bg-white/10 text-white/60'}`}>Vérifiés</button>
+                <button onClick={() => { setKycFilter('rejected'); fetchKycRequests() }} className={`px-3 py-1 rounded-lg text-sm ${kycFilter === 'rejected' ? 'bg-red-600 text-white' : 'bg-white/10 text-white/60'}`}>Rejetés</button>
               </div>
-              <button onClick={fetchKycRequests} className="text-blue-400 text-sm">
-                <FaSpinner className={`inline mr-1 ${kycLoading ? 'animate-spin' : ''}`} />
-                Rafraîchir
-              </button>
             </div>
 
             {kycLoading ? (
-              <div className="flex justify-center py-12">
-                <FaSpinner className="text-white text-4xl animate-spin" />
-              </div>
+              <div className="flex justify-center py-12"><FaSpinner className="text-white text-4xl animate-spin" /></div>
             ) : kycRequests.length === 0 ? (
-              <div className="text-center py-12 bg-white/5 rounded-xl">
-                <FaIdCard className="text-white/20 text-5xl mx-auto mb-3" />
-                <p className="text-white/50">Aucune demande KYC</p>
-              </div>
+              <div className="text-center py-12 bg-white/5 rounded-xl"><FaIdCard className="text-white/20 text-5xl mx-auto mb-3" /><p className="text-white/50">Aucune demande KYC</p></div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-white">
+                <table className="w-full">
                   <thead className="border-b border-white/20">
                     <tr className="text-left text-white/60">
                       <th className="pb-3">Utilisateur</th>
                       <th className="pb-3">Contact</th>
                       <th className="pb-3">Date</th>
                       <th className="pb-3">Statut</th>
-                      <th className="pb-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -976,54 +679,17 @@ function AdminPanel({ user }) {
                       const status = getStatusBadge(req.status)
                       const StatusIcon = status.icon
                       return (
-                        <tr key={req.id} className="border-b border-white/10 hover:bg-white/5">
-                          <td className="py-3">
+                        <tr key={req.id} className="border-b border-white/10">
+                          <td className="py-3 text-white">
                             <p className="font-medium">{req.fullname}</p>
                             <p className="text-xs text-white/40">{req.id_type?.toUpperCase()} - {req.id_number}</p>
                           </td>
-                          <td className="py-3">
-                            <p className="text-sm">{req.user_phone}</p>
-                            {req.user_email && <p className="text-xs text-white/40">{req.user_email}</p>}
-                          </td>
-                          <td className="py-3 text-sm">
-                            {new Date(req.submitted_at).toLocaleDateString('fr-FR')}
-                          </td>
+                          <td className="py-3 text-white/80"><p className="text-sm">{req.user_phone}</p></td>
+                          <td className="py-3 text-white/60 text-sm">{new Date(req.submitted_at).toLocaleDateString('fr-FR')}</td>
                           <td className="py-3">
                             <span className={`px-2 py-1 rounded-full text-xs flex items-center gap-1 w-fit ${status.color}`}>
                               <StatusIcon size={10} /> {status.text}
                             </span>
-                          </td>
-                          <td className="py-3">
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => {
-                                  setSelectedKyc(req)
-                                  setShowKycDetailModal(true)
-                                }}
-                                className="px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-all flex items-center gap-1"
-                              >
-                                <FaEye size={10} /> Détails
-                              </button>
-                              {req.status === 'pending' && (
-                                <>
-                                  <button
-                                    onClick={() => handleKycAction(req.id, 'approve')}
-                                    className="px-2 py-1 rounded text-xs bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-all flex items-center gap-1"
-                                  >
-                                    <FaCheck size={10} /> Valider
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      const reason = prompt('Raison du rejet:')
-                                      if (reason) handleKycAction(req.id, 'reject', reason)
-                                    }}
-                                    className="px-2 py-1 rounded text-xs bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-all flex items-center gap-1"
-                                  >
-                                    <FaTimes size={10} /> Rejeter
-                                  </button>
-                                </>
-                              )}
-                            </div>
                           </td>
                         </tr>
                       )
@@ -1036,218 +702,149 @@ function AdminPanel({ user }) {
         )}
 
         {/* Agent Applications Tab */}
-        {activeTab === 'agent-applications' && (
-          <AgentApplicationsManager />
-        )}
+        {activeTab === 'agent-applications' && <AgentApplicationsManager />}
 
         {/* PIN Management Tab */}
-        {activeTab === 'pin-management' && (
-          <AdminPinManagement />
-        )}
+        {activeTab === 'pin-management' && <AdminPinManagement />}
 
         {/* Settings Tab */}
         {activeTab === 'settings' && (
-          <div className="text-center py-12">
-            <FaCog className="text-white/20 text-5xl mx-auto mb-3 animate-spin-slow" />
-            <p className="text-white/50">Paramètres système en cours de développement</p>
-          </div>
+          <div className="text-center py-12"><FaCog className="text-white/20 text-5xl mx-auto mb-3 animate-spin-slow" /><p className="text-white/50">Paramètres système en cours de développement</p></div>
         )}
       </div>
 
-      {/* MODAL DÉTAILS KYC */}
-      {showKycDetailModal && selectedKyc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto">
+      {/* MODAL CRÉATION D'UTILISATEUR */}
+      {showUserModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto animate-fade-in">
           <div className="relative max-w-2xl w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl">
-            <div className="sticky top-0 bg-blue-900/95 backdrop-blur-sm p-4 border-b border-white/10 flex justify-between items-center">
+            <div className="sticky top-0 bg-blue-900/95 backdrop-blur-sm p-4 border-b border-white/10 flex justify-between items-center rounded-t-2xl">
               <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                <FaIdCard className="text-blue-400" />
-                Détails de la demande KYC
+                <FaUserPlus className="text-primary-500" /> Créer un utilisateur
               </h3>
-              <button
-                onClick={() => {
-                  setShowKycDetailModal(false)
-                  setSelectedKyc(null)
-                }}
-                className="text-white/60 hover:text-white p-2 rounded-lg hover:bg-white/10"
-              >
-                <FaTimes size={20} />
-              </button>
+              <button onClick={resetUserModal} className="text-white/60 hover:text-white transition-all"><FaTimes size={20} /></button>
             </div>
+            
             <div className="p-6">
-              <pre className="text-white text-xs">{JSON.stringify(selectedKyc, null, 2)}</pre>
+              {createdUser ? (
+                <div className="text-center">
+                  <div className="inline-flex p-4 bg-green-500/20 rounded-full mb-4">
+                    <FaCheckCircle className="text-green-400 text-4xl" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-white mb-4">Utilisateur créé !</h2>
+                  <div className="bg-white/10 rounded-xl p-4 mb-6 text-left space-y-2">
+                    <div className="flex justify-between"><span className="text-white/60">Nom :</span><span className="text-white">{createdUser.fullname}</span></div>
+                    <div className="flex justify-between"><span className="text-white/60">Téléphone :</span><span className="text-white">{createdUser.phone}</span></div>
+                    <div className="flex justify-between"><span className="text-white/60">Rôle :</span><span className="text-white">{createdUser.role}</span></div>
+                    <div className="flex justify-between"><span className="text-white/60">Mot de passe :</span><span className="text-white font-mono">{userForm.password}</span><button onClick={() => copyToClipboard(userForm.password, 'Mot de passe')} className="text-primary-400 hover:text-primary-300"><FaCopy /></button></div>
+                    <div className="flex justify-between"><span className="text-white/60">Clé privée :</span><span className="text-white font-mono">{createdUser.private_key}</span><button onClick={() => copyToClipboard(createdUser.private_key, 'Clé privée')} className="text-primary-400 hover:text-primary-300"><FaCopy /></button></div>
+                  </div>
+                  <button onClick={resetUserModal} className="btn-primary w-full">Fermer</button>
+                </div>
+              ) : (
+                <form onSubmit={handleCreateUser} className="space-y-4">
+                  <div>
+                    <label className="label">Nom complet *</label>
+                    <input type="text" name="fullname" value={userForm.fullname} onChange={handleUserFormChange} className="input-field" required />
+                  </div>
+                  <div>
+                    <label className="label">Téléphone (8 chiffres) *</label>
+                    <input type="tel" name="phone" value={userForm.phone} onChange={handleUserFormChange} className="input-field" maxLength="8" required />
+                  </div>
+                  <div>
+                    <label className="label">Email</label>
+                    <input type="email" name="email" value={userForm.email} onChange={handleUserFormChange} className="input-field" />
+                  </div>
+                  <div>
+                    <label className="label">Mot de passe *</label>
+                    <div className="relative">
+                      <input type={showUserPassword ? 'text' : 'password'} name="password" value={userForm.password} onChange={handleUserFormChange} className="input-field pr-10" required />
+                      <button type="button" onClick={() => setShowUserPassword(!showUserPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/60"><FaEye /></button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="label">Confirmer le mot de passe *</label>
+                    <input type="password" name="confirmPassword" value={userForm.confirmPassword} onChange={handleUserFormChange} className="input-field" required />
+                  </div>
+                  <div>
+                    <label className="label">Province *</label>
+                    <select name="province" value={userForm.province} onChange={handleUserFormChange} className="input-field" required>
+                      <option value="">Sélectionnez une province</option>
+                      {provinces.map(p => (<option key={p.id} value={p.name}>{p.name}</option>))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Ville</label>
+                    <input type="text" name="city" value={userForm.city} onChange={handleUserFormChange} className="input-field" />
+                  </div>
+                  <div>
+                    <label className="label">Adresse</label>
+                    <textarea name="address" value={userForm.address} onChange={handleUserFormChange} className="input-field" rows="2" />
+                  </div>
+                  <div>
+                    <label className="label">Rôle</label>
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2"><input type="radio" name="role" value="user" checked={userForm.role === 'user'} onChange={handleUserFormChange} /><span>Utilisateur</span></label>
+                      <label className="flex items-center gap-2"><input type="radio" name="role" value="admin" checked={userForm.role === 'admin'} onChange={handleUserFormChange} /><span>Administrateur</span></label>
+                    </div>
+                  </div>
+                  <button type="submit" disabled={creatingUser} className="btn-primary w-full flex items-center justify-center gap-2">
+                    {creatingUser ? <FaSpinner className="animate-spin" /> : <FaCheckCircle />} {creatingUser ? 'Création...' : 'Créer l\'utilisateur'}
+                  </button>
+                </form>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL DE CRÉATION D'AGENT */}
+      {/* MODAL CRÉATION D'AGENT */}
       {showAgentModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto">
-          <div className="relative max-w-2xl w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-blue-900/95 backdrop-blur-sm p-4 border-b border-white/10 flex justify-between items-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 overflow-y-auto animate-fade-in">
+          <div className="relative max-w-2xl w-full bg-gradient-to-br from-blue-900 to-blue-800 rounded-2xl shadow-2xl">
+            <div className="sticky top-0 bg-blue-900/95 backdrop-blur-sm p-4 border-b border-white/10 flex justify-between items-center rounded-t-2xl">
               <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                <FaUserPlus className="text-blue-400" />
-                Créer un nouvel agent
+                <FaUserTie className="text-primary-500" /> Créer un agent
               </h3>
-              <button onClick={resetAgentModal} className="text-white/60 hover:text-white">
-                <FaTimes size={20} />
-              </button>
+              <button onClick={resetAgentModal} className="text-white/60 hover:text-white transition-all"><FaTimes size={20} /></button>
             </div>
+            
             <div className="p-6">
               {createdAgent ? (
-                <div>
-                  <div className="text-center mb-6">
-                    <div className="inline-flex p-4 bg-green-500/20 rounded-full mb-4">
-                      <FaCheckCircle className="text-green-400 text-4xl" />
-                    </div>
-                    <h2 className="text-2xl font-bold text-white mb-2">Agent créé avec succès !</h2>
+                <div className="text-center">
+                  <div className="inline-flex p-4 bg-green-500/20 rounded-full mb-4">
+                    <FaCheckCircle className="text-green-400 text-4xl" />
                   </div>
-                  <div className="space-y-3">
-                    <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                      <span>Nom complet</span>
-                      <span className="font-medium">{createdAgent.fullname}</span>
-                    </div>
-                    <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                      <span>Téléphone</span>
-                      <span className="font-medium">{createdAgent.phone}</span>
-                    </div>
-                    <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                      <span>Numéro d'agence</span>
-                      <span className="font-mono">{createdAgent.agency_number}</span>
-                    </div>
-                    <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                      <span>Mot de passe</span>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono">{showPassword ? agentForm.password : '••••••••'}</span>
-                        <button onClick={() => setShowPassword(!showPassword)}>
-                          {showPassword ? <FaEyeSlash /> : <FaEye />}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex justify-between p-3 bg-white/5 rounded-xl">
-                      <span>Clé privée</span>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono">{showPrivateKey ? createdAgent.private_key : '••••••'}</span>
-                        <button onClick={() => setShowPrivateKey(!showPrivateKey)}>
-                          {showPrivateKey ? <FaEyeSlash /> : <FaEye />}
-                        </button>
-                      </div>
-                    </div>
+                  <h2 className="text-2xl font-bold text-white mb-4">Agent créé !</h2>
+                  <div className="bg-white/10 rounded-xl p-4 mb-6 text-left space-y-2">
+                    <div className="flex justify-between"><span className="text-white/60">Nom :</span><span className="text-white">{createdAgent.fullname}</span></div>
+                    <div className="flex justify-between"><span className="text-white/60">Téléphone :</span><span className="text-white">{createdAgent.phone}</span></div>
+                    <div className="flex justify-between"><span className="text-white/60">Numéro agent :</span><span className="text-white font-mono">{createdAgent.agent_number}</span></div>
+                    <div className="flex justify-between"><span className="text-white/60">Agence :</span><span className="text-white">{agentForm.agency_name}</span></div>
+                    <div className="flex justify-between"><span className="text-white/60">Mot de passe :</span><span className="text-white font-mono">{agentForm.password}</span><button onClick={() => copyToClipboard(agentForm.password, 'Mot de passe')} className="text-primary-400 hover:text-primary-300"><FaCopy /></button></div>
+                    <div className="flex justify-between"><span className="text-white/60">Clé privée :</span><span className="text-white font-mono">{createdAgent.private_key}</span><button onClick={() => copyToClipboard(createdAgent.private_key, 'Clé privée')} className="text-primary-400 hover:text-primary-300"><FaCopy /></button></div>
                   </div>
-                  <button onClick={resetAgentModal} className="btn-primary w-full mt-6">Fermer</button>
+                  <button onClick={resetAgentModal} className="btn-primary w-full">Fermer</button>
                 </div>
               ) : (
-                <form onSubmit={handleCreateAgent} className="space-y-5">
-                  <div>
-                    <label className="label">Nom complet *</label>
-                    <input
-                      type="text"
-                      name="fullname"
-                      value={agentForm.fullname}
-                      onChange={handleAgentFormChange}
-                      className="input-field"
-                      required
-                    />
+                <form onSubmit={handleCreateAgent} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div><label className="label">Nom complet *</label><input type="text" name="fullname" value={agentForm.fullname} onChange={handleAgentFormChange} className="input-field" required /></div>
+                    <div><label className="label">Téléphone (8 chiffres) *</label><input type="tel" name="phone" value={agentForm.phone} onChange={handleAgentFormChange} className="input-field" maxLength="8" required /></div>
                   </div>
-                  <div>
-                    <label className="label">Téléphone *</label>
-                    <input
-                      type="tel"
-                      name="phone"
-                      value={agentForm.phone}
-                      onChange={handleAgentFormChange}
-                      className="input-field"
-                      maxLength="8"
-                      required
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div><label className="label">Mot de passe *</label><div className="relative"><input type={showPassword ? 'text' : 'password'} name="password" value={agentForm.password} onChange={handleAgentFormChange} className="input-field pr-10" required /><button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/60"><FaEye /></button></div></div>
+                    <div><label className="label">Confirmer *</label><input type="password" name="confirmPassword" value={agentForm.confirmPassword} onChange={handleAgentFormChange} className="input-field" required /></div>
                   </div>
-                  <div>
-                    <label className="label">Province *</label>
-                    <select
-                      name="province"
-                      value={agentForm.province}
-                      onChange={handleAgentFormChange}
-                      className="input-field"
-                      required
-                    >
-                      <option value="">Sélectionnez une province</option>
-                      {provinces.map(p => (
-                        <option key={p.id} value={p.name}>{p.name}</option>
-                      ))}
-                    </select>
+                  <div><label className="label">Province *</label><select name="province" value={agentForm.province} onChange={handleAgentFormChange} className="input-field" required><option value="">Sélectionnez</option>{provinces.map(p => (<option key={p.id} value={p.name}>{p.name}</option>))}</select></div>
+                  <div className="border-t border-white/10 pt-3"><h4 className="text-white font-semibold mb-3">Informations de l'agence</h4></div>
+                  <div><label className="label">Nom de l'agence *</label><input type="text" name="agency_name" value={agentForm.agency_name} onChange={handleAgentFormChange} className="input-field" required /></div>
+                  <div><label className="label">Adresse de l'agence *</label><textarea name="agency_address" value={agentForm.agency_address} onChange={handleAgentFormChange} className="input-field" rows="2" required /></div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div><label className="label">Téléphone agence</label><input type="tel" name="agency_phone" value={agentForm.agency_phone} onChange={handleAgentFormChange} className="input-field" placeholder="Optionnel" /></div>
+                    <div><label className="label">Type d'agence</label><select name="agency_type" value={agentForm.agency_type} onChange={handleAgentFormChange} className="input-field"><option value="principale">Principale</option><option value="secondaire">Secondaire</option></select></div>
                   </div>
-                  <div>
-                    <label className="label">Mot de passe *</label>
-                    <input
-                      type="password"
-                      name="password"
-                      value={agentForm.password}
-                      onChange={handleAgentFormChange}
-                      className="input-field"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Confirmer le mot de passe *</label>
-                    <input
-                      type="password"
-                      name="confirmPassword"
-                      value={agentForm.confirmPassword}
-                      onChange={handleAgentFormChange}
-                      className="input-field"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Nom de l'agence *</label>
-                    <input
-                      type="text"
-                      name="agency_name"
-                      value={agentForm.agency_name}
-                      onChange={handleAgentFormChange}
-                      className="input-field"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Adresse de l'agence *</label>
-                    <textarea
-                      name="agency_address"
-                      value={agentForm.agency_address}
-                      onChange={handleAgentFormChange}
-                      className="input-field"
-                      rows="2"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="label">Type d'agence</label>
-                    <div className="flex gap-4">
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="agency_type"
-                          value="principale"
-                          checked={agentForm.agency_type === 'principale'}
-                          onChange={handleAgentFormChange}
-                        />
-                        <span>Principale</span>
-                      </label>
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="agency_type"
-                          value="secondaire"
-                          checked={agentForm.agency_type === 'secondaire'}
-                          onChange={handleAgentFormChange}
-                        />
-                        <span>Secondaire</span>
-                      </label>
-                    </div>
-                  </div>
-                  <button type="submit" disabled={creatingAgent} className="btn-primary w-full">
-                    {creatingAgent ? <FaSpinner className="animate-spin" /> : <FaCheckCircle />}
-                    {creatingAgent ? 'Création...' : 'Créer l\'agent'}
+                  <button type="submit" disabled={creatingAgent} className="btn-primary w-full flex items-center justify-center gap-2">
+                    {creatingAgent ? <FaSpinner className="animate-spin" /> : <FaCheckCircle />} {creatingAgent ? 'Création...' : 'Créer l\'agent'}
                   </button>
                 </form>
               )}

@@ -8,7 +8,7 @@ import {
   FaInfoCircle, FaClock, FaTrash, FaDownload, FaEye,
   FaMoneyBillWave, FaExchangeAlt, FaStore, FaIdCard,
   FaUserCheck, FaBuilding, FaPhone, FaEnvelope, FaMapMarkerAlt,
-  FaSpinner
+  FaSpinner, FaTimes, FaQuestionCircle
 } from 'react-icons/fa'
 import Layout from '../components/Layout'
 
@@ -18,6 +18,7 @@ function NotificationDetail({ user }) {
   const [notification, setNotification] = useState(null)
   const [loading, setLoading] = useState(true)
   const [relatedData, setRelatedData] = useState(null)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
 
   useEffect(() => {
     if (id && id !== 'undefined' && id !== 'null') {
@@ -66,18 +67,18 @@ function NotificationDetail({ user }) {
     }
   }
 
-  const deleteNotification = async () => {
-    if (!window.confirm('Supprimer cette notification ?')) return
-    
+  const confirmDelete = async () => {
     try {
       const token = localStorage.getItem('accessToken')
       await axios.delete(`/api/notifications/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       toast.success('Notification supprimée')
+      setShowDeleteModal(false)
       navigate('/dashboard')
     } catch (error) {
       toast.error('Erreur lors de la suppression')
+      setShowDeleteModal(false)
     }
   }
 
@@ -183,7 +184,7 @@ function NotificationDetail({ user }) {
                 </button>
               )}
               <button
-                onClick={deleteNotification}
+                onClick={() => setShowDeleteModal(true)}
                 className="p-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-all"
                 title="Supprimer"
               >
@@ -225,7 +226,7 @@ function NotificationDetail({ user }) {
               Retour à l'accueil
             </button>
             <button
-              onClick={deleteNotification}
+              onClick={() => setShowDeleteModal(true)}
               className="bg-red-500/20 hover:bg-red-500/30 text-red-400 flex-1 py-2 rounded-lg transition-all"
             >
               Supprimer
@@ -233,6 +234,69 @@ function NotificationDetail({ user }) {
           </div>
         </div>
       </div>
+
+      {/* MODAL DE CONFIRMATION DE SUPPRESSION */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-fade-in">
+          <div className="relative max-w-md w-full bg-gradient-to-br from-red-900 to-red-800 rounded-2xl shadow-2xl overflow-hidden">
+            {/* Barre de couleur en haut */}
+            <div className="absolute top-0 left-0 right-0 h-1 bg-red-500"></div>
+            
+            <div className="text-center pt-6 pb-2">
+              <div className="inline-flex p-3 bg-red-500/20 rounded-full mb-3">
+                <FaQuestionCircle className="text-red-400 text-5xl" />
+              </div>
+              <h2 className="text-2xl font-bold text-white">Confirmer la suppression</h2>
+              <p className="text-red-200 text-sm mt-1">
+                Cette action est irréversible.
+              </p>
+            </div>
+
+            <div className="bg-white/10 mx-4 rounded-xl p-4 mb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex-shrink-0">
+                  {getIcon()}
+                </div>
+                <div className="flex-1">
+                  <p className="text-white font-semibold text-sm">{notification.title}</p>
+                  <p className="text-white/60 text-xs mt-1 line-clamp-2">
+                    {notification.message}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-yellow-500/10 rounded-lg p-3 mx-4 mb-4 border border-yellow-500/30">
+              <p className="text-yellow-400 text-xs flex items-center gap-2">
+                <FaExclamationTriangle size={12} />
+                Êtes-vous sûr de vouloir supprimer définitivement cette notification ?
+              </p>
+            </div>
+
+            <div className="flex gap-3 p-4 pt-0">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="flex-1 btn-secondary"
+              >
+                <FaTimes className="inline mr-2" /> Annuler
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 py-2 rounded-lg flex items-center justify-center gap-2 transition-all"
+              >
+                <FaTrash /> Supprimer
+              </button>
+            </div>
+
+            <button
+              onClick={() => setShowDeleteModal(false)}
+              className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
+            >
+              <FaTimes size={18} />
+            </button>
+          </div>
+        </div>
+      )}
     </Layout>
   )
 }
