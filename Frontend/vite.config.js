@@ -66,10 +66,25 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'icons-vendor': ['react-icons'],
-          'chart-vendor': ['chart.js', 'react-chartjs-2'],
+        // Version corrigée : Utiliser une fonction au lieu d'un objet
+        manualChunks: (id) => {
+          // Regrouper les vendors
+          if (id.includes('node_modules')) {
+            // React et ReactDOM
+            if (id.includes('react') && (id.includes('react-dom') || id.includes('react-router-dom'))) {
+              return 'react-vendor'
+            }
+            // React Icons
+            if (id.includes('react-icons')) {
+              return 'icons-vendor'
+            }
+            // Chart.js
+            if (id.includes('chart.js') || id.includes('react-chartjs-2')) {
+              return 'chart-vendor'
+            }
+            // Autres vendors
+            return 'vendor'
+          }
         },
       },
     },
