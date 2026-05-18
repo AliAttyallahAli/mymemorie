@@ -997,7 +997,7 @@ app.post('/api/admin/reset-user-pin/:userId', authenticateToken, requireAdmin, a
     // Notification à l'utilisateur
     await run(`
       INSERT INTO notifications (user_id, title, message, type, category, created_at)
-      VALUES (?, '🔄 PIN réinitialisé', 'Votre code PIN a été réinitialisé par l\'administrateur. Veuillez en définir un nouveau.', 'info', 'security', CURRENT_TIMESTAMP)
+      VALUES (?, ' PIN réinitialisé', 'Votre code PIN a été réinitialisé par l administrateur. Veuillez en définir un nouveau.', 'info', 'security', CURRENT_TIMESTAMP)
     `, [userId]);
     
     // Log admin
@@ -3873,6 +3873,58 @@ app.get('/api/blog/categories', async (req, res) => {
         res.status(500).json({ error: 'Erreur lors du chargement des catégories' })
     }
 })
+
+
+// Dans server.js, assurez-vous que cette route existe
+app.post('/api/admin/agents', authenticateToken, requireAdmin, async (req, res) => {
+    const { phone, fullname, password, province, agency_name, agency_address, agency_phone, agency_type } = req.body;
+    
+    try {
+        // Vérifier si l'utilisateur existe déjà
+        const existingUser = await get('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (existingUser) {
+            return res.status(400).json({ error: 'Ce numéro existe déjà' });
+        }
+        
+        // Générer un ID agent unique
+        const agentNumber = `AGT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPrivateKey = await bcrypt.hash(privateKey, 10);
+        
+        // Créer l'utilisateur
+        const result = await run(
+            `INSERT INTO users (phone, fullname, password_hash, private_key_6, province, role, is_active, is_verified)
+             VALUES (?, ?, ?, ?, ?, 'agent', 1, 1)`,
+            [phone, fullname, hashedPassword, hashedPrivateKey, province]
+        );
+        
+        // Créer l'entrée dans la table agents
+        await run(
+            `INSERT INTO agents (user_id, agency_number, agency_name, agency_address, agency_phone, agency_type, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [result.lastID, agentNumber, agency_name, agency_address, agency_phone || phone, agency_type || 'secondaire', req.user.userId]
+        );
+        
+        // Créer le wallet pour l'agent
+        await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [result.lastID]);
+        
+        res.status(201).json({
+            success: true,
+            agent: {
+                id: result.lastID,
+                phone,
+                fullname,
+                agent_number: agentNumber,
+                private_key: privateKey
+            }
+        });
+        
+    } catch (error) {
+        console.error('Erreur création agent:', error);
+        res.status(500).json({ error: 'Erreur lors de la création' });
+    }
+});
 // ============================================
 // IMPORTS SUPPLÉMENTAIRES
 // ============================================
@@ -3913,569 +3965,61 @@ const upload = multer({
 // ============================================
 // ENDPOINTS KYC
 // ============================================
+/// ============================================
+//// ============================================
+// FONCTIONS DE CRÉATION DE TABLES
 // ============================================
-// ENDPOINTS KYC CORRIGÉS
-// ============================================
 
-// Obtenir le statut KYC de l'utilisateur
-app.get('/api/kyc/status', authenticateToken, async (req, res) => {
+async function createReferralsTable() {
     try {
-        const kycRequest = await get(`
-            SELECT kr.*, u.fullname as verified_by_name
-            FROM kyc_requests kr
-            LEFT JOIN users u ON kr.verified_by = u.id
-            WHERE kr.user_id = ? 
-            ORDER BY kr.submitted_at DESC 
-            LIMIT 1
-        `, [req.user.userId]);
+        // Vérifier que la base de données est initialisée
+        const db = getDb();
         
-        if (!kycRequest) {
-            const limits = await get('SELECT * FROM kyc_limits WHERE level = 0');
-            return res.json({
-                status: 'none',
-                level: 0,
-                limits: limits || null,
-                documents: []
-            });
-        }
+        await run(`CREATE TABLE IF NOT EXISTS referral_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            total_referrals INTEGER DEFAULT 0,
+            active_referrals INTEGER DEFAULT 0,
+            total_bonus INTEGER DEFAULT 0,
+            claimed_bonus INTEGER DEFAULT 0,
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            UNIQUE(user_id)
+        )`);
         
-        const documents = await query(`
-            SELECT id, document_type, filename, uploaded_at
-            FROM kyc_documents 
-            WHERE kyc_request_id = ?
-        `, [kycRequest.id]);
-        
-        const limits = await get('SELECT * FROM kyc_limits WHERE level = ?', [kycRequest.level || 1]);
-        
-        res.json({
-            id: kycRequest.id,
-            status: kycRequest.status,
-            level: kycRequest.level,
-            submittedAt: kycRequest.submitted_at,
-            verifiedAt: kycRequest.verified_at,
-            verifiedBy: kycRequest.verified_by_name,
-            rejectionReason: kycRequest.rejection_reason,
-            limits: limits,
-            userData: {
-                fullname: kycRequest.fullname,
-                address: kycRequest.address,
-                phone: kycRequest.phone_number
-            },
-            documents: documents
-        });
+        console.log('✅ Table referral_stats créée/vérifiée');
     } catch (error) {
-        console.error('Erreur récupération statut KYC:', error);
-        res.status(500).json({ error: 'Erreur lors de la récupération du statut KYC' });
+        console.error('Erreur création table referral_stats:', error);
     }
-});
+}
 
-// Admin: Récupérer toutes les demandes KYC
-app.get('/api/admin/kyc/requests', authenticateToken, requireAdmin, async (req, res) => {
-    const { status, limit = 50, offset = 0 } = req.query;
-    
-    try {
-        let sql = `
-            SELECT kr.*, 
-                   u.fullname as user_name, 
-                   u.phone as user_phone
-            FROM kyc_requests kr
-            JOIN users u ON kr.user_id = u.id
-            WHERE 1=1
-        `;
-        const params = [];
-        
-        if (status && status !== 'all') {
-            sql += ' AND kr.status = ?';
-            params.push(status);
-        }
-        
-        sql += ' ORDER BY kr.submitted_at DESC LIMIT ? OFFSET ?';
-        params.push(parseInt(limit), parseInt(offset));
-        
-        const requests = await query(sql, params);
-        
-        // Récupérer les documents pour chaque demande
-        for (let i = 0; i < requests.length; i++) {
-            const docs = await query(`
-                SELECT id, document_type, filename, uploaded_at
-                FROM kyc_documents 
-                WHERE kyc_request_id = ?
-            `, [requests[i].id]);
-            requests[i].documents = docs || [];
-        }
-        
-        let countSql = 'SELECT COUNT(*) as count FROM kyc_requests kr WHERE 1=1';
-        const countParams = [];
-        
-        if (status && status !== 'all') {
-            countSql += ' AND kr.status = ?';
-            countParams.push(status);
-        }
-        
-        const total = await get(countSql, countParams);
-        
-        res.json({
-            requests: requests || [],
-            total: total?.count || 0,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
-        });
-        
-    } catch (error) {
-        console.error('Erreur récupération demandes KYC:', error);
-        res.status(500).json({ error: 'Erreur lors de la récupération des demandes KYC' });
-    }
-});
-
-// Admin: Valider une demande KYC
-app.post('/api/admin/kyc/verify/:requestId', authenticateToken, requireAdmin, async (req, res) => {
-    const { requestId } = req.params;
-    const { action, rejectionReason, level } = req.body;
-    
-    if (!['approve', 'reject'].includes(action)) {
-        return res.status(400).json({ error: 'Action invalide' });
-    }
-    
-    try {
-        const request = await get('SELECT * FROM kyc_requests WHERE id = ?', [requestId]);
-        
-        if (!request) {
-            return res.status(404).json({ error: 'Demande non trouvée' });
-        }
-        
-        const newStatus = action === 'approve' ? 'verified' : 'rejected';
-        
-        await run('BEGIN TRANSACTION');
-        
-        await run(`
-            UPDATE kyc_requests 
-            SET status = ?, verified_at = CURRENT_TIMESTAMP, verified_by = ?,
-                rejection_reason = ?, level = ?
-            WHERE id = ?
-        `, [newStatus, req.user.userId, rejectionReason || null, level || 1, requestId]);
-        
-        await run(`
-            INSERT INTO kyc_history (user_id, action, status_from, status_to, description, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `, [
-            request.user_id,
-            action === 'approve' ? 'approve' : 'reject',
-            request.status,
-            newStatus,
-            action === 'approve' ? 'Demande KYC approuvée' : `Demande KYC rejetée: ${rejectionReason || 'Non conforme'}`,
-            req.user.userId
-        ]);
-        
-        const title = action === 'approve' ? '✅ KYC approuvé' : '❌ KYC rejeté';
-        const message = action === 'approve' 
-            ? 'Votre compte a été vérifié. Vous bénéficiez maintenant de limites de transaction plus élevées.'
-            : `Votre demande KYC a été rejetée. Raison: ${rejectionReason || 'Documents non conformes'}. Veuillez soumettre une nouvelle demande.`;
-        
-        await run(`
-            INSERT INTO notifications (user_id, title, message, type)
-            VALUES (?, ?, ?, 'alert')
-        `, [request.user_id, title, message]);
-        
-        await run('COMMIT');
-        
-        res.json({
-            success: true,
-            message: `Demande ${action === 'approve' ? 'approuvée' : 'rejetée'} avec succès`
-        });
-        
-    } catch (error) {
-        await run('ROLLBACK');
-        console.error('Erreur traitement KYC:', error);
-        res.status(500).json({ error: 'Erreur lors du traitement' });
-    }
-});
-
-// Obtenir le statut KYC de l'utilisateur
-app.get('/api/kyc/status', authenticateToken, async (req, res) => {
-    try {
-        const kycRequest = await get(`
-            SELECT kr.*, u.fullname as verified_by_name
-            FROM kyc_requests kr
-            LEFT JOIN users u ON kr.verified_by = u.id
-            WHERE kr.user_id = ? 
-            ORDER BY kr.submitted_at DESC 
-            LIMIT 1
-        `, [req.user.userId]);
-        
-        if (!kycRequest) {
-            // Obtenir les limites du niveau 0
-            const limits = await get('SELECT * FROM kyc_limits WHERE level = 0');
-            return res.json({
-                status: 'none',
-                level: 0,
-                limits: limits,
-                documents: []
-            });
-        }
-        
-        // Obtenir les documents
-        const documents = await query(`
-            SELECT id, document_type, filename, file_path, uploaded_at
-            FROM kyc_documents 
-            WHERE kyc_request_id = ?
-        `, [kycRequest.id]);
-        
-        // Obtenir les limites selon le niveau
-        const limits = await get('SELECT * FROM kyc_limits WHERE level = ?', [kycRequest.level || 1]);
-        
-        res.json({
-            id: kycRequest.id,
-            status: kycRequest.status,
-            level: kycRequest.level,
-            submittedAt: kycRequest.submitted_at,
-            verifiedAt: kycRequest.verified_at,
-            verifiedBy: kycRequest.verified_by_name,
-            rejectionReason: kycRequest.rejection_reason,
-            limits: limits,
-            userData: {
-                fullname: kycRequest.fullname,
-                address: kycRequest.address,
-                phone: kycRequest.phone_number
-            },
-            documents: documents
-        });
-    } catch (error) {
-        console.error('Erreur récupération statut KYC:', error);
-        res.status(500).json({ error: 'Erreur lors de la récupération du statut KYC' });
-    }
-});
-
-// Soumettre une demande KYC
-app.post('/api/kyc/submit', authenticateToken, upload.fields([
-    { name: 'idFront', maxCount: 1 },
-    { name: 'idBack', maxCount: 1 },
-    { name: 'selfie', maxCount: 1 },
-    { name: 'proofOfAddress', maxCount: 1 }
-]), async (req, res) => {
-    const {
-        fullname, birthDate, birthPlace, nationality, idType,
-        idNumber, idIssueDate, idExpiryDate, address, occupation, phoneNumber
-    } = req.body;
-    
-    const files = req.files;
-    
-    // Validation
-    if (!fullname || !idNumber || !address) {
-        return res.status(400).json({ error: 'Champs obligatoires manquants' });
-    }
-    
-    if (!files?.idFront || !files?.selfie || !files?.proofOfAddress) {
-        return res.status(400).json({ error: 'Documents obligatoires manquants' });
-    }
-    
-    try {
-        // Vérifier si une demande est déjà en cours
-        const existingRequest = await get(`
-            SELECT id, status FROM kyc_requests 
-            WHERE user_id = ? AND status IN ('pending', 'verified')
-        `, [req.user.userId]);
-        
-        if (existingRequest) {
-            if (existingRequest.status === 'pending') {
-                return res.status(400).json({ error: 'Une demande KYC est déjà en cours de traitement' });
-            }
-            if (existingRequest.status === 'verified') {
-                return res.status(400).json({ error: 'Votre compte est déjà vérifié' });
-            }
-        }
-        
-        // Créer la demande KYC
-        const result = await run(`
-            INSERT INTO kyc_requests (
-                user_id, status, level, fullname, birth_date, birth_place,
-                nationality, id_type, id_number, id_issue_date, id_expiry_date,
-                address, occupation, phone_number, submitted_at
-            ) VALUES (?, 'pending', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `, [
-            req.user.userId, fullname, birthDate || null, birthPlace || null,
-            nationality || 'Tchadienne', idType || 'cni', idNumber,
-            idIssueDate || null, idExpiryDate || null,
-            address, occupation || null, phoneNumber || req.user.phone
-        ]);
-        
-        const kycRequestId = result.lastID;
-        
-        // Enregistrer les documents
-        const documentTypes = ['idFront', 'idBack', 'selfie', 'proofOfAddress'];
-        for (const docType of documentTypes) {
-            if (files[docType]) {
-                const file = files[docType][0];
-                await run(`
-                    INSERT INTO kyc_documents (kyc_request_id, document_type, filename, file_path, file_size, mime_type)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                `, [kycRequestId, docType, file.filename, file.path, file.size, file.mimetype]);
-            }
-        }
-        
-        // Enregistrer dans l'historique
-        await run(`
-            INSERT INTO kyc_history (user_id, action, status_to, description, created_by)
-            VALUES (?, 'submit', 'pending', 'Soumission de la demande KYC', ?)
-        `, [req.user.userId, req.user.userId]);
-        
-        // Notification à l'admin
-        const admin = await get('SELECT id FROM users WHERE role = "admin" LIMIT 1');
-        if (admin) {
-            await run(`
-                INSERT INTO notifications (user_id, title, message, type)
-                VALUES (?, 'Nouvelle demande KYC', ?, 'alert')
-            `, [admin.id, `L'utilisateur ${fullname} a soumis une demande KYC`]);
-        }
-        
-        res.status(201).json({
-            success: true,
-            message: 'Demande KYC soumise avec succès',
-            requestId: kycRequestId
-        });
-        
-    } catch (error) {
-        console.error('Erreur soumission KYC:', error);
-        res.status(500).json({ error: 'Erreur lors de la soumission KYC' });
-    }
-});
-
-// Télécharger un document KYC (admin ou propriétaire)
-app.get('/api/kyc/download/:documentId', authenticateToken, async (req, res) => {
-    const { documentId } = req.params;
-    
-    try {
-        const document = await get(`
-            SELECT kd.*, kr.user_id 
-            FROM kyc_documents kd
-            JOIN kyc_requests kr ON kd.kyc_request_id = kr.id
-            WHERE kd.id = ?
-        `, [documentId]);
-        
-        if (!document) {
-            return res.status(404).json({ error: 'Document non trouvé' });
-        }
-        
-        // Vérifier les droits (admin ou propriétaire)
-        if (req.user.role !== 'admin' && document.user_id !== req.user.userId) {
-            return res.status(403).json({ error: 'Accès non autorisé' });
-        }
-        
-        if (!fs.existsSync(document.file_path)) {
-            return res.status(404).json({ error: 'Fichier non trouvé' });
-        }
-        
-        res.download(document.file_path, document.filename);
-        
-    } catch (error) {
-        console.error('Erreur téléchargement document:', error);
-        res.status(500).json({ error: 'Erreur lors du téléchargement' });
-    }
-});
-
-// Admin: Récupérer toutes les demandes KYC
-app.get('/api/admin/kyc/requests', authenticateToken, requireAdmin, async (req, res) => {
-    const { status, limit = 50, offset = 0 } = req.query;
-    
-    try {
-        let sql = `
-            SELECT kr.*, u.fullname as user_name, u.phone as user_phone, u.email as user_email
-            FROM kyc_requests kr
-            JOIN users u ON kr.user_id = u.id
-            WHERE 1=1
-        `;
-        const params = [];
-        
-        if (status && status !== 'all') {
-            sql += ' AND kr.status = ?';
-            params.push(status);
-        }
-        
-        sql += ' ORDER BY kr.submitted_at DESC LIMIT ? OFFSET ?';
-        params.push(parseInt(limit), parseInt(offset));
-        
-        const requests = await query(sql, params);
-        
-        const total = await get(`
-            SELECT COUNT(*) as count FROM kyc_requests 
-            ${status && status !== 'all' ? 'WHERE status = ?' : ''}
-        `, status && status !== 'all' ? [status] : []);
-        
-        res.json({
-            requests,
-            total: total.count,
-            limit: parseInt(limit),
-            offset: parseInt(offset)
-        });
-        
-    } catch (error) {
-        console.error('Erreur récupération demandes KYC:', error);
-        res.status(500).json({ error: 'Erreur lors de la récupération' });
-    }
-});
-
-// Admin: Valider une demande KYC
-app.post('/api/admin/kyc/verify/:requestId', authenticateToken, requireAdmin, async (req, res) => {
-    const { requestId } = req.params;
-    const { action, rejectionReason, level } = req.body;
-    
-    if (!['approve', 'reject'].includes(action)) {
-        return res.status(400).json({ error: 'Action invalide' });
-    }
-    
-    try {
-        const request = await get('SELECT * FROM kyc_requests WHERE id = ?', [requestId]);
-        
-        if (!request) {
-            return res.status(404).json({ error: 'Demande non trouvée' });
-        }
-        
-        const newStatus = action === 'approve' ? 'verified' : 'rejected';
-        
-        await run('BEGIN TRANSACTION');
-        
-        // Mettre à jour la demande
-        await run(`
-            UPDATE kyc_requests 
-            SET status = ?, verified_at = CURRENT_TIMESTAMP, verified_by = ?,
-                rejection_reason = ?, level = ?
-            WHERE id = ?
-        `, [newStatus, req.user.userId, rejectionReason || null, level || 1, requestId]);
-        
-        // Enregistrer dans l'historique
-        await run(`
-            INSERT INTO kyc_history (user_id, action, status_from, status_to, description, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `, [
-            request.user_id,
-            action === 'approve' ? 'approve' : 'reject',
-            request.status,
-            newStatus,
-            action === 'approve' ? 'Demande KYC approuvée' : `Demande KYC rejetée: ${rejectionReason || 'Non conforme'}`,
-            req.user.userId
-        ]);
-        
-        // Notification à l'utilisateur
-        const title = action === 'approve' ? '✅ KYC approuvé' : '❌ KYC rejeté';
-        const message = action === 'approve' 
-            ? 'Votre compte a été vérifié. Vous bénéficiez maintenant de limites de transaction plus élevées.'
-            : `Votre demande KYC a été rejetée. Raison: ${rejectionReason || 'Documents non conformes'}. Veuillez soumettre une nouvelle demande.`;
-        
-        await run(`
-            INSERT INTO notifications (user_id, title, message, type)
-            VALUES (?, ?, ?, 'alert')
-        `, [request.user_id, title, message]);
-        
-        await run('COMMIT');
-        
-        res.json({
-            success: true,
-            message: `Demande ${action === 'approve' ? 'approuvée' : 'rejetée'} avec succès`
-        });
-        
-    } catch (error) {
-        await run('ROLLBACK');
-        console.error('Erreur traitement KYC:', error);
-        res.status(500).json({ error: 'Erreur lors du traitement' });
-    }
-});
-
-// Obtenir l'historique KYC
-app.get('/api/kyc/history', authenticateToken, async (req, res) => {
-    try {
-        const history = await query(`
-            SELECT kh.*, u.fullname as created_by_name
-            FROM kyc_history kh
-            LEFT JOIN users u ON kh.created_by = u.id
-            WHERE kh.user_id = ?
-            ORDER BY kh.created_at DESC
-        `, [req.user.userId]);
-        
-        res.json(history || []);
-    } catch (error) {
-        console.error('Erreur récupération historique:', error);
-        res.json([]);
-    }
-});
-
-// Obtenir les limites KYC de l'utilisateur
-app.get('/api/kyc/limits', authenticateToken, async (req, res) => {
-    try {
-        const kycRequest = await get(`
-            SELECT level FROM kyc_requests 
-            WHERE user_id = ? AND status = 'verified'
-            ORDER BY level DESC LIMIT 1
-        `, [req.user.userId]);
-        
-        const level = kycRequest?.level || 0;
-        const limits = await get('SELECT * FROM kyc_limits WHERE level = ?', [level]);
-        
-        res.json({
-            level,
-            limits: limits || {
-                daily_transaction_limit: 25000,
-                monthly_transaction_limit: 100000,
-                single_transaction_limit: 25000,
-                withdrawal_limit: 50000
-            }
-        });
-    } catch (error) {
-        console.error('Erreur récupération limites:', error);
-        res.status(500).json({ error: 'Erreur lors de la récupération des limites' });
-    }
-});
-
-// Vérifier si une transaction respecte les limites KYC
-app.post('/api/kyc/check-limit', authenticateToken, async (req, res) => {
-    const { amount, type } = req.body; // type: 'transfer', 'withdraw'
-    
-    try {
-        const limitsRes = await axios.get('http://localhost:5000/api/kyc/limits', {
-            headers: { Authorization: req.headers.authorization }
-        });
-        
-        const limits = limitsRes.data.limits;
-        
-        // Vérifier la limite par transaction
-        if (amount > limits.single_transaction_limit) {
-            return res.json({
-                allowed: false,
-                reason: `La limite par transaction est de ${limits.single_transaction_limit.toLocaleString()} FCFA`,
-                limit: limits.single_transaction_limit
-            });
-        }
-        
-        // Vérifier la limite quotidienne (à implémenter avec un cache)
-        // Vérifier la limite mensuelle
-        
-        res.json({
-            allowed: true,
-            limits
-        });
-        
-    } catch (error) {
-        console.error('Erreur vérification limites:', error);
-        res.json({ allowed: true }); // Par défaut, autoriser
-    }
-});
 // ============================================
 // DÉMARRAGE DU SERVEUR
 // ============================================
 
 async function startServer() {
     try {
+        // 1. Initialiser la base de données
         await initDatabase();
         
-        // Mettre à jour le mot de passe admin après initialisation
+        // 2. Créer les tables supplémentaires après initialisation
+        await createReferralsTable();
+        
+        // 3. Créer les tables KYC si nécessaire
+        await createKycTables();
+        
+        // 4. Mettre à jour le mot de passe admin
         const admin = await get('SELECT id, password_hash FROM users WHERE phone = ?', ['62787307']);
-        if (admin && admin.password_hash === 'PLACEHOLDER_HASH') {
+        if (admin && (admin.password_hash === 'PLACEHOLDER_HASH' || admin.password_hash === 'PLACEHOLDER')) {
             const hashedPassword = await hashPassword('08093Ali');
-            const privateKey = generatePrivateKey();
+            const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
             const hashedKey = await hashPassword(privateKey);
             await run('UPDATE users SET password_hash = ?, private_key_6 = ? WHERE phone = ?', 
                      [hashedPassword, hashedKey, '62787307']);
-            console.log('Admin configuré avec succès');
+            console.log('✅ Admin configuré avec succès');
         }
         
+        // 5. Démarrer le serveur
         server.listen(PORT, () => {
             console.log(`🚀 Serveur CashPays démarré sur le port ${PORT}`);
             console.log(`📱 API disponible sur http://localhost:${PORT}`);
@@ -4484,10 +4028,14 @@ async function startServer() {
         
     } catch (error) {
         console.error('Erreur au démarrage:', error);
+        process.exit(1);
     }
 }
 
+// Démarrer le serveur
 startServer();
+
+module.exports = { app, io };
 // backend/server.js - Ajouter ces endpoints
 
 // ============================================
@@ -4594,28 +4142,42 @@ const addReferralColumn = async () => {
 };
 addReferralColumn();
 
-// Créer la table des parrainages
-const createReferralsTable = async () => {
-  await run(`
-    CREATE TABLE IF NOT EXISTS referrals (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      referrer_id INTEGER NOT NULL,
-      referred_id INTEGER NOT NULL,
-      referral_code TEXT NOT NULL,
-      bonus_amount INTEGER DEFAULT 500,
-      status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'cancelled')),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      completed_at DATETIME,
-      FOREIGN KEY (referrer_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (referred_id) REFERENCES users(id) ON DELETE CASCADE,
-      UNIQUE(referred_id)
-    )
-  `);
-};
-createReferralsTable();
 
 // src/pages/Profile.jsx - Remplacer la fonction copyReferralLink
-
+async function startServer() {
+    try {
+        // 1. Initialiser la base de données
+        await initDatabase();
+        
+        // 2. Créer les tables supplémentaires après initialisation
+        await createReferralsTable();
+        
+        // 3. Créer les tables KYC (optionnel - commenté)
+        // await createKycTables();
+        
+        // 4. Mettre à jour le mot de passe admin
+        const admin = await get('SELECT id, password_hash FROM users WHERE phone = ?', ['62787307']);
+        if (admin && (admin.password_hash === 'PLACEHOLDER_HASH' || admin.password_hash === 'PLACEHOLDER')) {
+            const hashedPassword = await hashPassword('08093Ali');
+            const privateKey = generatePrivateKey();
+            const hashedKey = await hashPassword(privateKey);
+            await run('UPDATE users SET password_hash = ?, private_key_6 = ? WHERE phone = ?', 
+                     [hashedPassword, hashedKey, '62787307']);
+            console.log('✅ Admin configuré avec succès');
+        }
+        
+        // 5. Démarrer le serveur
+        server.listen(PORT, () => {
+            console.log(`🚀 Serveur CashPays démarré sur le port ${PORT}`);
+            console.log(`📱 API disponible sur http://localhost:${PORT}`);
+            console.log(`🔌 WebSocket actif`);
+        });
+        
+    } catch (error) {
+        console.error('Erreur au démarrage:', error);
+        process.exit(1);
+    }
+}
 // Fonction de copie sécurisée avec fallback
 const safeCopyToClipboard = (text, label) => {
   if (!text) {
@@ -5237,86 +4799,289 @@ app.post('/api/admin/reset-password/:userId', authenticateToken, requireAdmin, a
 });
 
 // backend/server.js - Ajouter cet endpoint
+// ============================================
+// ROUTES KYC (KNOW YOUR CUSTOMER)
+// ============================================
 
 // Récupérer une demande KYC spécifique par son ID
 app.get('/api/admin/kyc/requests/:id', authenticateToken, requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    // Récupérer la demande KYC
-    const kycRequest = await get(`
-      SELECT kr.*, 
-             u.fullname as user_name, 
-             u.phone as user_phone,
-             u.email as user_email
-      FROM kyc_requests kr
-      JOIN users u ON kr.user_id = u.id
-      WHERE kr.id = ?
-    `, [id]);
+    const { id } = req.params;
     
-    if (!kycRequest) {
-      return res.status(404).json({ error: 'Demande KYC non trouvée' });
+    try {
+        // Récupérer la demande KYC
+        const kycRequest = await get(`
+            SELECT kr.*, 
+                   u.fullname as user_name, 
+                   u.phone as user_phone,
+                   u.email as user_email,
+                   vu.fullname as verified_by_name
+            FROM kyc_requests kr
+            JOIN users u ON kr.user_id = u.id
+            LEFT JOIN users vu ON kr.verified_by = vu.id
+            WHERE kr.id = ?
+        `, [id]);
+        
+        if (!kycRequest) {
+            return res.status(404).json({ error: 'Demande KYC non trouvée' });
+        }
+        
+        // Récupérer les documents associés
+        const documents = await query(`
+            SELECT id, document_type, filename, file_path, file_size, mime_type, uploaded_at
+            FROM kyc_documents 
+            WHERE kyc_request_id = ?
+            ORDER BY uploaded_at DESC
+        `, [id]);
+        
+        // Récupérer l'historique KYC
+        const history = await query(`
+            SELECT kh.*, u.fullname as created_by_name
+            FROM kyc_history kh
+            LEFT JOIN users u ON kh.created_by = u.id
+            WHERE kh.kyc_request_id = ?
+            ORDER BY kh.created_at DESC
+        `, [id]);
+        
+        res.json({
+            ...kycRequest,
+            documents: documents || [],
+            history: history || []
+        });
+        
+    } catch (error) {
+        console.error('Erreur récupération demande KYC:', error);
+        res.status(500).json({ error: 'Erreur lors de la récupération de la demande' });
     }
-    
-    // Récupérer les documents associés
-    const documents = await query(`
-      SELECT id, document_type, filename, file_path, file_size, mime_type, uploaded_at
-      FROM kyc_documents 
-      WHERE kyc_request_id = ?
-      ORDER BY uploaded_at DESC
-    `, [id]);
-    
-    // Récupérer l'historique
-    const history = await query(`
-      SELECT kh.*, u.fullname as created_by_name
-      FROM kyc_history kh
-      LEFT JOIN users u ON kh.created_by = u.id
-      WHERE kh.user_id = ?
-      ORDER BY kh.created_at DESC
-    `, [kycRequest.user_id]);
-    
-    res.json({
-      ...kycRequest,
-      documents: documents || [],
-      history: history || []
-    });
-    
-  } catch (error) {
-    console.error('Erreur récupération demande KYC:', error);
-    res.status(500).json({ error: 'Erreur lors de la récupération de la demande' });
-  }
 });
 
-// Récupérer une candidature agent spécifique par son ID
-app.get('/api/admin/agent-applications/:id', authenticateToken, requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    const application = await get(`
-      SELECT * FROM agent_applications 
-      WHERE id = ?
-    `, [id]);
+// Récupérer toutes les demandes KYC (avec filtres)
+app.get('/api/admin/kyc/requests', authenticateToken, requireAdmin, async (req, res) => {
+    const { status } = req.query;
     
-    if (!application) {
-      return res.status(404).json({ error: 'Candidature non trouvée' });
+    try {
+        let query = `
+            SELECT kr.*, 
+                   u.fullname, 
+                   u.phone as user_phone,
+                   u.email as user_email
+            FROM kyc_requests kr
+            JOIN users u ON kr.user_id = u.id
+        `;
+        const params = [];
+        
+        if (status && status !== 'all') {
+            query += ' WHERE kr.status = ?';
+            params.push(status);
+        }
+        
+        query += ' ORDER BY kr.created_at DESC';
+        
+        const requests = await query(query, params);
+        res.json({ requests: requests || [] });
+        
+    } catch (error) {
+        console.error('Erreur récupération demandes KYC:', error);
+        res.status(500).json({ error: 'Erreur lors de la récupération' });
     }
+});
+
+// Approuver une demande KYC
+app.post('/api/admin/kyc/verify/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { action, level, rejection_reason } = req.body;
     
-    // Récupérer l'utilisateur associé si la candidature a été approuvée
-    if (application.status === 'approved') {
-      const user = await get(`
-        SELECT id, phone, fullname, email, role 
-        FROM users 
-        WHERE phone = ?
-      `, [application.phone]);
-      application.user = user;
+    console.log('=== VÉRIFICATION KYC ===');
+    console.log('ID:', id);
+    console.log('Action:', action);
+    console.log('Admin:', req.user.userId);
+    
+    try {
+        const kycRequest = await get('SELECT * FROM kyc_requests WHERE id = ?', [id]);
+        
+        if (!kycRequest) {
+            return res.status(404).json({ error: 'Demande KYC non trouvée' });
+        }
+        
+        if (action === 'approve') {
+            // Approuver la demande
+            await run(`
+                UPDATE kyc_requests 
+                SET status = 'verified', 
+                    verified_at = CURRENT_TIMESTAMP, 
+                    verified_by = ?,
+                    level = ?
+                WHERE id = ?
+            `, [req.user.userId, level || 1, id]);
+            
+            // Mettre à jour l'utilisateur
+            await run(`
+                UPDATE users 
+                SET is_verified = 1, 
+                    kyc_level = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [level || 1, kycRequest.user_id]);
+            
+            // Ajouter à l'historique
+            await run(`
+                INSERT INTO kyc_history (kyc_request_id, user_id, action, previous_status, new_status, notes, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `, [id, kycRequest.user_id, 'approve', kycRequest.status, 'verified', 'Demande KYC approuvée', req.user.userId]);
+            
+            // Notification à l'utilisateur
+            if (io) {
+                io.to(`user_${kycRequest.user_id}`).emit('notification', {
+                    title: '✅ KYC Approuvé',
+                    message: 'Votre demande KYC a été approuvée. Vous avez maintenant accès à toutes les fonctionnalités.',
+                    type: 'success',
+                    timestamp: new Date().toISOString()
+                });
+            }
+            
+            res.json({
+                success: true,
+                message: 'Demande KYC approuvée'
+            });
+            
+        } else if (action === 'reject') {
+            // Rejeter la demande
+            await run(`
+                UPDATE kyc_requests 
+                SET status = 'rejected', 
+                    verified_at = CURRENT_TIMESTAMP, 
+                    verified_by = ?,
+                    rejection_reason = ?
+                WHERE id = ?
+            `, [req.user.userId, rejection_reason || 'Non conforme', id]);
+            
+            // Ajouter à l'historique
+            await run(`
+                INSERT INTO kyc_history (kyc_request_id, user_id, action, previous_status, new_status, notes, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `, [id, kycRequest.user_id, 'reject', kycRequest.status, 'rejected', rejection_reason || 'Demande KYC rejetée', req.user.userId]);
+            
+            // Notification à l'utilisateur
+            if (io) {
+                io.to(`user_${kycRequest.user_id}`).emit('notification', {
+                    title: '❌ KYC Rejeté',
+                    message: `Votre demande KYC a été rejetée. Motif: ${rejection_reason || 'Non conforme'}`,
+                    type: 'error',
+                    timestamp: new Date().toISOString()
+                });
+            }
+            
+            res.json({
+                success: true,
+                message: 'Demande KYC rejetée'
+            });
+            
+        } else {
+            res.status(400).json({ error: 'Action non reconnue' });
+        }
+        
+    } catch (error) {
+        console.error('Erreur vérification KYC:', error);
+        res.status(500).json({ error: error.message });
     }
+});
+
+// Télécharger un document KYC
+app.get('/api/kyc/download/:documentId', authenticateToken, async (req, res) => {
+    const { documentId } = req.params;
     
-    res.json(application);
+    try {
+        const document = await get(`
+            SELECT kd.*, kr.user_id 
+            FROM kyc_documents kd
+            JOIN kyc_requests kr ON kd.kyc_request_id = kr.id
+            WHERE kd.id = ?
+        `, [documentId]);
+        
+        if (!document) {
+            return res.status(404).json({ error: 'Document non trouvé' });
+        }
+        
+        // Vérifier les droits
+        if (req.user.userId !== document.user_id && req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Accès non autorisé' });
+        }
+        
+        const filePath = path.join(__dirname, document.file_path);
+        
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'Fichier non trouvé' });
+        }
+        
+        res.download(filePath, document.filename);
+        
+    } catch (error) {
+        console.error('Erreur téléchargement document:', error);
+        res.status(500).json({ error: 'Erreur lors du téléchargement' });
+    }
+});
+
+// Soumettre une demande KYC (utilisateur)
+app.post('/api/kyc/submit', authenticateToken, async (req, res) => {
+    const { 
+        fullname, birth_date, birth_place, id_type, id_number, 
+        id_issue_date, id_expiry_date, address, occupation 
+    } = req.body;
     
-  } catch (error) {
-    console.error('Erreur récupération candidature:', error);
-    res.status(500).json({ error: 'Erreur lors de la récupération' });
-  }
+    try {
+        // Vérifier si une demande existe déjà
+        const existing = await get(
+            'SELECT id, status FROM kyc_requests WHERE user_id = ?', 
+            [req.user.userId]
+        );
+        
+        if (existing && existing.status === 'pending') {
+            return res.status(400).json({ error: 'Une demande est déjà en cours de traitement' });
+        }
+        
+        if (existing && existing.status === 'verified') {
+            return res.status(400).json({ error: 'Votre compte est déjà vérifié' });
+        }
+        
+        // Créer la demande
+        const result = await run(`
+            INSERT INTO kyc_requests (
+                user_id, fullname, birth_date, birth_place, id_type, id_number,
+                id_issue_date, id_expiry_date, address, occupation, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        `, [req.user.userId, fullname, birth_date, birth_place, id_type, id_number,
+            id_issue_date, id_expiry_date, address, occupation]);
+        
+        const kycId = result.lastID;
+        
+        // Ajouter à l'historique
+        await run(`
+            INSERT INTO kyc_history (kyc_request_id, user_id, action, notes, created_by)
+            VALUES (?, ?, 'submit', 'Demande KYC soumise', ?)
+        `, [kycId, req.user.userId, req.user.userId]);
+        
+        // Notification aux admins
+        if (io) {
+            const admins = await query('SELECT id FROM users WHERE role = "admin"');
+            for (const admin of admins) {
+                io.to(`user_${admin.id}`).emit('notification', {
+                    title: '📋 Nouvelle demande KYC',
+                    message: `${req.user.fullname} a soumis une demande KYC`,
+                    type: 'info',
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+        
+        res.json({
+            success: true,
+            message: 'Demande KYC soumise avec succès',
+            kyc_id: kycId
+        });
+        
+    } catch (error) {
+        console.error('Erreur soumission KYC:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
 // backend/server.js - Ajouter ces endpoints
 
@@ -5591,5 +5356,847 @@ app.post('/api/admin/users/:userId/reset-password', authenticateToken, requireAd
     res.status(500).json({ error: 'Erreur lors de la réinitialisation' });
   }
 });
+// server.js - Ajouter ces routes
+// ============================================
+// ROUTES COMMUNES (SERVICES D'IMPÔTS)
+// ============================================
+
+// Admin: Récupérer toutes les communes
+app.get('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        console.log('📊 GET /api/admin/communes - Admin:', req.user.userId);
+        
+        const communes = await query(`
+            SELECT 
+                u.id,
+                u.phone,
+                u.fullname as contact_name,
+                u.commune_name as name,
+                u.commune_address as address,
+                u.email,
+                u.is_active,
+                w.balance,
+                u.created_at
+            FROM users u
+            LEFT JOIN wallets w ON u.id = w.user_id
+            WHERE u.role = 'commune'
+            ORDER BY u.commune_name
+        `);
+        
+        console.log(`✅ ${communes.length} communes trouvées`);
+        res.json(communes || []);
+        
+    } catch (error) {
+        console.error('❌ Erreur chargement communes:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// ROUTES ADMIN - GESTION DES COMMUNES (SERVICES D'IMPÔTS)
+// ============================================
+
+// Créer une commune (service d'impôt)
+app.post('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    const { phone, fullname, commune_name, commune_address, email, password } = req.body;
+    
+    console.log('=== CRÉATION COMMUNE ===');
+    console.log('Données reçues:', { phone, fullname, commune_name, commune_address, email, password: '***' });
+    
+    // Validation
+    if (!phone || !/^\d{8}$/.test(phone)) {
+        return res.status(400).json({ error: 'Le numéro de téléphone doit contenir 8 chiffres' });
+    }
+    
+    if (!fullname || !commune_name) {
+        return res.status(400).json({ error: 'Le nom de la commune est requis' });
+    }
+    
+    try {
+        // Vérifier si le numéro existe déjà
+        const existingUser = await get('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (existingUser) {
+            return res.status(400).json({ error: 'Ce numéro de téléphone est déjà utilisé' });
+        }
+        
+        // Générer un mot de passe par défaut si non fourni
+        const finalPassword = password || Math.floor(1000 + Math.random() * 9000).toString();
+        const hashedPassword = await bcrypt.hash(finalPassword, 10);
+        
+        // Générer une clé privée
+        const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedKey = await bcrypt.hash(privateKey, 10);
+        
+        // Démarrer une transaction
+        await run('BEGIN TRANSACTION');
+        
+        try {
+            // 1. Créer l'utilisateur avec rôle 'commune'
+            const result = await run(
+                `INSERT INTO users (phone, fullname, password_hash, private_key_6, role, is_active, is_verified, commune_name, commune_address, email) 
+                 VALUES (?, ?, ?, ?, 'commune', 1, 1, ?, ?, ?)`,
+                [phone, fullname, hashedPassword, hashedKey, commune_name, commune_address || '', email || '']
+            );
+            
+            const userId = result.lastID;
+            console.log('✅ Utilisateur créé avec ID:', userId);
+            
+            // 2. Vérifier si un wallet existe déjà pour cet utilisateur
+            const existingWallet = await get('SELECT id FROM wallets WHERE user_id = ?', [userId]);
+            
+            if (!existingWallet) {
+                // Créer le wallet pour la commune
+                await run(
+                    `INSERT INTO wallets (user_id, balance, bonus_balance, currency, is_principal, created_at, updated_at) 
+                     VALUES (?, 0, 0, 'XAF', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+                    [userId]
+                );
+                console.log('✅ Wallet créé pour la commune');
+            } else {
+                console.log('⚠️ Wallet existant trouvé, utilisation existant');
+            }
+            
+            // 3. Ajouter également dans la table communes (optionnel)
+            try {
+                await run(
+                    `INSERT OR IGNORE INTO communes (phone, name, address, contact_name, contact_phone, email, created_by) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [phone, commune_name, commune_address, fullname, phone, email || '', req.user.userId]
+                );
+                console.log('✅ Entrée ajoutée dans la table communes');
+            } catch (communeError) {
+                console.log('⚠️ Erreur table communes (non bloquante):', communeError.message);
+            }
+            
+            await run('COMMIT');
+            
+            // Notification WebSocket
+            if (io) {
+                io.to(`user_${req.user.userId}`).emit('notification', {
+                    title: '🏛️ Commune créée',
+                    message: `La commune "${commune_name}" a été créée avec succès. Téléphone: ${phone}`,
+                    type: 'success',
+                    timestamp: new Date().toISOString()
+                });
+            }
+            
+            res.status(201).json({
+                success: true,
+                message: 'Commune créée avec succès',
+                commune: {
+                    id: userId,
+                    phone: phone,
+                    name: commune_name,
+                    address: commune_address,
+                    email: email,
+                    password: finalPassword,
+                    private_key: privateKey
+                }
+            });
+            
+        } catch (err) {
+            await run('ROLLBACK');
+            throw err;
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur création commune:', error);
+        
+        if (error.code === 'SQLITE_CONSTRAINT') {
+            res.status(400).json({ error: 'Un wallet existe déjà pour cette commune' });
+        } else {
+            res.status(500).json({ error: error.message || 'Erreur lors de la création de la commune' });
+        }
+    }
+});
+
+// Récupérer toutes les communes
+app.get('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const communes = await query(`
+            SELECT u.id, u.phone, u.fullname, u.commune_name, u.commune_address, u.email, u.is_active,
+                   w.balance
+            FROM users u
+            LEFT JOIN wallets w ON u.id = w.user_id
+            WHERE u.role = 'commune'
+            ORDER BY u.created_at DESC
+        `);
+        
+        res.json(communes || []);
+    } catch (error) {
+        console.error('Erreur récupération communes:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Modifier une commune
+app.put('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { commune_name, commune_address, email, is_active } = req.body;
+    
+    try {
+        await run(
+            `UPDATE users SET commune_name = ?, commune_address = ?, email = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP 
+             WHERE id = ? AND role = 'commune'`,
+            [commune_name, commune_address || '', email || '', is_active ? 1 : 0, id]
+        );
+        
+        res.json({ success: true, message: 'Commune modifiée avec succès' });
+    } catch (error) {
+        console.error('Erreur modification commune:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Supprimer une commune
+app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    
+    try {
+        // Soft delete - désactiver plutôt que supprimer
+        await run('UPDATE users SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND role = "commune"', [id]);
+        
+        res.json({ success: true, message: 'Commune désactivée avec succès' });
+    } catch (error) {
+        console.error('Erreur suppression commune:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Récupérer la liste des communes pour les paiements
+app.get('/api/communes', authenticateToken, async (req, res) => {
+    try {
+        const communes = await query(`
+            SELECT 
+                id, 
+                phone, 
+                commune_name as name, 
+                commune_address as address,
+                email
+            FROM users 
+            WHERE role = 'commune' AND is_active = 1
+            ORDER BY commune_name
+        `);
+        
+        res.json(communes || []);
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Récupérer les statistiques d'une commune
+app.get('/api/commune/stats', authenticateToken, async (req, res) => {
+    // Vérifier que l'utilisateur est une commune
+    const user = await get('SELECT role FROM users WHERE id = ?', [req.user.userId]);
+    if (user.role !== 'commune') {
+        return res.status(403).json({ error: 'Accès réservé aux communes' });
+    }
+    
+    try {
+        // Récupérer le solde du wallet
+        const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [req.user.userId]);
+        
+        // Récupérer les paiements reçus
+        const payments = await query(`
+            SELECT 
+                COUNT(*) as total_count,
+                SUM(amount) as total_amount,
+                SUM(fee) as total_fees,
+                DATE(created_at) as payment_date
+            FROM tax_payments
+            WHERE commune_id = ?
+            GROUP BY DATE(created_at)
+            ORDER BY payment_date DESC
+            LIMIT 30
+        `, [req.user.userId]);
+        
+        res.json({
+            balance: wallet?.balance || 0,
+            total_payments: payments.reduce((sum, p) => sum + p.total_count, 0),
+            total_amount: payments.reduce((sum, p) => sum + (p.total_amount || 0), 0),
+            recent_payments: payments.slice(0, 10)
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur stats:', error);
+        res.json({ balance: 0, total_payments: 0, total_amount: 0 });
+    }
+});
+
+// ============================================
+// ROUTES PAIEMENTS DE TAXES
+// ============================================
+
+// Paiement d'une taxe vers une commune
+app.post('/api/tax/pay', authenticateToken, async (req, res) => {
+    const {
+        commune_id,
+        taxpayer_name,
+        taxpayer_phone,
+        taxpayer_address,
+        business_number,
+        property_address,
+        tax_type,
+        tax_period,
+        amount,
+        notes
+    } = req.body;
+
+    console.log('=== PAIEMENT TAXE ===');
+    console.log('Commune ID:', commune_id);
+    console.log('Montant:', amount);
+    console.log('User:', req.user.userId);
+
+    try {
+        // Validation
+        if (!commune_id) {
+            return res.status(400).json({ error: 'Veuillez sélectionner une commune' });
+        }
+        if (!taxpayer_name) {
+            return res.status(400).json({ error: 'Nom du contribuable requis' });
+        }
+        if (!taxpayer_phone) {
+            return res.status(400).json({ error: 'Téléphone requis' });
+        }
+        if (!amount || amount < 100) {
+            return res.status(400).json({ error: 'Montant minimum 100 FCFA' });
+        }
+
+        // Récupérer l'utilisateur payeur
+        const payer = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
+        if (!payer) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+
+        // Récupérer la commune (destinataire)
+        const commune = await get('SELECT id, phone, commune_name, fullname FROM users WHERE id = ? AND role = "commune"', [commune_id]);
+        if (!commune) {
+            return res.status(404).json({ error: 'Commune non trouvée' });
+        }
+
+        // Calculer les frais (1% pour la plateforme)
+        const fee = Math.floor(amount * 0.01);
+        const totalAmount = amount + fee;
+
+        // Vérifier le solde du payeur
+        const payerWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [payer.id]);
+        if (!payerWallet || payerWallet.balance < totalAmount) {
+            return res.status(400).json({ error: 'Solde insuffisant' });
+        }
+
+        // Générer le reçu
+        const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+        // Effectuer les transferts
+        await run('BEGIN TRANSACTION');
+        
+        try {
+            // Débiter le payeur
+            await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, payer.id]);
+            
+            // Créditer la commune (montant sans frais)
+            await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, commune.id]);
+            
+            // Créditer le wallet principal des frais
+            const mainWallet = await get('SELECT id FROM main_wallet LIMIT 1');
+            if (mainWallet) {
+                await run('UPDATE main_wallet SET balance = balance + ?, total_revenue = total_revenue + ?', [fee, fee]);
+            }
+            
+            // Enregistrer la transaction
+            const transactionRef = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+            await run(
+                `INSERT INTO transactions (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description)
+                 VALUES (?, ?, ?, ?, ?, ?, 'tax_payment', 'completed', ?)`,
+                [transactionRef, payer.phone, commune.phone, amount, fee, amount, `Paiement de taxe - ${receiptNumber}`]
+            );
+            
+            // Créer la table tax_payments si elle n'existe pas
+            await run(`CREATE TABLE IF NOT EXISTS tax_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                receipt_number TEXT UNIQUE,
+                payer_id INTEGER,
+                commune_id INTEGER,
+                taxpayer_name TEXT,
+                taxpayer_phone TEXT,
+                taxpayer_address TEXT,
+                business_number TEXT,
+                property_address TEXT,
+                tax_type TEXT,
+                tax_period TEXT,
+                amount INTEGER,
+                fee INTEGER,
+                total_amount INTEGER,
+                payment_status TEXT DEFAULT 'paid',
+                cashpays_transaction_ref TEXT,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (payer_id) REFERENCES users(id),
+                FOREIGN KEY (commune_id) REFERENCES users(id)
+            )`);
+            
+            // Enregistrer le paiement
+            await run(
+                `INSERT INTO tax_payments (
+                    receipt_number, payer_id, commune_id, taxpayer_name, taxpayer_phone,
+                    taxpayer_address, business_number, property_address, tax_type,
+                    tax_period, amount, fee, total_amount, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    receiptNumber, payer.id, commune.id, taxpayer_name, taxpayer_phone,
+                    taxpayer_address || '', business_number || '', property_address || '',
+                    tax_type, tax_period || new Date().getFullYear().toString(),
+                    amount, fee, totalAmount, notes || ''
+                ]
+            );
+            
+            await run('COMMIT');
+            
+        } catch (err) {
+            await run('ROLLBACK');
+            throw err;
+        }
+
+        // Notification pour le payeur
+        await run(
+            `INSERT INTO notifications (user_id, title, message, type, link, created_at)
+             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+            [payer.id, '✅ Paiement de taxe effectué', 
+             `Vous avez payé ${amount.toLocaleString()} FCFA pour ${tax_type} à ${commune.commune_name}. Reçu: ${receiptNumber}`,
+             'tax_payment', `/tax-payment?receipt=${receiptNumber}`]
+        );
+        
+        // Notification pour la commune
+        await run(
+            `INSERT INTO notifications (user_id, title, message, type, link, created_at)
+             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+            [commune.id, '💰 Nouveau paiement de taxe reçu',
+             `${payer.fullname} (${payer.phone}) a payé ${amount.toLocaleString()} FCFA pour ${tax_type}`,
+             'tax_received', `/commune/payments`]
+        );
+
+        console.log('✅ Paiement enregistré:', receiptNumber);
+
+        res.json({
+            success: true,
+            receipt: {
+                receipt_number: receiptNumber,
+                taxpayer_name,
+                taxpayer_phone,
+                tax_type,
+                amount,
+                fee,
+                total_amount: totalAmount,
+                commune_name: commune.commune_name,
+                commune_phone: commune.phone,
+                payment_date: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur paiement taxe:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Historique des paiements de taxes de l'utilisateur
+app.get('/api/tax/payments', authenticateToken, async (req, res) => {
+    try {
+        const payments = await query(`
+            SELECT tp.*, u.commune_name, u.phone as commune_phone
+            FROM tax_payments tp
+            LEFT JOIN users u ON tp.commune_id = u.id
+            WHERE tp.payer_id = ?
+            ORDER BY tp.created_at DESC
+            LIMIT 50
+        `, [req.user.userId]);
+        
+        res.json(payments || []);
+        
+    } catch (error) {
+        console.error('❌ Erreur historique:', error);
+        res.json([]);
+    }
+});
+
+// Récupérer un reçu spécifique
+app.get('/api/tax/receipt/:receipt_number', authenticateToken, async (req, res) => {
+    const { receipt_number } = req.params;
+    
+    try {
+        const receipt = await get(`
+            SELECT tp.*, u.commune_name, u.phone as commune_phone, u.commune_address
+            FROM tax_payments tp
+            LEFT JOIN users u ON tp.commune_id = u.id
+            WHERE tp.receipt_number = ? AND tp.payer_id = ?
+        `, [receipt_number, req.user.userId]);
+        
+        if (!receipt) {
+            return res.status(404).json({ error: 'Reçu non trouvé' });
+        }
+        
+        res.json(receipt);
+        
+    } catch (error) {
+        console.error('❌ Erreur reçu:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Récupérer les paiements reçus par une commune
+app.get('/api/commune/payments', authenticateToken, async (req, res) => {
+    // Vérifier que l'utilisateur est une commune
+    const user = await get('SELECT role FROM users WHERE id = ?', [req.user.userId]);
+    if (user.role !== 'commune') {
+        return res.status(403).json({ error: 'Accès réservé aux communes' });
+    }
+    
+    try {
+        const payments = await query(`
+            SELECT tp.*, u.fullname as payer_name, u.phone as payer_phone
+            FROM tax_payments tp
+            JOIN users u ON tp.payer_id = u.id
+            WHERE tp.commune_id = ?
+            ORDER BY tp.created_at DESC
+            LIMIT 50
+        `, [req.user.userId]);
+        
+        res.json(payments || []);
+        
+    } catch (error) {
+        console.error('❌ Erreur paiements reçus:', error);
+        res.json([]);
+    }
+});
+
+
+// ============================================
+// DÉMARRAGE DU SERVEUR
+// ============================================
+// ============================================
+// ADMIN: RÉINITIALISATION DE LA CLÉ PRIVÉE
+// ============================================
+
+app.post('/api/admin/users/:id/reset-key', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    
+    console.log('=== POST /api/admin/users/reset-key ===');
+    console.log('User ID:', id);
+    console.log('Admin ID:', req.user.userId);
+    
+    try {
+        // 1. Vérifier que l'utilisateur existe
+        const user = await get('SELECT id, phone, fullname, role FROM users WHERE id = ?', [id]);
+        if (!user) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+        
+        // 2. Générer une nouvelle clé privée (6 chiffres)
+        const newPrivateKey = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedKey = await bcrypt.hash(newPrivateKey, 10);
+        
+        // 3. Mettre à jour la base de données
+        await run(
+            `UPDATE users SET 
+                private_key_6 = ?,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [hashedKey, id]
+        );
+        
+        // 4. Journaliser l'action
+        try {
+            await run(
+                `INSERT INTO system_logs (user_id, action, details, created_at) 
+                 VALUES (?, ?, ?, datetime('now'))`,
+                [req.user.userId, 'RESET_PRIVATE_KEY', `Reset private key for user ${id} (${user.phone})`]
+            );
+        } catch (logErr) {
+            console.log('Log error (ignored):', logErr.message);
+        }
+        
+        console.log('✅ Private key reset successful for user', id);
+        console.log('New private key:', newPrivateKey);
+        
+        // 5. Retourner la réponse
+        res.json({
+            success: true,
+            message: 'Clé privée réinitialisée avec succès',
+            new_private_key: newPrivateKey,
+            user: {
+                id: user.id,
+                phone: user.phone,
+                fullname: user.fullname,
+                role: user.role
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error in reset-key:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+// ============================================
+// ROUTE ADMIN - RÉINITIALISATION DE CLÉ PRIVÉE AVEC NOTIFICATIONS
+// ============================================
+
+// Réinitialiser la clé privée d'un utilisateur (admin)
+app.post('/api/admin/users/:userId/reset-key', authenticateToken, requireAdmin, async (req, res) => {
+    const { userId } = req.params;
+    
+    console.log('=== RÉINITIALISATION CLÉ PRIVÉE ===');
+    console.log('User ID:', userId);
+    console.log('Admin qui fait l\'action:', req.user.userId);
+    
+    try {
+        // Vérifier que l'utilisateur existe
+        const user = await get('SELECT id, phone, fullname, email FROM users WHERE id = ?', [userId]);
+        
+        if (!user) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+        
+        // Générer une nouvelle clé privée à 6 chiffres
+        const newPrivateKey = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedKey = await bcrypt.hash(newPrivateKey, 10);
+        
+        // Mettre à jour la clé privée
+        await run('UPDATE users SET private_key_6 = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', 
+            [hashedKey, userId]);
+        
+        console.log('✅ Clé privée mise à jour pour:', user.phone);
+        console.log('📱 Nouvelle clé privée:', newPrivateKey);
+        
+        // Enregistrer dans les logs
+        try {
+            await run(`INSERT INTO system_logs (user_id, action, details, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+                [req.user.userId, 'RESET_KEY', `Réinitialisation clé privée de l'utilisateur ${user.phone}`]);
+        } catch (logError) {
+            console.log('Erreur log (non bloquante):', logError.message);
+        }
+        
+        // ============================================
+        // NOTIFICATION À L'UTILISATEUR CONCERNÉ
+        // ============================================
+        if (io) {
+            io.to(`user_${userId}`).emit('notification', {
+                id: Date.now(),
+                title: '🔑 Clé privée réinitialisée',
+                message: `Votre clé privée a été réinitialisée par l'administrateur.`,
+                details: `Nouvelle clé privée: ${newPrivateKey}`,
+                type: 'security',
+                severity: 'warning',
+                timestamp: new Date().toISOString(),
+                action: 'change_key',
+                data: { new_private_key: newPrivateKey }
+            });
+            console.log('✅ Notification envoyée à l\'utilisateur');
+        }
+        
+        // ============================================
+        // NOTIFICATION À L'ADMIN QUI A FAIT L'ACTION
+        // ============================================
+        if (io) {
+            io.to(`user_${req.user.userId}`).emit('notification', {
+                id: Date.now(),
+                title: '✅ Clé privée réinitialisée',
+                message: `La clé privée de ${user.fullname} a été réinitialisée avec succès`,
+                details: `Nouvelle clé privée: ${newPrivateKey}`,
+                type: 'success',
+                severity: 'info',
+                timestamp: new Date().toISOString()
+            });
+            console.log('✅ Notification envoyée à l\'admin');
+        }
+        
+        // ============================================
+        // NOTIFICATION À TOUS LES AUTRES ADMINS (optionnel)
+        // ============================================
+        if (io) {
+            // Envoyer à tous les admins connectés
+            const admins = await query('SELECT id FROM users WHERE role = "admin" AND id != ?', [req.user.userId]);
+            for (const admin of admins) {
+                io.to(`user_${admin.id}`).emit('notification', {
+                    id: Date.now(),
+                    title: '🔑 Réinitialisation de clé',
+                    message: `${req.user.fullname || 'Un administrateur'} a réinitialisé la clé privée de ${user.fullname}`,
+                    type: 'info',
+                    severity: 'info',
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+        
+        res.json({
+            success: true,
+            message: 'Clé privée réinitialisée avec succès',
+            new_private_key: newPrivateKey,
+            user: {
+                id: user.id,
+                phone: user.phone,
+                fullname: user.fullname
+            }
+        });
+        
+    } catch (error) {
+        console.error('Erreur réinitialisation clé privée:', error);
+        res.status(500).json({ error: error.message || 'Erreur lors de la réinitialisation de la clé privée' });
+    }
+});
+
+// ============================================
+// ============================================
+// ROUTE ADMIN - RÉINITIALISATION MOT DE PASSE AVEC GÉNÉRATION ALÉATOIRE
+// ============================================
+
+app.post('/api/admin/users/:userId/reset-password', authenticateToken, requireAdmin, async (req, res) => {
+    const { userId } = req.params;
+    
+    console.log('=== RÉINITIALISATION MOT DE PASSE ===');
+    console.log('User ID reçu:', userId);
+    console.log('Admin ID:', req.user?.userId);
+    
+    try {
+        // Vérifier que l'utilisateur existe
+        const user = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [userId]);
+        
+        if (!user) {
+            console.log('❌ Utilisateur non trouvé:', userId);
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+        
+        console.log('✅ Utilisateur trouvé:', user.phone, user.fullname);
+        
+        // Générer un mot de passe aléatoire à 6 chiffres
+        const newPassword = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        
+        // Mettre à jour le mot de passe
+        await run('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, userId]);
+        
+        console.log('✅ Mot de passe mis à jour pour:', user.phone);
+        console.log('📱 Nouveau mot de passe:', newPassword);
+        
+        // Notification WebSocket à l'utilisateur
+        if (io) {
+            io.to(`user_${userId}`).emit('notification', {
+                title: '🔐 Mot de passe réinitialisé',
+                message: `Votre mot de passe a été réinitialisé par l'administrateur. Nouveau mot de passe: ${newPassword}`,
+                type: 'security',
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        // Notification à l'admin
+        if (io) {
+            io.to(`user_${req.user.userId}`).emit('notification', {
+                title: '✅ Mot de passe réinitialisé',
+                message: `Le mot de passe de ${user.fullname} a été réinitialisé avec succès`,
+                details: `Nouveau mot de passe: ${newPassword}`,
+                type: 'success',
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        res.json({
+            success: true,
+            new_password: newPassword,
+            user: {
+                id: user.id,
+                phone: user.phone,
+                fullname: user.fullname
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+// ============================================
+// ROUTE ADMIN - RÉINITIALISATION MOT DE PASSE
+// ============================================
+
+app.post('/api/admin/users/:userId/reset-password', authenticateToken, requireAdmin, async (req, res) => {
+    const { userId } = req.params;
+    
+    console.log('=== RÉINITIALISATION MOT DE PASSE ===');
+    console.log('User ID:', userId);
+    console.log('Admin ID:', req.user.userId);
+    
+    try {
+        // Vérifier que l'utilisateur existe
+        const user = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [userId]);
+        
+        if (!user) {
+            console.log('❌ Utilisateur non trouvé:', userId);
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+        
+        console.log('✅ Utilisateur trouvé:', user.phone, user.fullname);
+        
+        // Générer un mot de passe aléatoire à 6 chiffres
+        const newPassword = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        
+        // Mettre à jour le mot de passe
+        await run('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, userId]);
+        
+        console.log('✅ Mot de passe mis à jour pour:', user.phone);
+        console.log('📱 Nouveau mot de passe:', newPassword);
+        
+        // Enregistrer dans les logs
+        try {
+            await run(`INSERT INTO system_logs (user_id, action, details, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+                [req.user.userId, 'RESET_PASSWORD', `Réinitialisation mot de passe de l'utilisateur ${user.phone}`]);
+        } catch (logError) {
+            console.log('Erreur log (non bloquante):', logError.message);
+        }
+        
+        // Notification à l'utilisateur
+        if (io) {
+            io.to(`user_${userId}`).emit('notification', {
+                title: '🔐 Mot de passe réinitialisé',
+                message: `Votre mot de passe a été réinitialisé par l'administrateur.`,
+                details: `Nouveau mot de passe: ${newPassword}`,
+                type: 'security',
+                timestamp: new Date().toISOString()
+            });
+            console.log('✅ Notification envoyée à l\'utilisateur');
+        }
+        
+        // Notification à l'admin
+        if (io) {
+            io.to(`user_${req.user.userId}`).emit('notification', {
+                title: '✅ Mot de passe réinitialisé',
+                message: `Le mot de passe de ${user.fullname} (${user.phone}) a été réinitialisé avec succès`,
+                details: `Nouveau mot de passe: ${newPassword}`,
+                type: 'success',
+                timestamp: new Date().toISOString()
+            });
+            console.log('✅ Notification envoyée à l\'admin');
+        }
+        
+        res.json({
+            success: true,
+            new_password: newPassword,
+            user: {
+                id: user.id,
+                phone: user.phone,
+                fullname: user.fullname
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur réinitialisation mot de passe:', error);
+        res.status(500).json({ error: error.message || 'Erreur lors de la réinitialisation du mot de passe' });
+    }
+});
+
+
 
 module.exports = { app, io };

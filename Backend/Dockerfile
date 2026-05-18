@@ -7,13 +7,13 @@ WORKDIR /app
 COPY package*.json ./
 
 # Installer les dépendances
-RUN npm ci --only=production
+RUN npm install
 
 # Copier le reste du code
 COPY . .
 
 # Exposer le port
-EXPOSE 5001
+EXPOSE 5173
 
 # Démarrer l'application
-CMD ["node", "server.js"]
+CMD ["npm", "run", "dev", "server.js"]
