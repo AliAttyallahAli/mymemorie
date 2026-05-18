@@ -1,11 +1,12 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "CashPays - Application de transfert d'argent",
   "license": "ISC",
   "author": "",
   "type": "commonjs",
-  "main": "index.js",
+  "main": "server.js",
+  
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
@@ -68,6 +69,7 @@
     "vite": "^8.0.13"
   },
   "engines": {
-    "node": "18.x"
-  }
+    "node": "24.x",
+    "npm": "10.x"
+}
 }
