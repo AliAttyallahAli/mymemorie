@@ -325,7 +325,7 @@ function QRCodeModal({ isOpen, onClose, onConfirm, title = "Saisir un QR code" }
         {/* Footer info */}
         <div className="px-6 py-3 bg-black/20 text-center">
           <p className="text-white/30 text-xs">
-            💡 Le QR code CashPays contient le numéro de téléphone du destinataire
+            💡 Le QR code AlkherPay contient le numéro de téléphone du destinataire
           </p>
         </div>
       </div>

@@ -696,7 +696,7 @@ function AdminPanel({ user }) {
   return (
     <Layout user={user}>
       <div className="card">
-        <h2 className="text-2xl font-bold text-white mb-6">Administration CashPays</h2>
+        <h2 className="text-2xl font-bold text-white mb-6">Administration AlkherPay</h2>
 
         {/* Tabs */}
         <div className="flex flex-wrap gap-2 mb-6 border-b border-white/10 pb-4">

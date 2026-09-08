@@ -98,7 +98,7 @@ function Home() {
     {
       name: 'Jean NDOUMBE',
       role: 'Commerçant',
-      content: 'CashPays a révolutionné mes transactions. Plus besoin d\'aller à la banque, tout se fait depuis mon téléphone !',
+      content: 'AlkherPay a révolutionné mes transactions. Plus besoin d\'aller à la banque, tout se fait depuis mon téléphone !',
       rating: 5,
       avatar: '👨‍💼'
     },
@@ -111,8 +111,8 @@ function Home() {
     },
     {
       name: 'Pierre MADJI',
-      role: 'Agent CashPays',
-      content: 'Devenir agent CashPays m\'a permis de développer mon activité et de servir ma communauté.',
+      role: 'Agent AlkherPay',
+      content: 'Devenir agent AlkherPay m\'a permis de développer mon activité et de servir ma communauté.',
       rating: 5,
       avatar: '👨‍💻'
     }
@@ -143,7 +143,7 @@ function Home() {
               </div>
               <div>
                 <span className={`font-bold text-xl ${isDark ? 'text-white' : 'text-gray-900'}`}>
-                  CashPays
+                  AlkherPay
                 </span>
                 <span className="text-blue-400 text-xs block">GOUROUSDJA</span>
               </div>
@@ -219,7 +219,7 @@ function Home() {
               </h1>
               
               <p className={`text-lg mb-8 ${isDark ? 'text-white/60' : 'text-gray-600'}`}>
-                CashPays vous permet d'envoyer et de recevoir de l'argent en toute sécurité, 
+                AlkherPay vous permet d'envoyer et de recevoir de l'argent en toute sécurité, 
                 où que vous soyez au Tchad. Des frais transparents et un service disponible 24h/24.
               </p>
               
@@ -323,7 +323,7 @@ function Home() {
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
             <h2 className={`text-3xl md:text-4xl font-bold mb-4 ${isDark ? 'text-white' : 'text-gray-900'}`}>
-              Pourquoi choisir CashPays ?
+              Pourquoi choisir AlkherPay ?
             </h2>
             <p className={`text-lg max-w-2xl mx-auto ${isDark ? 'text-white/60' : 'text-gray-600'}`}>
               Une solution simple, rapide et sécurisée pour tous vos besoins de transfert d'argent
@@ -464,7 +464,7 @@ function Home() {
             
             <div className="relative z-10">
               <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-                Prêt à rejoindre CashPays ?
+                Prêt à rejoindre AlkherPay ?
               </h2>
               <p className="text-blue-100 mb-8 max-w-2xl mx-auto">
                 Créez votre compte gratuitement et recevez 1000 FCFA offerts dès votre inscription.
@@ -484,7 +484,7 @@ function Home() {
                 </button>
               </div>
               <p className="text-blue-200 text-sm mt-6">
-                Pas de smartphone ? Visitez l'un de nos agents CashPays
+                Pas de smartphone ? Visitez l'un de nos agents AlkherPay
               </p>
             </div>
           </div>
@@ -498,7 +498,7 @@ function Home() {
             <div>
               <div className="flex items-center gap-2 mb-4">
                 <FaMoneyBillWave className={`text-xl ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
-                <span className={`text-xl font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>CashPays</span>
+                <span className={`text-xl font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>AlkherPay</span>
               </div>
               <p className={`text-sm ${isDark ? 'text-white/50' : 'text-gray-500'}`}>
                 Transfert d'argent instantané au Tchad. Simple, rapide et sécurisé.
@@ -552,7 +552,7 @@ function Home() {
           
           <div className={`text-center pt-8 mt-8 border-t ${isDark ? 'border-white/10' : 'border-gray-200'}`}>
             <p className={`text-xs ${isDark ? 'text-white/30' : 'text-gray-400'}`}>
-              © 2026 CashPays - GOUROUSDJA. Tous droits réservés. | Agrément COBAC N° 2026/001
+              © 2026 AlkherPay - GOUROUSDJA. Tous droits réservés. | Agrément COBAC N° 2026/001
             </p>
           </div>
         </div>

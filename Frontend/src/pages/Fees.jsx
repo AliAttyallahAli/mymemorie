@@ -109,7 +109,7 @@ function Fees({ user }) {
           </table>
         </div>
         <p className="text-white/40 text-sm text-center mt-4">
-          * Transfert entre utilisateurs CashPays
+          * Transfert entre utilisateurs AlkherPay
         </p>
       </div>
 
@@ -120,7 +120,7 @@ function Fees({ user }) {
           <div>
             <h3 className="text-white font-semibold mb-2">Aucun frais caché</h3>
             <p className="text-white/60 text-sm">
-              CashPays s'engage à une transparence totale sur ses frais. 
+              AlkherPay s'engage à une transparence totale sur ses frais. 
               Les frais sont calculés automatiquement et affichés avant chaque transaction.
               Les dépôts en agence sont entièrement gratuits.
             </p>

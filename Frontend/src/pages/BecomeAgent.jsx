@@ -147,7 +147,7 @@ function BecomeAgent({ user }) {
     {
       icon: FaChartLine,
       title: 'Croissance',
-      description: 'Développez votre activité avec CashPays'
+      description: 'Développez votre activité avec AlkherPay'
     },
     {
       icon: FaShieldAlt,
@@ -175,7 +175,7 @@ function BecomeAgent({ user }) {
           </div>
           <h2 className="text-2xl font-bold text-white mb-4">Demande envoyée !</h2>
           <p className="text-white/70 mb-6">
-            Nous avons bien reçu votre demande pour devenir agent CashPays. 
+            Nous avons bien reçu votre demande pour devenir agent AlkherPay. 
             Notre équipe vous contactera dans les plus brefs délais pour étudier votre candidature.
           </p>
           <div className="flex gap-4 justify-center">
@@ -199,7 +199,7 @@ function BecomeAgent({ user }) {
           <FaUserTie className="text-white text-3xl" />
         </div>
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-4">
-          Devenez agent CashPays
+          Devenez agent AlkherPay
         </h1>
         <p className="text-white/60 max-w-2xl mx-auto">
           Rejoignez notre réseau de partenaires et développez votre activité
@@ -288,13 +288,13 @@ function BecomeAgent({ user }) {
               />
             </div>
             
-            <div>
+            <div >
               <label className="label">Province</label>
               <select
                 name="province"
                 value={formData.province}
                 onChange={handleChange}
-                className="input-field"
+                className=" input-field "
               >
                 <option value="">Sélectionnez une province</option>
                 {provinces.map(p => (
@@ -379,7 +379,7 @@ function BecomeAgent({ user }) {
                 onChange={handleChange}
                 className="input-field"
                 rows="3"
-                placeholder="Pourquoi voulez-vous devenir agent CashPays ?"
+                placeholder="Pourquoi voulez-vous devenir agent AlkherPay ?"
                 required
               />
             </div>
@@ -469,7 +469,7 @@ function BecomeAgent({ user }) {
           <div className="bg-yellow-500/10 rounded-xl p-4 border border-yellow-500/20">
             <p className="text-yellow-400 text-sm flex items-start gap-2">
               <FaInfoCircle className="mt-0.5 flex-shrink-0" />
-              <span>Une question ? Contactez-nous au <strong className="text-white">62 78 73 07</strong> ou par email à <strong className="text-white">cashpays@gmail.com</strong></span>
+              <span>Une question ? Contactez-nous au <strong className="text-white">62 78 73 07</strong> ou par email à <strong className="text-white">AlkherPay@gmail.com</strong></span>
             </p>
           </div>
         </div>

@@ -91,7 +91,7 @@ function QRCodeManualInput({ onScan, onClose }) {
             <button onClick={handleSubmit} className="flex-1 btn-primary"><FaQrcode className="inline mr-1" /> Valider</button>
             <label className="flex-1 btn-secondary text-center cursor-pointer"><FaUpload className="inline mr-1" /> Importer<input type="file" accept=".txt,.json" onChange={handleFileUpload} className="hidden" /></label>
           </div>
-          <div className="bg-white/5 rounded-lg p-3"><p className="text-white/50 text-xs text-center">💡 Scannez un QR code CashPays ou collez le lien de paiement</p></div>
+          <div className="bg-white/5 rounded-lg p-3"><p className="text-white/50 text-xs text-center">💡 Scannez un QR code AlkherPay ou collez le lien de paiement</p></div>
         </div>
       </div>
     </div>

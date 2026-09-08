@@ -110,10 +110,10 @@ function Agents({ user }) {
             <FaUserTie className="text-white text-3xl" />
           </div>
           <h1 className="text-3xl md:text-4xl font-bold text-white mb-4">
-            Nos agents CashPays
+            Nos agents AlkherPay
           </h1>
           <p className="text-white/60 max-w-2xl mx-auto">
-            Trouvez un agent CashPays près de chez vous
+            Trouvez un agent AlkherPay près de chez vous
           </p>
         </div>
         
@@ -133,7 +133,7 @@ function Agents({ user }) {
 
         <div className="mt-12 bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl p-8 text-center">
           <h2 className="text-2xl font-bold text-white mb-2">
-            Vous souhaitez devenir agent CashPays ?
+            Vous souhaitez devenir agent AlkherPay ?
           </h2>
           <p className="text-blue-100 mb-4">
             Rejoignez notre réseau de partenaires
@@ -153,10 +153,10 @@ function Agents({ user }) {
           <FaUserTie className="text-white text-3xl" />
         </div>
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-4">
-          Nos agents CashPays
+          Nos agents AlkherPay
         </h1>
         <p className="text-white/60 max-w-2xl mx-auto">
-          Trouvez un agent CashPays près de chez vous pour vos dépôts, retraits et transactions
+          Trouvez un agent AlkherPay près de chez vous pour vos dépôts, retraits et transactions
         </p>
       </div>
 
@@ -253,7 +253,7 @@ function Agents({ user }) {
                 <div className="space-y-2 mb-4">
                   <div className="flex items-center gap-2 text-white/70 text-sm">
                     <FaBuilding className="text-blue-400 text-sm flex-shrink-0" />
-                    <span className="truncate">{agent.agency_name || 'Agence CashPays'}</span>
+                    <span className="truncate">{agent.agency_name || 'Agence AlkherPay'}</span>
                   </div>
                   <div className="flex items-center gap-2 text-white/70 text-sm">
                     <FaMapMarkerAlt className="text-blue-400 text-sm flex-shrink-0" />
@@ -311,7 +311,7 @@ function Agents({ user }) {
 
       <div className="mt-12 bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl p-8 text-center">
         <h2 className="text-2xl font-bold text-white mb-2">
-          Vous souhaitez devenir agent CashPays ?
+          Vous souhaitez devenir agent AlkherPay ?
         </h2>
         <p className="text-blue-100 mb-4">
           Rejoignez notre réseau de partenaires et développez votre activité

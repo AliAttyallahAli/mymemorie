@@ -86,10 +86,10 @@ function Blog({ user }) {
           <FaNewspaper className="text-white text-3xl" />
         </div>
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-4">
-          Blog CashPays
+          Blog AlkherPay
         </h1>
         <p className="text-white/60 max-w-2xl mx-auto">
-          Actualités, conseils et tutoriels pour mieux utiliser CashPays
+          Actualités, conseils et tutoriels pour mieux utiliser AlkherPay
         </p>
       </div>
 

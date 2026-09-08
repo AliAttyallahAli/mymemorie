@@ -226,7 +226,7 @@ function Register() {
               <FaMoneyBillWave className="text-white text-3xl" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-white">Créer un compte CashPays</h1>
+          <h1 className="text-2xl font-bold text-white">Créer un compte AlkherPay</h1>
           <p className="text-white/50 text-sm">Recevez 1 000 FCFA à l'inscription</p>
           
           {/* Bannière parrainage */}

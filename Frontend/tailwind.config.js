@@ -27,7 +27,7 @@ export default {
           800: '#040f2a',
           900: '#020515',
         },
-        'cashpays': {
+        'AlkherPay': {
           primary: '#0A2F6C',
           secondary: '#1A4A8B',
           accent: '#2E6EB5',

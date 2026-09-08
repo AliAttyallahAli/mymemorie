@@ -56,7 +56,7 @@ function NotificationManager({ user, socket }) {
     if (Notification.permission === "granted") {
       new Notification(notification.title, {
         body: notification.message,
-        icon: '/cashpays-icon.png',
+        icon: '/AlkherPay-icon.png',
         silent: false
       })
     }

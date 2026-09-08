@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 // Chemin vers la base de données
-const dbPath = path.join(__dirname, 'cashpays.db');
+const dbPath = path.join(__dirname, 'AlkherPay.db');
 
 // Initialisation de la base de données
 let db = null;

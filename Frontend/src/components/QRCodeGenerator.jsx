@@ -44,7 +44,7 @@ function QRCodeGenerator({ user, onClose }) {
         const canvas = document.getElementById('qr-code-canvas');
         if (canvas) {
             const link = document.createElement('a');
-            link.download = `cashpays-qrcode-${user?.phone}.png`;
+            link.download = `AlkherPay-qrcode-${user?.phone}.png`;
             link.href = canvas.toDataURL();
             link.click();
             toast.success('QR code téléchargé');
@@ -57,13 +57,13 @@ function QRCodeGenerator({ user, onClose }) {
     };
 
     const shareViaWhatsApp = () => {
-        const message = `💰 *Demande de paiement CashPays*\n\nScannez ce QR code ou cliquez sur le lien pour me payer :\n${webLink}\n\nMontant: ${amount ? parseInt(amount).toLocaleString() : 'À définir'} FCFA\n\n📱 CashPays - Transfert instantané`;
+        const message = `💰 *Demande de paiement AlkherPay*\n\nScannez ce QR code ou cliquez sur le lien pour me payer :\n${webLink}\n\nMontant: ${amount ? parseInt(amount).toLocaleString() : 'À définir'} FCFA\n\n📱 AlkherPay - Transfert instantané`;
         window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
     };
 
     const shareViaEmail = () => {
-        const subject = 'Demande de paiement CashPays';
-        const body = `Bonjour,\n\nJe vous invite à me payer via CashPays.\n\nLien de paiement: ${webLink}\n\nMontant: ${amount ? parseInt(amount).toLocaleString() : 'À définir'} FCFA\n\nMerci !`;
+        const subject = 'Demande de paiement AlkherPay';
+        const body = `Bonjour,\n\nJe vous invite à me payer via AlkherPay.\n\nLien de paiement: ${webLink}\n\nMontant: ${amount ? parseInt(amount).toLocaleString() : 'À définir'} FCFA\n\nMerci !`;
         window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     };
 
@@ -140,7 +140,7 @@ function QRCodeGenerator({ user, onClose }) {
                                     />
                                 </div>
                                 <p className="text-white/50 text-xs mt-2">
-                                    Scannez ce QR code avec l'app CashPays
+                                    Scannez ce QR code avec l'app AlkherPay
                                 </p>
                             </div>
 

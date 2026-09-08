@@ -124,7 +124,7 @@ function History({ user }) {
       doc.setTextColor(255, 255, 255)
       doc.setFontSize(24)
       doc.setFont('helvetica', 'bold')
-      doc.text('CASHPAYS', pageWidth / 2, 20, { align: 'center' })
+      doc.text('AlkherPay', pageWidth / 2, 20, { align: 'center' })
       
       doc.setFontSize(9)
       doc.setFont('helvetica', 'normal')
@@ -244,13 +244,13 @@ function History({ user }) {
       doc.setTextColor(10, 47, 108)
       doc.setFontSize(9)
       doc.setFont('helvetica', 'italic')
-      doc.text('Merci d\'utiliser CashPays - Transfert d\'argent instantané au Tchad', pageWidth / 2, footerY + 12, { align: 'center' })
+      doc.text('Merci d\'utiliser AlkherPay - Transfert d\'argent instantané au Tchad', pageWidth / 2, footerY + 12, { align: 'center' })
       
       doc.setTextColor(80, 80, 80)
       doc.setFontSize(8)
       doc.setFont('helvetica', 'normal')
-      doc.text('Service client: 62 78 73 07 | support@cashpays.td', pageWidth / 2, footerY + 22, { align: 'center' })
-      doc.text('© 2026 CashPays - GOUROUSDJA', pageWidth / 2, footerY + 32, { align: 'center' })
+      doc.text('Service client: 62 78 73 07 | support@AlkherPay.td', pageWidth / 2, footerY + 22, { align: 'center' })
+      doc.text('© 2026 AlkherPay - GOUROUSDJA', pageWidth / 2, footerY + 32, { align: 'center' })
       
       doc.setFontSize(7)
       doc.setTextColor(150, 150, 150)
@@ -278,7 +278,7 @@ function History({ user }) {
       doc.setTextColor(255, 255, 255)
       doc.setFontSize(22)
       doc.setFont('helvetica', 'bold')
-      doc.text('CASHPAYS', 105, 20, { align: 'center' })
+      doc.text('AlkherPay', 105, 20, { align: 'center' })
       doc.setFontSize(10)
       doc.setFont('helvetica', 'normal')
       doc.text('Historique des transactions', 105, 32, { align: 'center' })
@@ -358,7 +358,7 @@ function History({ user }) {
         doc.setFontSize(8)
         doc.setTextColor(128, 128, 128)
         doc.text(
-          `CashPays - Page ${i} sur ${pageCount} - Service client: 62 78 73 07`,
+          `AlkherPay - Page ${i} sur ${pageCount} - Service client: 62 78 73 07`,
           105,
           doc.internal.pageSize.height - 10,
           { align: 'center' }
@@ -413,7 +413,7 @@ function History({ user }) {
     printWindow.document.write(`
       <html>
         <head>
-          <title>CashPays - Historique des transactions</title>
+          <title>AlkherPay - Historique des transactions</title>
           <style>
             body { font-family: Arial, sans-serif; padding: 20px; }
             .header { text-align: center; margin-bottom: 30px; }
@@ -427,7 +427,7 @@ function History({ user }) {
         </head>
         <body>
           <div class="header">
-            <div class="logo">CASHPAYS</div>
+            <div class="logo">AlkherPay</div>
             <p>Historique des transactions</p>
             <p>Généré le: ${new Date().toLocaleString('fr-FR')}</p>
           </div>
@@ -458,8 +458,8 @@ function History({ user }) {
             </tbody>
           </table>
           <div class="footer">
-            <p>CashPays - Transfert d'argent instantané au Tchad</p>
-            <p>Service client: 62 78 73 07 | support@cashpays.td</p>
+            <p>AlkherPay - Transfert d'argent instantané au Tchad</p>
+            <p>Service client: 62 78 73 07 | support@AlkherPay.td</p>
           </div>
         </body>
       </html>

@@ -5,12 +5,12 @@ const LanguageContext = createContext();
 
 export const LanguageProvider = ({ children }) => {
   const [language, setLanguage] = useState(() => {
-    return localStorage.getItem('cashpays-language') || 'fr';
+    return localStorage.getItem('AlkherPay-language') || 'fr';
   });
 
   const changeLanguage = (lng) => {
     setLanguage(lng);
-    localStorage.setItem('cashpays-language', lng);
+    localStorage.setItem('AlkherPay-language', lng);
     
     if (lng === 'ar') {
       document.documentElement.dir = 'rtl';
@@ -22,7 +22,7 @@ export const LanguageProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    const savedLang = localStorage.getItem('cashpays-language');
+    const savedLang = localStorage.getItem('AlkherPay-language');
     if (savedLang && savedLang !== language) {
       changeLanguage(savedLang);
     }

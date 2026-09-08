@@ -26,6 +26,8 @@ import Fees from './pages/Fees'
 import BecomeAgent from './pages/BecomeAgent'
 import FAQ from './pages/FAQ'
 import Blog from './pages/Blog'
+import Investments from './pages/Investments';
+import InvestmentDetail from './pages/InvestmentDetail';
 import Agents from './pages/Agents'
 import Licenses from './pages/Licenses'
 import BlogPost from './pages/BlogPost'
@@ -35,8 +37,16 @@ import TwoFactorAuth from './pages/TwoFactorAuth'
 import NotificationDetail from './pages/NotificationDetail'
 import AgentApplicationDetail from './pages/AgentApplicationDetail'
 import KYCDetail from './pages/KYCDetail'
+import CompanyDashboard from './pages/CompanyDashboard';
 import TaxPayment from './pages/TaxPayment'
 import AdminTaxes from './pages/AdminTaxes'
+import MyCompany from './pages/MyCompany';
+import BillPayment from './pages/BillPayment';
+import BusBooking from './pages/BusBooking';
+import KYCLevel2 from './pages/KYCLevel2';
+import AgencyManagement from './pages/AgencyManagement';
+import TaxManagement from './pages/TaxManagement'; // ✅ NOUVEAU
+import AdminBillCompanies from './pages/AdminBillCompanies';
 
 const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 let socket = null
@@ -186,16 +196,26 @@ function App() {
             <Route path="/admin/taxes" element={<AdminTaxes user={user} />} />
             <Route path="/dashboard" element={<Dashboard user={user} socket={socket} />} />
             <Route path="/transfer" element={<Transfer user={user} socket={socket} />} />
-            <Route path="/deposit" element={<Deposit user={user} />} />
             <Route path="/settings/2fa" element={<TwoFactorAuth user={user} />} />
-            <Route path="/withdraw" element={<Withdraw user={user} />} />
+            <Route path="/company/dashboard" element={<CompanyDashboard user={user} />} />
             <Route path="/notifications/:id" element={<NotificationDetail user={user} />} />
             <Route path="/admin/agent-applications/:id" element={<AgentApplicationDetail user={user} />} />
+            <Route path="/bill-payment" element={<BillPayment user={user} />} />
+            <Route path="/admin/bill-companies" element={<AdminBillCompanies user={user} />} />
+            <Route path="/my-company" element={<MyCompany user={user} socket={socket} />} />
             <Route path="/admin/kyc/:id" element={<KYCDetail user={user} />} />
+            <Route path="/investments" element={<Investments user={user} socket={socket} />} />
+            <Route path="/investment/:id" element={<InvestmentDetail user={user} socket={socket} />} />
             <Route path="/history" element={<History user={user} />} />
+            <Route path="/tax-management" element={<TaxManagement />} />
             <Route path="/profile" element={<Profile user={user} />} />
+            <Route path="/bus-booking" element={<BusBooking user={user} socket={socket} />} />
+            <Route path="/agency-management" element={<AgencyManagement user={user} socket={socket} />} />
+            <Route path="/deposit" element={<Deposit user={user} socket={socket} />} />
+            <Route path="/withdraw" element={<Withdraw user={user} socket={socket} />} />
             <Route path="/settings" element={<Settings user={user} />} />
             <Route path="/announcements" element={<Announcements />} />
+            <Route path="/kyc-level-2" element={<KYCLevel2 user={user} socket={socket} />} />
             <Route path="/admin" element={<AdminPanel user={user} socket={socket} />} />
             <Route path="/admin/create-agent" element={<CreateAgent user={user} />} />
           </Route>

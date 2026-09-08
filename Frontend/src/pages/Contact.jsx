@@ -64,8 +64,8 @@ function Contact({ user }) {
     {
       icon: FaEnvelope,
       title: 'Email',
-      details: 'supportcashpays@gmail.com',
-      link: 'mailto:supportcashpays@gmail.com',
+      details: 'supportAlkherPay@gmail.com',
+      link: 'mailto:supportAlkherPay@gmail.com',
       color: 'bg-blue-500/20 text-blue-400'
     },
     {
@@ -78,15 +78,15 @@ function Contact({ user }) {
   ]
 
   const socialLinks = [
-    { icon: FaFacebook, name: 'Facebook', link: 'https://facebook.com/cashpays', color: 'bg-[#1877f2]' },
+    { icon: FaFacebook, name: 'Facebook', link: 'https://facebook.com/AlkherPay', color: 'bg-[#1877f2]' },
     { icon: FaWhatsapp, name: 'WhatsApp', link: 'https://wa.me/23562787307', color: 'bg-[#25d366]' },
-    { icon: FaTelegram, name: 'Telegram', link: 'https://t.me/cashpays', color: 'bg-[#0088cc]' },
-    { icon: FaEnvelope, name: 'Email', link: 'mailto:supportcashpays@gmail.com', color: 'bg-gray-500' }
+    { icon: FaTelegram, name: 'Telegram', link: 'https://t.me/AlkherPay', color: 'bg-[#0088cc]' },
+    { icon: FaEnvelope, name: 'Email', link: 'mailto:supportAlkherPay@gmail.com', color: 'bg-gray-500' }
   ]
 
   const faqs = [
     {
-      question: 'Comment créer un compte CashPays ?',
+      question: 'Comment créer un compte AlkherPay ?',
       answer: 'Téléchargez l\'application, cliquez sur "Créer un compte", renseignez vos informations (nom, téléphone, mot de passe) et validez. Vous recevrez 1000 FCFA offerts à l\'inscription.'
     },
     {
@@ -103,10 +103,10 @@ function Contact({ user }) {
     },
     {
       question: 'L\'application est-elle sécurisée ?',
-      answer: 'Oui, CashPays utilise un chiffrement AES-256 et respecte les normes de sécurité de la COBAC et de la BEAC.'
+      answer: 'Oui, AlkherPay utilise un chiffrement AES-256 et respecte les normes de sécurité de la COBAC et de la BEAC.'
     },
     {
-      question: 'Comment devenir agent CashPays ?',
+      question: 'Comment devenir agent AlkherPay ?',
       answer: 'Contactez notre équipe au 62 78 73 07 pour obtenir les conditions d\'agrément et le processus de recrutement.'
     }
   ]
@@ -320,7 +320,7 @@ function Contact({ user }) {
           <span>•</span>
           <Link to="/contact" className="hover:text-white transition-colors">Contact</Link>
         </div>
-        <p className="mt-4">© 2026 CashPays - GOUROUSDJA. Tous droits réservés.</p>
+        <p className="mt-4">© 2026 AlkherPay - GOUROUSDJA. Tous droits réservés.</p>
       </div>
     </Layout>
   )

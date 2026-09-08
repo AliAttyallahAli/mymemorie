@@ -57,7 +57,7 @@ function TransactionModal({ isOpen, onClose, transaction, type }) {
   const downloadReceipt = () => {
     const receiptContent = `
       ================================================
-                    CASHPAYS - REÇU DE TRANSACTION
+                    AlkherPay - REÇU DE TRANSACTION
       ================================================
       
       Référence: ${transaction?.reference || 'N/A'}
@@ -85,7 +85,7 @@ function TransactionModal({ isOpen, onClose, transaction, type }) {
       Statut: ${transaction?.status === 'completed' ? '✓ COMPLÉTÉ' : 'EN ATTENTE'}
       
       ================================================
-      Merci d'utiliser CashPays - GOUROUSDJA
+      Merci d'utiliser AlkherPay - GOUROUSDJA
       Service client: 62 78 73 07
       ================================================
     `
@@ -94,7 +94,7 @@ function TransactionModal({ isOpen, onClose, transaction, type }) {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `cashpays_reçu_${transaction?.reference || Date.now()}.txt`
+    link.download = `AlkherPay_reçu_${transaction?.reference || Date.now()}.txt`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -105,14 +105,14 @@ function TransactionModal({ isOpen, onClose, transaction, type }) {
 
   const shareViaWhatsApp = () => {
     const message = `
-*CASHPAYS - Transaction ${transaction?.status === 'completed' ? 'réussie' : 'en attente'}* ✅
+*AlkherPay - Transaction ${transaction?.status === 'completed' ? 'réussie' : 'en attente'}* ✅
 
 Référence: ${transaction?.reference}
 Montant: ${formatAmount(transaction?.amount)}
 ${transaction?.type === 'sent' ? 'Envoyé à' : 'Reçu de'}: ${transaction?.type === 'sent' ? transaction?.receiver_name : transaction?.sender_name}
 Date: ${formatDate(new Date())}
 
-Merci d'utiliser CashPays! 🚀
+Merci d'utiliser AlkherPay! 🚀
     `.trim()
     
     const url = `https://wa.me/?text=${encodeURIComponent(message)}`
@@ -120,9 +120,9 @@ Merci d'utiliser CashPays! 🚀
   }
 
   const shareViaEmail = () => {
-    const subject = `CashPays - Transaction ${transaction?.reference}`
+    const subject = `AlkherPay - Transaction ${transaction?.reference}`
     const body = `
-Transaction CashPays
+Transaction AlkherPay
     
 Référence: ${transaction?.reference}
 Montant: ${formatAmount(transaction?.amount)}

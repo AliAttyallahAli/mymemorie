@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: cashpays-backend
+    name: AlkherPay-backend
     runtime: node
     plan: free
     buildCommand: npm install

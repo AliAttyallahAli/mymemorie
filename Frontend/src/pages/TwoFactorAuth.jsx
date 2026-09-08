@@ -192,7 +192,7 @@ function TwoFactorAuth({ user }) {
   }
 
   const downloadBackupCodes = () => {
-    const content = `CASHPAYS - CODES DE SECOURS 2FA
+    const content = `AlkherPay - CODES DE SECOURS 2FA
 =================================
 
 Gardez ces codes dans un endroit sûr.
@@ -207,7 +207,7 @@ Généré le: ${new Date().toLocaleString('fr-FR')}
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `cashpays-2fa-backup-codes.txt`
+    link.download = `AlkherPay-2fa-backup-codes.txt`
     link.click()
     URL.revokeObjectURL(url)
     toast.success('Codes téléchargés')

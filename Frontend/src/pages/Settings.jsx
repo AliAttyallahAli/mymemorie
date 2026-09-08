@@ -469,13 +469,13 @@ function Settings({ user }) {
 
   const shareViaWhatsApp = () => {
     if (!paymentLink) return
-    const message = `💰 *Demande de paiement CashPays*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
+    const message = `💰 *Demande de paiement AlkherPay*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
   }
 
   const shareViaEmail = () => {
     if (!paymentLink) return
-    const subject = 'Demande de paiement CashPays'
+    const subject = 'Demande de paiement AlkherPay'
     const body = `Bonjour,\n\nLien de paiement: ${paymentLink}\n\nMerci !`
     window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
   }
@@ -483,7 +483,7 @@ function Settings({ user }) {
   const downloadQRCode = () => {
     if (qrImageUrl) {
       const link = document.createElement('a')
-      link.download = `cashpays-payment-${user?.phone}.png`
+      link.download = `AlkherPay-payment-${user?.phone}.png`
       link.href = qrImageUrl
       link.click()
       toast.success('QR code téléchargé')

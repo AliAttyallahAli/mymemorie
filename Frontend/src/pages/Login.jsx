@@ -154,7 +154,7 @@ function Login({ setUser }) {
               <FaMoneyBillWave className="text-white text-4xl" />
             </div>
           </div>
-          <h1 className="text-3xl font-bold text-white mb-2">CashPays</h1>
+          <h1 className="text-3xl font-bold text-white mb-2">AlkherPay</h1>
           <p className="text-blue-200 text-sm">GOUROUSDJA - Transfert d'argent instantané</p>
           
           {referralCode && (
@@ -297,7 +297,7 @@ function Login({ setUser }) {
         </div>
 
         <div className="text-center text-white/30 text-xs mt-6">
-          CashPays v1.0.0 - © 2026 GOUROUSDJA
+          AlkherPay v1.0.0 - © 2026 GOUROUSDJA
         </div>
       </div>
 

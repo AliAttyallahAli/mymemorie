@@ -84,10 +84,10 @@ function Features({ user }) {
           <FaRocket className="text-white text-3xl" />
         </div>
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-4">
-          Fonctionnalités CashPays
+          Fonctionnalités AlkherPay
         </h1>
         <p className="text-white/60 max-w-2xl mx-auto">
-          Découvrez toutes les fonctionnalités qui font de CashPays la meilleure solution 
+          Découvrez toutes les fonctionnalités qui font de AlkherPay la meilleure solution 
           de transfert d'argent au Tchad.
         </p>
       </div>
@@ -108,13 +108,13 @@ function Features({ user }) {
 
       {/* Comparison table */}
       <div className="card">
-        <h2 className="text-2xl font-bold text-white mb-6 text-center">Pourquoi choisir CashPays ?</h2>
+        <h2 className="text-2xl font-bold text-white mb-6 text-center">Pourquoi choisir AlkherPay ?</h2>
         <div className="overflow-x-auto">
           <table className="w-full text-white">
             <thead>
               <tr className="border-b border-white/20">
                 <th className="text-left py-3 px-4">Fonctionnalité</th>
-                <th className="text-center py-3 px-4">CashPays</th>
+                <th className="text-center py-3 px-4">AlkherPay</th>
                 <th className="text-center py-3 px-4">Transfert classique</th>
               </tr>
             </thead>

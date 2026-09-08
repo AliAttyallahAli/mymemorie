@@ -85,10 +85,10 @@ function Deposit({ user }) {
     } catch (error) {
       console.error('Erreur chargement agents:', error)
       const mockAgents = [
-        { id: 1, fullname: 'Jean NDOUMBE', phone: '66234567', province: 'N\'Djaména', city: 'N\'Djaména', agency_name: 'Agence CashPays Moursal', agency_address: 'Quartier Moursal' },
-        { id: 2, fullname: 'Marie MBALLA', phone: '66345678', province: 'Logone Occidental', city: 'Moundou', agency_name: 'Agence CashPays Moundou', agency_address: 'Avenue Charles de Gaulle' },
-        { id: 3, fullname: 'Pierre MADJI', phone: '66456789', province: 'Mayo-Kebbi Est', city: 'Bongor', agency_name: 'Agence CashPays Bongor', agency_address: 'Marché central' },
-        { id: 4, fullname: 'Aïssa MAHAMAT', phone: '66567890', province: 'Ouaddaï', city: 'Abéché', agency_name: 'Agence CashPays Abéché', agency_address: 'Route de l\'aéroport' }
+        { id: 1, fullname: 'Jean NDOUMBE', phone: '66234567', province: 'N\'Djaména', city: 'N\'Djaména', agency_name: 'Agence AlkherPay Moursal', agency_address: 'Quartier Moursal' },
+        { id: 2, fullname: 'Marie MBALLA', phone: '66345678', province: 'Logone Occidental', city: 'Moundou', agency_name: 'Agence AlkherPay Moundou', agency_address: 'Avenue Charles de Gaulle' },
+        { id: 3, fullname: 'Pierre MADJI', phone: '66456789', province: 'Mayo-Kebbi Est', city: 'Bongor', agency_name: 'Agence AlkherPay Bongor', agency_address: 'Marché central' },
+        { id: 4, fullname: 'Aïssa MAHAMAT', phone: '66567890', province: 'Ouaddaï', city: 'Abéché', agency_name: 'Agence AlkherPay Abéché', agency_address: 'Route de l\'aéroport' }
       ]
       setAgents(mockAgents)
       setCities(['N\'Djaména', 'Moundou', 'Bongor', 'Abéché'])
@@ -231,7 +231,7 @@ function Deposit({ user }) {
                   <FaDownload className="inline mr-1" /> Reçu
                 </button>
                 <button onClick={() => {
-                  const message = `🏦 CASHPAYS - Dépôt réussi ✅\n\n💰 Montant: ${formatAmount(transactionData?.amount)}\n👤 Agent: ${transactionData?.agent_name}`
+                  const message = `🏦 AlkherPay - Dépôt réussi ✅\n\n💰 Montant: ${formatAmount(transactionData?.amount)}\n👤 Agent: ${transactionData?.agent_name}`
                   window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
                 }} className="flex-1 bg-[#25d366]/20 text-white py-2 rounded-lg text-sm">
                   <FaWhatsapp className="inline mr-1" /> Partager
@@ -312,7 +312,7 @@ function Deposit({ user }) {
               <FaMoneyBillWave className="text-green-400 text-2xl" />
             </div>
             <h2 className="text-2xl font-bold text-white">Dépôt d'argent</h2>
-            <p className="text-white/50 text-sm">Déposez de l'argent chez un agent CashPays</p>
+            <p className="text-white/50 text-sm">Déposez de l'argent chez un agent AlkherPay</p>
           </div>
 
           <form onSubmit={handleDeposit} className="space-y-5">

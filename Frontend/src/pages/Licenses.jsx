@@ -18,7 +18,7 @@ function Licenses({ user }) {
           </div>
           <h1 className="text-3xl font-bold text-white mb-2">Licences et agréments</h1>
           <p className="text-white/50 max-w-2xl mx-auto">
-            CashPays opère en conformité avec les réglementations de la COBAC et de la BEAC
+            AlkherPay opère en conformité avec les réglementations de la COBAC et de la BEAC
           </p>
         </div>
 
@@ -38,7 +38,7 @@ function Licenses({ user }) {
               </p>
             </div>
             <p className="text-white/70 leading-relaxed">
-              CashPays est officiellement agréé en tant qu'Établissement de Monnaie Électronique (EME) 
+              AlkherPay est officiellement agréé en tant qu'Établissement de Monnaie Électronique (EME) 
               par la COBAC. Cet agrément nous autorise à exercer des activités de transfert d'argent 
               électronique sur l'ensemble de la zone CEMAC.
             </p>
@@ -59,7 +59,7 @@ function Licenses({ user }) {
               </p>
             </div>
             <p className="text-white/70 leading-relaxed">
-              CashPays détient une licence d'exploitation valide pour opérer sur l'ensemble du territoire 
+              AlkherPay détient une licence d'exploitation valide pour opérer sur l'ensemble du territoire 
               tchadien. Cette licence nous permet de proposer nos services de transfert d'argent 
               électronique conformément à la législation en vigueur.
             </p>
@@ -134,7 +134,7 @@ function Licenses({ user }) {
               <h2 className="text-xl font-semibold text-white">Droits et obligations des utilisateurs</h2>
             </div>
             <p className="text-white/70 leading-relaxed mb-4">
-              En utilisant les services CashPays, vous bénéficiez des droits suivants :
+              En utilisant les services AlkherPay, vous bénéficiez des droits suivants :
             </p>
             <ul className="space-y-2 text-white/70 ml-6 list-disc">
               <li>Droit à l'information claire et transparente sur les frais</li>
@@ -206,7 +206,7 @@ function Licenses({ user }) {
         {/* Footer information */}
         <div className="mt-8 pt-6 border-t border-white/10 text-center">
           <p className="text-white/40 text-sm">
-            Les licences et agréments sont consultables sur demande au siège de CashPays.
+            Les licences et agréments sont consultables sur demande au siège de AlkherPay.
           </p>
           <div className="flex flex-wrap justify-center gap-4 mt-4">
             <Link to="/terms" className="text-white/40 hover:text-white text-sm transition-colors">

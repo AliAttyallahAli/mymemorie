@@ -275,7 +275,7 @@ function CreateAgent({ user }) {
             </div>
             <h1 className="text-2xl font-bold text-white mb-2">Créer un nouvel agent</h1>
             <p className="text-white/50 text-sm">
-              Remplissez le formulaire pour créer un compte agent CashPays
+              Remplissez le formulaire pour créer un compte agent AlkherPay
             </p>
           </div>
 
@@ -403,7 +403,7 @@ function CreateAgent({ user }) {
                     value={formData.agency_name}
                     onChange={handleChange}
                     className="input-field"
-                    placeholder="Ex: Agence CashPays Moursal"
+                    placeholder="Ex: Agence AlkherPay Moursal"
                     required
                   />
                 </div>

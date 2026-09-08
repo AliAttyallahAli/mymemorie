@@ -24,7 +24,7 @@ async function seed() {
     await run(
       `INSERT INTO users (phone, fullname, password_hash, private_key_6, province, role, is_active, is_verified)
        VALUES (?, ?, ?, ?, ?, 'admin', 1, 1)`,
-      ['62787307', 'Admin Core Team - CashPays', hashedPassword, hashedKey, 'N\'Djaména']
+      ['62787307', 'Admin Core Team - AlkherPay', hashedPassword, hashedKey, 'N\'Djaména']
     )
     
     const admin = await get('SELECT id FROM users WHERE phone = ?', ['62787307'])

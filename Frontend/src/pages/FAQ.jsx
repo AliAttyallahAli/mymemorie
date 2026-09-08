@@ -13,7 +13,7 @@ function FAQ({ user }) {
       category: 'Compte et inscription',
       questions: [
         {
-          q: 'Comment créer un compte CashPays ?',
+          q: 'Comment créer un compte AlkherPay ?',
           a: 'Téléchargez l\'application ou rendez-vous sur notre site web, cliquez sur "Créer un compte", renseignez vos informations (nom, téléphone, mot de passe) et validez. Vous recevrez 1000 FCFA offerts à l\'inscription.'
         },
         {
@@ -52,7 +52,7 @@ function FAQ({ user }) {
       questions: [
         {
           q: 'L\'application est-elle sécurisée ?',
-          a: 'Oui, CashPays utilise un chiffrement AES-256 pour vos données et respecte les normes de sécurité de la COBAC et de la BEAC.'
+          a: 'Oui, AlkherPay utilise un chiffrement AES-256 pour vos données et respecte les normes de sécurité de la COBAC et de la BEAC.'
         },
         {
           q: 'Que faire en cas de perte de mon téléphone ?',
@@ -65,10 +65,10 @@ function FAQ({ user }) {
       ]
     },
     {
-      category: 'Agents CashPays',
+      category: 'Agents AlkherPay',
       questions: [
         {
-          q: 'Comment devenir agent CashPays ?',
+          q: 'Comment devenir agent AlkherPay ?',
           a: 'Remplissez le formulaire sur notre page "Devenir agent". Notre équipe vous contactera pour étudier votre candidature.'
         },
         {
@@ -82,7 +82,7 @@ function FAQ({ user }) {
       questions: [
         {
           q: 'Comment contacter le service client ?',
-          a: 'Vous pouvez nous joindre par téléphone au 62 78 73 07, par email à supportcashpays@gmail.com, ou via WhatsApp au même numéro.'
+          a: 'Vous pouvez nous joindre par téléphone au 62 78 73 07, par email à supportAlkherPay@gmail.com, ou via WhatsApp au même numéro.'
         },
         {
           q: 'Quels sont les horaires du support ?',

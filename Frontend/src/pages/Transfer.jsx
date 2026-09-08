@@ -170,7 +170,7 @@ function Transfer({ user, socket }) {
 
   const loadFavorites = () => {
     try {
-      const saved = localStorage.getItem('cashpays_favorites')
+      const saved = localStorage.getItem('AlkherPay_favorites')
       if (saved) {
         setFavorites(JSON.parse(saved))
       }
@@ -182,7 +182,7 @@ function Transfer({ user, socket }) {
   const removeFavorite = (phone) => {
     const newFavorites = favorites.filter(f => f.phone !== phone)
     setFavorites(newFavorites)
-    localStorage.setItem('cashpays_favorites', JSON.stringify(newFavorites))
+    localStorage.setItem('AlkherPay_favorites', JSON.stringify(newFavorites))
     toast.success('Retiré des favoris')
   }
 
@@ -229,13 +229,13 @@ function Transfer({ user, socket }) {
 
   const shareViaWhatsApp = () => {
     if (!paymentLink) return
-    const message = `💰 *Demande de paiement CashPays*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
+    const message = `💰 *Demande de paiement AlkherPay*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
   }
 
   const shareViaEmail = () => {
     if (!paymentLink) return
-    const subject = 'Demande de paiement CashPays'
+    const subject = 'Demande de paiement AlkherPay'
     const body = `Bonjour,\n\nLien de paiement: ${paymentLink}\n\nMerci !`
     window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
   }
@@ -243,7 +243,7 @@ function Transfer({ user, socket }) {
   const downloadQRCode = () => {
     if (qrImageUrl) {
       const link = document.createElement('a')
-      link.download = `cashpays-payment-${user?.phone}.png`
+      link.download = `AlkherPay-payment-${user?.phone}.png`
       link.href = qrImageUrl
       link.click()
       toast.success('QR code téléchargé')
@@ -389,7 +389,7 @@ function Transfer({ user, socket }) {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>CashPays - Reçu ${transactionData?.reference}</title>
+        <title>AlkherPay - Reçu ${transactionData?.reference}</title>
         <style>
           body { font-family: Arial; padding: 40px; }
           .receipt { max-width: 600px; margin: 0 auto; border: 2px solid #0A2F6C; border-radius: 16px; padding: 30px; }
@@ -404,7 +404,7 @@ function Transfer({ user, socket }) {
       </head>
       <body>
         <div class="receipt">
-          <div class="header"><div class="logo">CASHPAYS</div><div class="subtitle">Transfert d'argent instantané - GOUROUSDJA</div></div>
+          <div class="header"><div class="logo">AlkherPay</div><div class="subtitle">Transfert d'argent instantané - GOUROUSDJA</div></div>
           <div class="info-row"><span class="label">RÉFÉRENCE</span><span>${transactionData?.reference}</span></div>
           <div class="info-row"><span class="label">DATE</span><span>${formatDate(transactionData?.date || new Date())}</span></div>
           <div class="info-row"><span class="label">STATUT</span><span>COMPLÉTÉ</span></div>
@@ -415,7 +415,7 @@ function Transfer({ user, socket }) {
           <div class="info-row"><span class="label">MONTANT ENVOYÉ</span><span>${formatAmount(transactionData?.amount)}</span></div>
           <div class="info-row"><span class="label">FRAIS (2%)</span><span>${formatAmount(transactionData?.fee)}</span></div>
           <div class="info-row total"><span class="label">TOTAL DÉBITÉ</span><span>${formatAmount((transactionData?.amount || 0) + (transactionData?.fee || 0))}</span></div>
-          <div class="footer"><p>Merci d'utiliser CashPays</p><p>Service client: 62 78 73 07</p></div>
+          <div class="footer"><p>Merci d'utiliser AlkherPay</p><p>Service client: 62 78 73 07</p></div>
         </div>
       </body>
       </html>
@@ -429,23 +429,23 @@ function Transfer({ user, socket }) {
   const downloadPDF = () => generatePDF()
   
   const shareViaWhatsAppReceipt = () => {
-    const message = `🏦 CASHPAYS - Transaction réussie ✅\n\n📋 Référence: ${transactionData?.reference}\n💰 Montant: ${formatAmount(transactionData?.amount)}\n📊 Frais: ${formatAmount(transactionData?.fee)}\n👤 Destinataire: ${transactionData?.receiver_name}`
+    const message = `🏦 AlkherPay - Transaction réussie ✅\n\n📋 Référence: ${transactionData?.reference}\n💰 Montant: ${formatAmount(transactionData?.amount)}\n📊 Frais: ${formatAmount(transactionData?.fee)}\n👤 Destinataire: ${transactionData?.receiver_name}`
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
   }
   
   const shareViaEmailReceipt = () => {
-    const subject = `CashPays - Reçu ${transactionData?.reference}`
-    const body = `Reçu de transaction CashPays.\n\nRéférence: ${transactionData?.reference}\nMontant: ${formatAmount(transactionData?.amount)}\nDestinataire: ${transactionData?.receiver_name}`
+    const subject = `AlkherPay - Reçu ${transactionData?.reference}`
+    const body = `Reçu de transaction AlkherPay.\n\nRéférence: ${transactionData?.reference}\nMontant: ${formatAmount(transactionData?.amount)}\nDestinataire: ${transactionData?.receiver_name}`
     window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
   }
   
   const downloadTXT = () => {
-    const receipt = `CASHPAYS - REÇU\n\nRéférence: ${transactionData?.reference}\nMontant: ${formatAmount(transactionData?.amount)}\nFrais: ${formatAmount(transactionData?.fee)}\nDestinataire: ${transactionData?.receiver_name}`
+    const receipt = `AlkherPay - REÇU\n\nRéférence: ${transactionData?.reference}\nMontant: ${formatAmount(transactionData?.amount)}\nFrais: ${formatAmount(transactionData?.fee)}\nDestinataire: ${transactionData?.receiver_name}`
     const blob = new Blob([receipt], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `cashpays_reçu_${transactionData?.reference}.txt`
+    link.download = `AlkherPay_reçu_${transactionData?.reference}.txt`
     link.click()
     URL.revokeObjectURL(url)
     toast.success('Reçu téléchargé !')

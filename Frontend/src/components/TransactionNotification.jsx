@@ -41,7 +41,7 @@ function TransactionNotification({ transaction, onClose, type }) {
 
   const downloadReceipt = () => {
     const receipt = `
-CASHPAYS - REÇU DE TRANSACTION
+AlkherPay - REÇU DE TRANSACTION
 ═══════════════════════════════════════════
 
 Référence: ${transaction?.reference}
@@ -60,21 +60,21 @@ Montant: ${formatAmount(transaction?.amount)}
 Frais (2%): ${formatAmount(transaction?.fee)}
 Total: ${formatAmount((transaction?.amount || 0) + (transaction?.fee || 0))}
 
-Service client: 62 78 73 07 | support@cashpays.td
-© 2026 CashPays - GOUROUSDJA
+Service client: 62 78 73 07 | support@AlkherPay.td
+© 2026 AlkherPay - GOUROUSDJA
     `
     const blob = new Blob([receipt], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `cashpays_reçu_${transaction?.reference}.txt`
+    link.download = `AlkherPay_reçu_${transaction?.reference}.txt`
     link.click()
     URL.revokeObjectURL(url)
     toast.success('Reçu téléchargé !')
   }
 
   const shareViaWhatsApp = () => {
-    const message = `🏦 *CASHPAYS - Transaction réussie* ✅\n\n📋 Référence: ${transaction?.reference}\n💰 Montant: ${formatAmount(transaction?.amount)}\n📅 Date: ${formatDate()}\n👤 Destinataire: ${transaction?.receiver_name}\n\n✅ Statut: COMPLÉTÉ`
+    const message = `🏦 *AlkherPay - Transaction réussie* ✅\n\n📋 Référence: ${transaction?.reference}\n💰 Montant: ${formatAmount(transaction?.amount)}\n📅 Date: ${formatDate()}\n👤 Destinataire: ${transaction?.receiver_name}\n\n✅ Statut: COMPLÉTÉ`
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
   }
 

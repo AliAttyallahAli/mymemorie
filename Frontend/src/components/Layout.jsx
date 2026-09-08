@@ -1,4 +1,4 @@
-// src/components/Layout.jsx - Version avec ajout du menu Taxes
+// src/components/Layout.jsx - Version complète avec tous les menus (Bus + Agence)
 import React, { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { 
@@ -7,8 +7,9 @@ import {
   FaCheckCircle, FaExclamationTriangle, FaInfoCircle, FaUserCircle,
   FaMoneyBillWave, FaPhone, FaEnvelope, FaMapMarkerAlt, FaFacebook,
   FaWhatsapp, FaTelegram, FaGlobe, FaArrowDown, FaArrowUp,
-  FaStore, FaReceipt, FaIdCard, FaClock, FaShare,
-  FaDownload, FaCopy, FaLandmark
+  FaStore, FaReceipt, FaIdCard, FaClock, FaShare, FaChartLine,
+  FaDownload, FaCopy, FaLandmark, FaBuilding, FaTint, FaPlug,
+  FaBus, FaTicketAlt  // ← Nouveaux imports pour Bus
 } from 'react-icons/fa'
 import { IoMdClose } from 'react-icons/io'
 import axios from 'axios'
@@ -33,24 +34,67 @@ function Layout({ user, children, socket }) {
   const [paymentLink, setPaymentLink] = useState('')
   const [copied, setCopied] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [isCompanyAgent, setIsCompanyAgent] = useState(false)
 
-  // ✅ Navigation items avec Taxes ajouté
+  // Vérifier si l'utilisateur est un agent d'entreprise
+  useEffect(() => {
+    const checkCompanyStatus = async () => {
+      if (user?.role === 'agent') {
+        try {
+          const token = localStorage.getItem('accessToken')
+          const response = await axios.get('/api/company/check', {
+            headers: { Authorization: `Bearer ${token}` }
+          }).catch(() => ({ data: { isCompanyAgent: false } }))
+          setIsCompanyAgent(response.data?.isCompanyAgent || false)
+        } catch {
+          setIsCompanyAgent(false)
+        }
+      }
+    }
+    checkCompanyStatus()
+  }, [user])
+
+  // ✅ Navigation items complets avec Bus et Agence
   const navItems = [
     { path: '/dashboard', icon: FaHome, label: 'Accueil' },
-    { path: '/transfer', icon: FaExchangeAlt, label: 'Transfert' },
-    { path: '/deposit', icon: FaStore, label: 'Dépôt' },
-    { path: '/withdraw', icon: FaMoneyBillWave, label: 'Retrait' },
-    { path: '/tax-payment', icon: FaLandmark, label: 'Impôts & Taxes' }, // ✅ Nouveau menu Taxes
+    //{ path: '/transfer', icon: FaExchangeAlt, label: 'Transfert' },
+    //{ path: '/investments', icon: FaChartLine, label: 'Investissements' },
+    { path: '/my-company', icon: FaBuilding, label: 'Mon Entrprise' },
+    //{ path: '/bill-payment',icon: FaMoneyBillWave, label: 'payment de Facture'},
+    { path: '/tax-management', icon: FaLandmark, label: 'Gestion des Taxes' },
+    //{ path: '/withdraw', icon: FaArrowUp, label: 'Retrait' },
+    { path: '/company/dashboard', icon: FaBuilding, label: 'Mon Bureau'},
+    // ✅ Nouveau menu BUS
+    //{ path: '/bus-booking', icon: FaBus, label: 'Bus', subLabel: 'Réservation' },
+    // ✅ Nouveau menu AGENCE (visible uniquement pour les agents)
+    { path: '/agency-management', icon: FaBuilding, label: 'Agence', subLabel: 'Gestion voyages', roles: ['agent', 'admin'] },
+    //{ path: '/tax-payment', icon: FaLandmark, label: 'Impôts & Taxes' },
     { path: '/history', icon: FaHistory, label: 'Historique' },
-    { path: '/profile', icon: FaUser, label: 'Profil' },
     { path: '/settings', icon: FaCog, label: 'Paramètres' },
-    { path: '/announcements', icon: FaBullhorn, label: 'Annonces' },
+    { path: '/announcements', icon: FaBell, label: 'Annonces' },
     { path: '/blog', icon: FaBullhorn, label: 'Blog' },
+    { path: '/profile', icon: FaUser, label: 'Profil' },
   ]
 
+  // Menu pour les agents d'entreprise
+  if (isCompanyAgent) {
+    navItems.push({ path: '/company/dashboard', icon: FaBuilding, label: 'Mon Entreprise' })
+  }
+
+  // Menu admin
   if (user?.role === 'admin') {
     navItems.push({ path: '/admin', icon: FaUserCircle, label: 'Admin' })
   }
+
+  // Filtrer les items selon le rôle
+  const getFilteredNavItems = () => {
+    return navItems.filter(item => {
+      if (!item.roles) return true
+      return item.roles.includes(user?.role)
+    })
+  }
+
+  const filteredNavItems = getFilteredNavItems()
 
   const footerLinks = [
     { path: '/terms', label: 'Conditions' },
@@ -61,10 +105,10 @@ function Layout({ user, children, socket }) {
   ]
 
   const socialLinks = [
-    { icon: FaFacebook, href: 'https://facebook.com/cashpays', color: 'hover:bg-[#1877f2]' },
+    { icon: FaFacebook, href: 'https://facebook.com/AlkherPay', color: 'hover:bg-[#1877f2]' },
     { icon: FaWhatsapp, href: 'https://wa.me/23562787307', color: 'hover:bg-[#25d366]' },
-    { icon: FaTelegram, href: 'https://t.me/cashpays', color: 'hover:bg-[#0088cc]' },
-    { icon: FaGlobe, href: 'https://cashpays.td', color: 'hover:bg-blue-500' },
+    { icon: FaTelegram, href: 'https://t.me/AlkherPay', color: 'hover:bg-[#0088cc]' },
+    { icon: FaGlobe, href: 'https://AlkherPay.td', color: 'hover:bg-blue-500' },
   ]
 
   useEffect(() => {
@@ -192,13 +236,13 @@ function Layout({ user, children, socket }) {
 
   const shareViaWhatsApp = () => {
     if (!paymentLink) return
-    const message = `💰 *Demande de paiement CashPays*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
+    const message = `💰 *Demande de paiement AlkherPay*\n\nCliquez sur ce lien pour me payer :\n${paymentLink}`
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank')
   }
 
   const shareViaEmail = () => {
     if (!paymentLink) return
-    const subject = 'Demande de paiement CashPays'
+    const subject = 'Demande de paiement AlkherPay'
     const body = `Bonjour,\n\nLien de paiement: ${paymentLink}\n\nMerci !`
     window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
   }
@@ -206,7 +250,7 @@ function Layout({ user, children, socket }) {
   const downloadQRCode = () => {
     if (qrImageUrl) {
       const link = document.createElement('a')
-      link.download = `cashpays-payment-${user?.phone}.png`
+      link.download = `AlkherPay-payment-${user?.phone}.png`
       link.href = qrImageUrl
       link.click()
       toast.success('QR code téléchargé')
@@ -221,8 +265,18 @@ function Layout({ user, children, socket }) {
   const isActiveLink = (path) => {
     if (path === '/admin') return location.pathname.startsWith('/admin')
     if (path === '/tax-payment') return location.pathname === '/tax-payment'
+    if (path === '/bill-payment') return location.pathname === '/bill-payment'
+    if (path === '/company/dashboard') return location.pathname === '/company/dashboard'
+    if (path === '/bus-booking') return location.pathname === '/bus-booking'
+    if (path === '/agency-management') return location.pathname === '/agency-management'
     return location.pathname === path
   }
+
+  // Items pour la navigation mobile (premiers 5)
+  const mobileNavItems = filteredNavItems.slice(0, 5)
+
+  // Vérifier si l'utilisateur peut voir le menu Agence
+  const canSeeAgency = user?.role === 'agent' || user?.role === 'admin'
 
   return (
     <div className={`min-h-screen flex flex-col ${isDark ? 'dark' : 'light'}`}>
@@ -231,11 +285,11 @@ function Layout({ user, children, socket }) {
         <div className="container mx-auto px-4 py-3">
           <div className="flex justify-between items-center">
             <Link to="/home" className="flex items-center gap-2 group">
-              <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-2 rounded-xl group-hover:scale-105 transition-transform">
+              <div className="bg-gradient from-blue-500 to-blue-600 p-2 rounded-xl group-hover:scale-105 transition-transform">
                 <FaMoneyBillWave className="text-white text-xl" />
               </div>
               <div>
-                <span className={`font-bold text-xl ${isDark ? 'text-white' : 'text-gray-900'}`}>CashPays</span>
+                <span className={`font-bold text-xl ${isDark ? 'text-white' : 'text-gray-900'}`}>AlkherPay</span>
                 <span className="text-blue-400 text-xs block">GOUROUSDJA</span>
               </div>
             </Link>
@@ -296,10 +350,10 @@ function Layout({ user, children, socket }) {
             <div className="text-center md:text-left">
               <div className="flex items-center gap-2 mb-2">
                 <FaMoneyBillWave className={`text-xl ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
-                <span className={`font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>CashPays</span>
+                <span className={`font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>AlkherPay</span>
               </div>
               <p className={`text-xs ${isDark ? 'text-white/40' : 'text-gray-500'}`}>
-                © 2026 CashPays - GOUROUSDJA
+                © 2026 AlkherPay - GOUROUSDJA
               </p>
             </div>
 
@@ -321,7 +375,7 @@ function Layout({ user, children, socket }) {
           </div>
 
           <div className={`mt-4 pt-4 text-center text-xs ${isDark ? 'text-white/30' : 'text-gray-400'} border-t ${isDark ? 'border-white/5' : 'border-gray-200'}`}>
-            <p>Service client: 62 78 73 07 | support@cashpays.td</p>
+            <p>Service client: 62 78 73 07 | support@AlkherPay.td</p>
           </div>
         </div>
       </footer>
@@ -330,10 +384,21 @@ function Layout({ user, children, socket }) {
       <nav className={`fixed bottom-0 left-0 right-0 border-t z-40 md:hidden ${isDark ? 'bg-blue-900/95 border-white/10' : 'bg-white/95 border-gray-200'} backdrop-blur-lg`}>
         <div className="container mx-auto px-2">
           <div className="flex justify-around py-2">
-            {navItems.slice(0, 4).map((item) => (
-              <Link key={item.path} to={item.path} className={`flex flex-col items-center py-2 px-3 rounded-lg ${isActiveLink(item.path) ? 'text-blue-400' : isDark ? 'text-white/50' : 'text-gray-500'}`}>
+            {mobileNavItems.map((item) => (
+              <Link 
+                key={item.path} 
+                to={item.path} 
+                className={`flex flex-col items-center py-2 px-3 rounded-lg ${
+                  isActiveLink(item.path) 
+                    ? 'text-yellow-400' 
+                    : isDark ? 'text-white/50' : 'text-gray-500'
+                }`}
+              >
                 <item.icon className="text-xl" />
                 <span className="text-xs mt-1">{item.label}</span>
+                {item.subLabel && (
+                  <span className="text-[8px] opacity-50">{item.subLabel}</span>
+                )}
               </Link>
             ))}
           </div>
@@ -346,12 +411,15 @@ function Layout({ user, children, socket }) {
           {/* User info - fixe en haut */}
           <div className={`mb-6 p-3 rounded-xl flex-shrink-0 ${isDark ? 'bg-white/5' : 'bg-gray-100'}`}>
             <div className="flex items-center gap-3">
-              <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-2 rounded-full">
+              <div className="bg-gradient from-blue-500 to-blue-600 p-2 rounded-full">
                 <FaUser className="text-white" />
               </div>
               <div className="flex-1">
                 <p className={`font-medium truncate ${isDark ? 'text-white' : 'text-gray-900'}`}>{user?.fullname || 'Utilisateur'}</p>
                 <p className={`text-xs truncate ${isDark ? 'text-white/40' : 'text-gray-500'}`}>{user?.phone}</p>
+                {user?.role === 'agent' && (
+                  <span className="text-[10px] text-yellow-400">🏢 Agent</span>
+                )}
               </div>
             </div>
             {balance !== null && (
@@ -366,18 +434,31 @@ function Layout({ user, children, socket }) {
 
           {/* Navigation items avec SCROLL */}
           <div className="flex-1 overflow-y-auto space-y-1 pr-1 scrollbar-thin">
-            {navItems.map((item) => (
+            {filteredNavItems.map((item) => (
               <Link
                 key={item.path}
                 to={item.path}
-                className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all group ${
                   isActiveLink(item.path)
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-yellow-500 text-black'
                     : isDark ? 'text-white/70 hover:bg-white/10' : 'text-gray-600 hover:bg-gray-100'
                 }`}
               >
-                <item.icon />
-                <span>{item.label}</span>
+                <item.icon className="text-lg" />
+                <div className="flex-1">
+                  <div className="font-medium">{item.label}</div>
+                  {item.subLabel && (
+                    <div className={`text-[10px] ${isActiveLink(item.path) ? 'text-black/70' : 'text-gray-400'}`}>
+                      {item.subLabel}
+                    </div>
+                  )}
+                </div>
+                {/* Badge NEW pour Bus et Agence */}
+                {(item.path === '/bus-booking' || item.path === '/agency-management') && (
+                  <span className="text-[10px] bg-yellow-500 text-black px-1.5 py-0.5 rounded-full">
+                    NEW
+                  </span>
+                )}
               </Link>
             ))}
           </div>
@@ -413,10 +494,22 @@ function Layout({ user, children, socket }) {
               <p className={`text-sm ${isDark ? 'text-white/40' : 'text-gray-500'}`}>{user?.phone}</p>
               {balance !== null && <p className={`text-sm mt-2 ${isDark ? 'text-blue-300' : 'text-blue-600'}`}>{formatAmount(balance)}</p>}
             </div>
-            {navItems.map((item) => (
-              <Link key={item.path} to={item.path} onClick={() => setMobileMenuOpen(false)} className={`flex items-center gap-3 px-4 py-3 rounded-lg ${isDark ? 'text-white/70 hover:bg-white/10' : 'text-gray-600 hover:bg-gray-100'}`}>
+            {filteredNavItems.map((item) => (
+              <Link 
+                key={item.path} 
+                to={item.path} 
+                onClick={() => setMobileMenuOpen(false)} 
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg ${
+                  isActiveLink(item.path)
+                    ? 'bg-yellow-500 text-black'
+                    : isDark ? 'text-white/70 hover:bg-white/10' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
                 <item.icon />
                 <span>{item.label}</span>
+                {item.subLabel && (
+                  <span className="text-[8px] opacity-50 ml-auto">{item.subLabel}</span>
+                )}
               </Link>
             ))}
             <button onClick={handleLogout} className={`w-full flex items-center gap-3 px-4 py-3 mt-6 rounded-lg ${isDark ? 'text-white/50 hover:bg-white/10' : 'text-gray-500 hover:bg-gray-100'}`}>
@@ -452,24 +545,24 @@ function Layout({ user, children, socket }) {
                   </div>
 
                   <div>
-                    <label className="label">Montant (optionnel)</label>
+                    <label className="block text-sm font-medium mb-2">Montant (optionnel)</label>
                     <input
                       type="number"
                       value={qrAmount}
                       onChange={(e) => setQrAmount(e.target.value)}
-                      className="input-field"
+                      className="w-full px-4 py-2 rounded-lg border bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
                       placeholder="Ex: 5000"
                       min="25"
                     />
                   </div>
 
                   <div>
-                    <label className="label">Description</label>
+                    <label className="block text-sm font-medium mb-2">Description</label>
                     <input
                       type="text"
                       value={qrDescription}
                       onChange={(e) => setQrDescription(e.target.value)}
-                      className="input-field"
+                      className="w-full px-4 py-2 rounded-lg border bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500"
                       placeholder="Ex: Paiement service"
                     />
                   </div>
@@ -477,7 +570,7 @@ function Layout({ user, children, socket }) {
                   <button 
                     onClick={generateDynamicQR} 
                     disabled={generating}
-                    className="btn-primary w-full flex items-center justify-center gap-2"
+                    className="w-full bg-gradient-to-r from-blue-500 to-blue-600 text-white py-2 rounded-lg hover:shadow-lg transition disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {generating ? 'Génération...' : 'Générer mon QR code'}
                   </button>
@@ -513,15 +606,15 @@ function Layout({ user, children, socket }) {
                   </div>
 
                   <div className="flex gap-2">
-                    <button onClick={downloadQRCode} className="flex-1 btn-secondary text-sm">
+                    <button onClick={downloadQRCode} className="flex-1 bg-gray-600 text-white text-sm py-2 rounded-lg hover:bg-gray-700 transition">
                       <FaDownload className="inline mr-1" /> Télécharger
                     </button>
-                    <button onClick={shareViaWhatsApp} className="flex-1 bg-[#25d366]/20 text-white text-sm py-2 rounded-lg">
+                    <button onClick={shareViaWhatsApp} className="flex-1 bg-[#25d366] text-white text-sm py-2 rounded-lg hover:bg-[#20b859] transition">
                       <FaWhatsapp className="inline mr-1" /> WhatsApp
                     </button>
                   </div>
 
-                  <button onClick={resetQRGenerator} className="w-full text-sm text-white/40">
+                  <button onClick={resetQRGenerator} className="w-full text-sm text-white/40 hover:text-white/60 transition">
                     Générer un nouveau QR code
                   </button>
                 </div>

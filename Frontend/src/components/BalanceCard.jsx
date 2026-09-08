@@ -112,7 +112,7 @@ function BalanceCard({ balance, user, onShowQR }) {
       {showQR && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowQR(false)}>
           <div className="card max-w-sm w-full text-center" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-white text-xl mb-4">Mon QR Code CashPays</h3>
+            <h3 className="text-white text-xl mb-4">Mon QR Code AlkherPay</h3>
             <div className="bg-white p-4 rounded-2xl inline-block mx-auto mb-4">
               {qrCodeUrl ? (
                 <img 
