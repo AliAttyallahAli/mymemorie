@@ -950,12 +950,28 @@ CREATE TABLE IF NOT EXISTS card_pin_resets (
     FOREIGN KEY (card_id) REFERENCES virtual_cards(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS card_pin_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    reason TEXT,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    admin_id INTEGER,
+    admin_note TEXT,
+    processed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (card_id) REFERENCES virtual_cards(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 
 -- ============================================
 -- INDEX POUR PERFORMANCES
 -- ============================================
 -- Index pour les performances
 -- Index pour virtual_cards
+
+CREATE INDEX IF NOT EXISTS idx_pin_resets_user ON card_pin_resets(user_id);
+CREATE INDEX IF NOT EXISTS idx_pin_resets_status ON card_pin_resets(status);
 
 CREATE INDEX IF NOT EXISTS idx_pin_resets_user ON card_pin_resets(user_id);
 CREATE INDEX IF NOT EXISTS idx_pin_resets_status ON card_pin_resets(status);

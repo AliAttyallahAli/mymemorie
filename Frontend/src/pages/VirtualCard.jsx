@@ -11,7 +11,7 @@ import {
 } from 'react-icons/fa';
 import Layout from '../components/Layout';
 
-// ✅ API_URL vide → utilise le proxy Vite automatiquement
+// ✅ API_URL vide → utilise le proxy Vite
 const API_URL = '';
 
 // ✅ Extraction robuste
@@ -51,6 +51,7 @@ function VirtualCard({ user }) {
     const [resetReason, setResetReason] = useState('');
     const [resetRequest, setResetRequest] = useState(null);
     const [submittingReset, setSubmittingReset] = useState(false);
+    const [loadingResetStatus, setLoadingResetStatus] = useState(false);
 
     const getToken = () => localStorage.getItem('accessToken') || localStorage.getItem('token');
     const getAuthHeaders = () => ({ headers: { Authorization: `Bearer ${getToken()}` } });
@@ -89,13 +90,18 @@ function VirtualCard({ user }) {
         }
     };
 
+    // ✅ Récupérer le statut de la demande de reset PIN
     const fetchResetStatus = async () => {
+        setLoadingResetStatus(true);
         try {
             const response = await axios.get(`${API_URL}/api/cards/pin-reset-status`, getAuthHeaders());
             setResetRequest(response.data.request || null);
+            console.log('📋 Statut reset:', response.data.request);
         } catch (error) {
             console.error('❌ Erreur reset status:', error);
             setResetRequest(null);
+        } finally {
+            setLoadingResetStatus(false);
         }
     };
 
@@ -188,8 +194,8 @@ function VirtualCard({ user }) {
                 toast.success('🎉 PIN défini avec succès !');
                 setShowPinModal(false);
                 setPinForm({ new_pin: '', confirm_pin: '' });
-                fetchCard();
-                fetchResetStatus();
+                await fetchCard();
+                await fetchResetStatus();
             }
         } catch (error) {
             toast.error(error.response?.data?.error || 'Erreur lors de la définition du PIN');
@@ -199,7 +205,7 @@ function VirtualCard({ user }) {
     };
 
     // ============================================
-    // DEMANDER UN RESET PIN
+    // ✅ DEMANDER UN RESET PIN
     // ============================================
     const handleRequestReset = async () => {
         if (!resetReason.trim()) {
@@ -209,21 +215,37 @@ function VirtualCard({ user }) {
 
         setSubmittingReset(true);
         try {
+            console.log('📤 Envoi demande reset...');
+            
             const response = await axios.post(
                 `${API_URL}/api/cards/request-pin-reset`,
                 { reason: resetReason },
                 getAuthHeaders()
             );
 
+            console.log('📥 Réponse:', response.data);
+
             if (response.data.success) {
-                toast.success('📤 Demande envoyée ! En attente de validation.');
+                toast.success('📤 Demande envoyée ! En attente de validation.', {
+                    duration: 5000
+                });
                 setShowResetModal(false);
                 setResetReason('');
-                fetchResetStatus();
+                await fetchResetStatus();
+            } else {
+                toast.error(response.data.error || 'Erreur');
             }
         } catch (error) {
             console.error('❌ Erreur reset:', error);
-            toast.error(error.response?.data?.error || 'Erreur lors de la demande');
+            console.error('Détails:', error.response?.data);
+            
+            if (error.response?.status === 404) {
+                toast.error('Route non disponible. Contactez le support.');
+            } else if (error.response?.data?.error) {
+                toast.error(error.response.data.error);
+            } else {
+                toast.error('Erreur lors de la demande');
+            }
         } finally {
             setSubmittingReset(false);
         }
@@ -244,7 +266,7 @@ function VirtualCard({ user }) {
     };
 
     // ============================================
-    // TÉLÉCHARGER LA CARTE EN PDF (via Axios)
+    // TÉLÉCHARGER LA CARTE EN PDF
     // ============================================
     const handleDownloadPDF = async () => {
         if (!card) return;
@@ -456,7 +478,7 @@ function VirtualCard({ user }) {
                         {/* DÉTAILS */}
                         <div className="space-y-4">
 
-                            {/* BANNIÈRE PIN NON DÉFINI (avec reset approuvé) */}
+                            {/* BANNIÈRE PIN RÉINITIALISÉ (approuvé) */}
                             {!card.pin_set && resetRequest?.status === 'approved' && (
                                 <div className="bg-green-50 border-2 border-green-400 rounded-2xl p-5">
                                     <div className="flex items-start gap-3">
@@ -466,7 +488,8 @@ function VirtualCard({ user }) {
                                                 ✅ PIN réinitialisé
                                             </h3>
                                             <p className="text-sm text-green-800 mb-3">
-                                                Votre PIN a été réinitialisé. Définissez-en un nouveau.
+                                                Votre PIN a été réinitialisé par l'administrateur.
+                                                Définissez-en un nouveau.
                                             </p>
                                             <button
                                                 onClick={() => setShowPinModal(true)}
@@ -591,10 +614,14 @@ function VirtualCard({ user }) {
                                     </div>
                                 </div>
 
-                                {/* BOUTON DE DEMANDE DE RÉINITIALISATION DU PIN */}
+                                {/* ✅ BOUTON DE DEMANDE DE RÉINITIALISATION DU PIN */}
                                 {card.pin_set && (
                                     <div className="mt-4 pt-4 border-t border-gray-100">
-                                        {resetRequest?.status === 'pending' ? (
+                                        {loadingResetStatus ? (
+                                            <div className="text-center py-2">
+                                                <FaSpinner className="animate-spin text-purple-500 text-sm mx-auto" />
+                                            </div>
+                                        ) : resetRequest?.status === 'pending' ? (
                                             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-xs text-yellow-800 flex items-center gap-2">
                                                 <FaClock className="text-yellow-600 flex-shrink-0" />
                                                 <div>
@@ -609,7 +636,7 @@ function VirtualCard({ user }) {
                                         ) : resetRequest?.status === 'rejected' ? (
                                             <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800 flex items-start gap-2">
                                                 <FaTimesCircle className="text-red-600 flex-shrink-0 mt-0.5" />
-                                                <div>
+                                                <div className="flex-1">
                                                     <strong>Demande rejetée</strong>
                                                     {resetRequest.admin_note && (
                                                         <div className="text-[10px] opacity-70 mt-0.5">
@@ -618,7 +645,7 @@ function VirtualCard({ user }) {
                                                     )}
                                                     <button
                                                         onClick={() => setShowResetModal(true)}
-                                                        className="underline mt-1 block"
+                                                        className="underline mt-1 block text-red-700 font-medium"
                                                     >
                                                         Faire une nouvelle demande
                                                     </button>
@@ -627,7 +654,7 @@ function VirtualCard({ user }) {
                                         ) : (
                                             <button
                                                 onClick={() => setShowResetModal(true)}
-                                                className="w-full text-xs text-red-600 hover:text-red-800 underline flex items-center justify-center gap-1 py-2"
+                                                className="w-full text-xs text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg underline flex items-center justify-center gap-1 py-2 transition"
                                             >
                                                 <FaRedo className="text-xs" />
                                                 PIN oublié ? Demander une réinitialisation
@@ -942,7 +969,7 @@ function VirtualCard({ user }) {
                     </div>
                 )}
 
-                {/* MODAL RESET PIN */}
+                {/* ✅ MODAL RESET PIN */}
                 {showResetModal && (
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                         <div className="bg-white rounded-2xl max-w-md w-full">
@@ -978,6 +1005,7 @@ function VirtualCard({ user }) {
                                     className="w-full px-3 py-2 border rounded-xl focus:ring-2 focus:ring-red-500"
                                     placeholder="Ex: J'ai oublié mon PIN..."
                                     required
+                                    autoFocus
                                 />
 
                                 <div className="bg-yellow-50 rounded-lg p-3 mt-4 border border-yellow-200">

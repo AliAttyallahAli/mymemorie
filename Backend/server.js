@@ -26773,6 +26773,336 @@ app.post('/api/cards/verify', authenticateToken, async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+/**
+ * GET /api/admin/cards/fees
+ * Voir tous les frais encaissés par la plateforme
+ */
+app.get('/api/admin/cards/fees', authenticateToken, requireAdmin, async (req, res) => {
+    const ADMIN_MAIN_ID = parseInt(process.env.ADMIN_MAIN_ID) || 1;
+
+    try {
+        // Solde actuel de l'admin
+        const adminWallet = await get(
+            'SELECT balance FROM wallets WHERE user_id = ?',
+            [ADMIN_MAIN_ID]
+        );
+
+        // Total des frais encaissés
+        const totalFees = await get(`
+            SELECT 
+                COUNT(*) as count,
+                COALESCE(SUM(amount), 0) as total
+            FROM card_transactions
+            WHERE transaction_type = 'fee' AND status = 'completed'
+        `);
+
+        // Frais du jour
+        const todayFees = await get(`
+            SELECT 
+                COUNT(*) as count,
+                COALESCE(SUM(amount), 0) as total
+            FROM card_transactions
+            WHERE transaction_type = 'fee' 
+              AND status = 'completed'
+              AND DATE(created_at) = DATE('now')
+        `);
+
+        // Frais du mois
+        const monthFees = await get(`
+            SELECT 
+                COUNT(*) as count,
+                COALESCE(SUM(amount), 0) as total
+            FROM card_transactions
+            WHERE transaction_type = 'fee' 
+              AND status = 'completed'
+              AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+        `);
+
+        // Historique récent des frais
+        const recentFees = await query(`
+            SELECT 
+                ct.*,
+                u.fullname as user_name
+            FROM card_transactions ct
+            LEFT JOIN users u ON ct.merchant_id = u.id
+            WHERE ct.transaction_type = 'fee'
+            ORDER BY ct.created_at DESC
+            LIMIT 50
+        `);
+
+        res.json({
+            success: true,
+            admin_id: ADMIN_MAIN_ID,
+            wallet_balance: adminWallet?.balance || 0,
+            stats: {
+                total: {
+                    count: totalFees?.count || 0,
+                    amount: totalFees?.total || 0
+                },
+                today: {
+                    count: todayFees?.count || 0,
+                    amount: todayFees?.total || 0
+                },
+                month: {
+                    count: monthFees?.count || 0,
+                    amount: monthFees?.total || 0
+                }
+            },
+            recent: recentFees || []
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur frais:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+/**
+ * POST /api/cards/pay
+ * Effectuer un paiement par carte
+ * Le guichet (merchant) reçoit l'argent, le titulaire est débité,
+ * et les frais (1%) sont crédités à l'admin principal
+ */
+app.post('/api/cards/pay', authenticateToken, async (req, res) => {
+    const merchantId = req.user.userId;
+    const { card_number, pin, amount, description = '' } = req.body;
+
+    console.log('\n💳 PAIEMENT PAR CARTE');
+    console.log('   Marchand:', merchantId);
+    console.log('   Carte:', card_number?.slice(-4));
+    console.log('   Montant:', amount);
+
+    // Validation
+    if (!card_number || !pin || !amount) {
+        return res.status(400).json({ success: false, error: 'Carte, PIN et montant requis' });
+    }
+
+    const amountNum = parseInt(amount);
+    if (amountNum < 100) {
+        return res.status(400).json({ success: false, error: 'Montant minimum: 100 FCFA' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const cleanNumber = card_number.replace(/\s/g, '');
+
+        // Récupérer la carte
+        const card = await get(`
+            SELECT vc.*, u.fullname as holder_name
+            FROM virtual_cards vc
+            LEFT JOIN users u ON vc.user_id = u.id
+            WHERE REPLACE(vc.card_number, ' ', '') = ?
+        `, [cleanNumber]);
+
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        }
+
+        // Vérifications
+        if (card.status !== 'active') {
+            return res.status(400).json({ success: false, error: `Carte ${card.status}` });
+        }
+
+        // Expiration
+        const now = new Date();
+        if (card.expiry_year < now.getFullYear() ||
+            (card.expiry_year === now.getFullYear() && card.expiry_month < now.getMonth() + 1)) {
+            return res.status(400).json({ success: false, error: 'Carte expirée' });
+        }
+
+        // PIN
+        const pinValid = await bcrypt.compare(pin, card.pin_hash);
+        if (!pinValid) {
+            return res.status(401).json({ success: false, error: 'PIN incorrect' });
+        }
+
+        // Anti-auto-paiement
+        if (card.user_id === merchantId) {
+            return res.status(400).json({ success: false, error: 'Vous ne pouvez pas payer avec votre propre carte' });
+        }
+
+        // Limite journalière
+        const today = new Date().toISOString().split('T')[0];
+        const todayTotal = await get(`
+            SELECT COALESCE(SUM(amount), 0) as total
+            FROM card_transactions
+            WHERE card_id = ? AND DATE(created_at) = ? AND status = 'completed'
+        `, [card.id, today]);
+
+        const dailyUsed = todayTotal?.total || 0;
+        if (dailyUsed + amountNum > card.daily_limit) {
+            return res.status(400).json({
+                success: false,
+                error: `Limite journalière dépassée. Utilisé: ${dailyUsed.toLocaleString()} / ${card.daily_limit.toLocaleString()} FCFA`
+            });
+        }
+
+        // Frais (1%)
+        const fee = Math.floor(amountNum * 0.01);
+        const totalAmount = amountNum + fee;
+
+        // ✅ IDENTIFIER L'ADMIN PRINCIPAL
+        const ADMIN_MAIN_ID = parseInt(process.env.ADMIN_MAIN_ID) || 1;
+
+        // Vérifier le solde du titulaire
+        const holderWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [card.user_id]);
+        if (!holderWallet) {
+            return res.status(404).json({ success: false, error: 'Wallet du titulaire non trouvé' });
+        }
+
+        if (holderWallet.balance < totalAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Requis: ${totalAmount.toLocaleString()} FCFA, Disponible: ${holderWallet.balance.toLocaleString()} FCFA`
+            });
+        }
+
+        // Wallet du marchand
+        let merchantWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [merchantId]);
+        if (!merchantWallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [merchantId]);
+            merchantWallet = { balance: 0 };
+        }
+
+        // ✅ Vérifier que le wallet admin existe
+        let adminWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [ADMIN_MAIN_ID]);
+        if (!adminWallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [ADMIN_MAIN_ID]);
+            console.log('✅ Wallet admin principal créé automatiquement');
+        }
+
+        // Transaction atomique
+        const receiptNumber = generateReceiptNumber();
+        const reference = `CARD-${card.id}-${Date.now()}`;
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // 1. Débiter le titulaire
+            await run(`
+                UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [totalAmount, card.user_id]);
+
+            // 2. Créditer le marchand (montant - frais)
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [amountNum, merchantId]);
+
+            // ✅ 3. Créditer l'ADMIN PRINCIPAL avec les frais
+            if (fee > 0) {
+                await run(`
+                    UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE user_id = ?
+                `, [fee, ADMIN_MAIN_ID]);
+                
+                console.log(`💰 Frais de ${fee} FCFA crédités à l'admin #${ADMIN_MAIN_ID}`);
+            }
+
+            // 4. Enregistrer la transaction principale
+            const result = await run(`
+                INSERT INTO card_transactions (
+                    card_id, card_number, card_holder_id, merchant_id,
+                    amount, fee, total_amount, transaction_type,
+                    description, status, receipt_number, reference
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'payment', ?, 'completed', ?, ?)
+            `, [
+                card.id,
+                card.card_number,
+                card.user_id,
+                merchantId,
+                amountNum,
+                fee,
+                totalAmount,
+                description || `Paiement chez le guichet #${merchantId}`,
+                receiptNumber,
+                reference
+            ]);
+
+            // ✅ 5. Enregistrer les frais dans l'historique (traçabilité)
+            if (fee > 0) {
+                await run(`
+                    INSERT INTO card_transactions (
+                        card_id, card_number, card_holder_id, merchant_id,
+                        amount, fee, total_amount, transaction_type,
+                        description, status, receipt_number, reference
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'fee', ?, 'completed', ?, ?)
+                `, [
+                    card.id,
+                    card.card_number,
+                    card.user_id,
+                    ADMIN_MAIN_ID,
+                    fee,
+                    0,
+                    fee,
+                    `Frais de transaction carte (${amountNum.toLocaleString()} FCFA)`,
+                    `${receiptNumber}-FEE`,
+                    `${reference}-FEE`
+                ]).catch(() => {
+                    console.warn('⚠️ Impossible d\'enregistrer les frais');
+                });
+            }
+
+            // 6. Notifications
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💳 Paiement effectué', ?, 'success', CURRENT_TIMESTAMP)
+            `, [
+                card.user_id,
+                `Paiement de ${totalAmount.toLocaleString()} FCFA effectué (dont ${fee.toLocaleString()} FCFA de frais). Reçu: ${receiptNumber}`
+            ]).catch(() => {});
+
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💰 Paiement reçu', ?, 'success', CURRENT_TIMESTAMP)
+            `, [
+                merchantId,
+                `Vous avez reçu ${amountNum.toLocaleString()} FCFA par carte. Reçu: ${receiptNumber}`
+            ]).catch(() => {});
+
+            // ✅ Notification à l'admin
+            if (fee > 0) {
+                await run(`
+                    INSERT INTO notifications (user_id, title, message, type, created_at)
+                    VALUES (?, '💵 Frais encaissés', ?, 'success', CURRENT_TIMESTAMP)
+                `, [
+                    ADMIN_MAIN_ID,
+                    `Frais de ${fee.toLocaleString()} FCFA encaissés (transaction ${receiptNumber})`
+                ]).catch(() => {});
+            }
+
+            await run('COMMIT');
+
+            console.log('✅ Paiement par carte réussi:', receiptNumber);
+            console.log(`   Débité: ${totalAmount} | Marchand: ${amountNum} | Admin (frais): ${fee}`);
+
+            res.json({
+                success: true,
+                message: 'Paiement effectué avec succès',
+                receipt: {
+                    receipt_number: receiptNumber,
+                    card_holder: card.holder_name,
+                    card_last4: card.card_number.slice(-4),
+                    amount: amountNum,
+                    fee,
+                    total_amount: totalAmount,
+                    merchant_id: merchantId,
+                    description,
+                    created_at: new Date().toISOString(),
+                    status: 'completed'
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur paiement carte:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 /**
  * POST /api/cards/pay

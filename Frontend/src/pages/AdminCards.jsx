@@ -6,10 +6,12 @@ import toast from 'react-hot-toast';
 import {
     FaCreditCard, FaCheckCircle, FaTimesCircle, FaBan,
     FaSpinner, FaEye, FaClock, FaKey, FaCopy, FaCheck,
-    FaArrowLeft, FaExclamationTriangle, FaRedo
+    FaArrowLeft, FaExclamationTriangle, FaRedo, FaMoneyBillWave,
+    FaChartLine, FaWallet
 } from 'react-icons/fa';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// ✅ API_URL vide → utilise le proxy Vite
+const API_URL = '';
 
 const extractArray = (data, ...keys) => {
     if (Array.isArray(data)) return data;
@@ -25,7 +27,7 @@ function AdminCards({ user }) {
     // ============================================
     // ÉTATS
     // ============================================
-    const [activeTab, setActiveTab] = useState('cards'); // 'cards' | 'pinResets'
+    const [activeTab, setActiveTab] = useState('cards'); // 'cards' | 'pinResets' | 'fees'
 
     // Cartes
     const [cards, setCards] = useState([]);
@@ -40,6 +42,10 @@ function AdminCards({ user }) {
     const [loadingResets, setLoadingResets] = useState(false);
     const [processingReset, setProcessingReset] = useState(null);
 
+    // ✅ FRAIS
+    const [feesData, setFeesData] = useState(null);
+    const [loadingFees, setLoadingFees] = useState(false);
+
     const getToken = () => localStorage.getItem('accessToken') || localStorage.getItem('token');
     const getAuthHeaders = () => ({ headers: { Authorization: `Bearer ${getToken()}` } });
 
@@ -52,10 +58,12 @@ function AdminCards({ user }) {
             fetchStats();
         } else if (activeTab === 'pinResets') {
             fetchPinResets();
+        } else if (activeTab === 'fees') {
+            fetchFees();
         }
     }, [filter, activeTab]);
 
-    // Auto-refresh des demandes reset toutes les 30s si on est sur cet onglet
+    // Auto-refresh
     useEffect(() => {
         if (activeTab !== 'pinResets') return;
         const interval = setInterval(fetchPinResets, 30000);
@@ -173,7 +181,7 @@ function AdminCards({ user }) {
             );
 
             if (response.data.success) {
-                toast.success('✅ PIN réinitialisé. L\'utilisateur peut en définir un nouveau.');
+                toast.success('✅ PIN réinitialisé');
                 fetchPinResets();
                 fetchStats();
             }
@@ -207,13 +215,45 @@ function AdminCards({ user }) {
     };
 
     // ============================================
+    // ✅ FRAIS
+    // ============================================
+    const fetchFees = async () => {
+        setLoadingFees(true);
+        try {
+            const response = await axios.get(`${API_URL}/api/admin/cards/fees`, getAuthHeaders());
+            setFeesData(response.data);
+        } catch (error) {
+            console.error('❌ Erreur frais:', error);
+            toast.error('Erreur chargement frais');
+            setFeesData(null);
+        } finally {
+            setLoadingFees(false);
+        }
+    };
+
+    // ============================================
     // HELPERS
     // ============================================
-    const copyToClipboard = (text) => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-        toast.success('Copié !');
+    const copyToClipboard = async (text) => {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.top = '-9999px';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+            }
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+            toast.success('Copié !');
+        } catch (error) {
+            toast.error('Impossible de copier');
+        }
     };
 
     const handleGoBack = () => {
@@ -285,6 +325,18 @@ function AdminCards({ user }) {
                         </span>
                     )}
                 </button>
+
+                {/* ✅ NOUVEL ONGLET FRAIS */}
+                <button
+                    onClick={() => setActiveTab('fees')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 ${
+                        activeTab === 'fees'
+                            ? 'bg-green-600 text-white shadow-lg'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}
+                >
+                    <FaMoneyBillWave /> Frais encaissés
+                </button>
             </div>
 
             {/* ============================================
@@ -292,7 +344,6 @@ function AdminCards({ user }) {
             ============================================ */}
             {activeTab === 'cards' && (
                 <>
-                    {/* Stats */}
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
                         <div className="bg-gray-700/50 rounded-lg p-3 text-center">
                             <div className="text-xs text-gray-400">Total</div>
@@ -316,7 +367,6 @@ function AdminCards({ user }) {
                         </div>
                     </div>
 
-                    {/* Filtres */}
                     <div className="flex gap-2 mb-4 flex-wrap">
                         {[
                             { key: 'pending', label: '⏳ En attente' },
@@ -338,7 +388,6 @@ function AdminCards({ user }) {
                         ))}
                     </div>
 
-                    {/* Liste des cartes */}
                     {loading ? (
                         <div className="text-center py-12">
                             <FaSpinner className="animate-spin text-purple-500 text-3xl mx-auto mb-3" />
@@ -368,7 +417,6 @@ function AdminCards({ user }) {
                                                 </span>
                                                 <span className="text-xs text-gray-400">{card.card_type}</span>
 
-                                                {/* Badge PIN défini ou non */}
                                                 {card.status === 'active' && (
                                                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
                                                         card.pin_set 
@@ -435,7 +483,6 @@ function AdminCards({ user }) {
             ============================================ */}
             {activeTab === 'pinResets' && (
                 <>
-                    {/* Bannière info */}
                     <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 mb-4">
                         <div className="flex items-start gap-3">
                             <FaExclamationTriangle className="text-blue-400 text-xl flex-shrink-0 mt-0.5" />
@@ -445,7 +492,6 @@ function AdminCards({ user }) {
                                 </h4>
                                 <p className="text-xs text-blue-200">
                                     Approuver une demande supprimera le PIN actuel de la carte.
-                                    L'utilisateur pourra en définir un nouveau depuis son application.
                                 </p>
                             </div>
                         </div>
@@ -454,15 +500,11 @@ function AdminCards({ user }) {
                     {loadingResets ? (
                         <div className="text-center py-12">
                             <FaSpinner className="animate-spin text-red-500 text-3xl mx-auto mb-3" />
-                            <p className="text-gray-400 text-sm">Chargement...</p>
                         </div>
                     ) : pinResets.length === 0 ? (
                         <div className="text-center py-12 bg-gray-700/30 rounded-xl">
                             <FaKey className="text-gray-500 text-5xl mx-auto mb-3" />
-                            <p className="text-gray-400">Aucune demande de reset PIN en attente</p>
-                            <p className="text-xs text-gray-500 mt-2">
-                                Les nouvelles demandes apparaîtront ici automatiquement
-                            </p>
+                            <p className="text-gray-400">Aucune demande de reset PIN</p>
                         </div>
                     ) : (
                         <div className="space-y-3">
@@ -531,6 +573,163 @@ function AdminCards({ user }) {
             )}
 
             {/* ============================================
+                ✅ ONGLET FRAIS ENCAISSÉS
+            ============================================ */}
+            {activeTab === 'fees' && (
+                <>
+                    {loadingFees ? (
+                        <div className="text-center py-12">
+                            <FaSpinner className="animate-spin text-green-500 text-3xl mx-auto mb-3" />
+                            <p className="text-gray-400 text-sm">Chargement des frais...</p>
+                        </div>
+                    ) : !feesData ? (
+                        <div className="text-center py-12 bg-gray-700/30 rounded-xl">
+                            <FaMoneyBillWave className="text-gray-500 text-5xl mx-auto mb-3" />
+                            <p className="text-gray-400">Aucune donnée disponible</p>
+                            <button
+                                onClick={fetchFees}
+                                className="mt-4 text-green-400 hover:text-green-300 underline text-sm"
+                            >
+                                Recharger
+                            </button>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+
+                            {/* SOLDE ADMIN */}
+                            <div className="bg-gradient-to-r from-green-600 to-emerald-700 rounded-2xl p-6 text-white shadow-lg">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
+                                            <FaWallet className="text-white text-2xl" />
+                                        </div>
+                                        <div>
+                                            <div className="text-sm opacity-80">Wallet Admin Principal</div>
+                                            <div className="text-xs opacity-60">ID: #{feesData.admin_id}</div>
+                                        </div>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className="text-xs opacity-80 mb-1">Solde actuel</div>
+                                        <div className="text-3xl font-bold">
+                                            {Number(feesData.wallet_balance).toLocaleString()} FCFA
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="bg-white/10 backdrop-blur rounded-lg p-3 text-xs">
+                                    💡 Les frais de transaction (1%) des paiements par carte sont automatiquement
+                                    crédités sur ce wallet.
+                                </div>
+                            </div>
+
+                            {/* STATS FRAIS */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                {/* Aujourd'hui */}
+                                <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/10 border border-blue-500/30 rounded-xl p-5">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-xs text-blue-400 font-medium">Aujourd'hui</span>
+                                        <FaChartLine className="text-blue-400" />
+                                    </div>
+                                    <div className="text-2xl font-bold text-blue-300 mb-1">
+                                        {Number(feesData.stats.today.amount).toLocaleString()} F
+                                    </div>
+                                    <div className="text-xs text-blue-400/70">
+                                        {feesData.stats.today.count} transaction(s)
+                                    </div>
+                                </div>
+
+                                {/* Ce mois */}
+                                <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/10 border border-purple-500/30 rounded-xl p-5">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-xs text-purple-400 font-medium">Ce mois</span>
+                                        <FaChartLine className="text-purple-400" />
+                                    </div>
+                                    <div className="text-2xl font-bold text-purple-300 mb-1">
+                                        {Number(feesData.stats.month.amount).toLocaleString()} F
+                                    </div>
+                                    <div className="text-xs text-purple-400/70">
+                                        {feesData.stats.month.count} transaction(s)
+                                    </div>
+                                </div>
+
+                                {/* Total */}
+                                <div className="bg-gradient-to-br from-green-500/10 to-green-600/10 border border-green-500/30 rounded-xl p-5">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-xs text-green-400 font-medium">Total encaissé</span>
+                                        <FaMoneyBillWave className="text-green-400" />
+                                    </div>
+                                    <div className="text-2xl font-bold text-green-300 mb-1">
+                                        {Number(feesData.stats.total.amount).toLocaleString()} F
+                                    </div>
+                                    <div className="text-xs text-green-400/70">
+                                        {feesData.stats.total.count} transaction(s)
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* HISTORIQUE FRAIS */}
+                            <div className="bg-gray-700/50 rounded-xl overflow-hidden">
+                                <div className="p-4 border-b border-gray-600 flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <FaMoneyBillWave className="text-green-400" />
+                                        <h3 className="font-bold text-white">Historique des frais encaissés</h3>
+                                    </div>
+                                    <button
+                                        onClick={fetchFees}
+                                        className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
+                                    >
+                                        <FaRedo className="text-[10px]" /> Actualiser
+                                    </button>
+                                </div>
+
+                                {feesData.recent.length === 0 ? (
+                                    <div className="text-center py-12">
+                                        <FaMoneyBillWave className="text-gray-600 text-5xl mx-auto mb-3" />
+                                        <p className="text-gray-500 text-sm">Aucun frais encaissé</p>
+                                        <p className="text-gray-600 text-xs mt-2">
+                                            Les frais apparaîtront ici après chaque paiement par carte
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full">
+                                            <thead className="bg-gray-800/50">
+                                                <tr>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Date</th>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Reçu</th>
+                                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Description</th>
+                                                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase">Montant</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-700">
+                                                {feesData.recent.map((fee, index) => (
+                                                    <tr key={fee.id || index} className="hover:bg-gray-700/50 transition">
+                                                        <td className="px-4 py-3 text-sm text-gray-300">
+                                                            {fee.created_at
+                                                                ? new Date(fee.created_at).toLocaleString('fr-FR')
+                                                                : '-'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-xs font-mono text-purple-400">
+                                                            {fee.receipt_number || '-'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-sm text-gray-400">
+                                                            {fee.description || 'Frais de transaction'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-right text-sm font-bold text-green-400">
+                                                            +{Number(fee.amount || 0).toLocaleString()} F
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* ============================================
                 MODAL : CARTE APPROUVÉE
             ============================================ */}
             {approvedCard && (
@@ -545,7 +744,6 @@ function AdminCards({ user }) {
                             <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
                                 <p className="text-xs text-yellow-400">
                                     ⚠️ <strong>IMPORTANT :</strong> Ces informations ne seront affichées qu'UNE SEULE FOIS.
-                                    Le client devra définir son PIN lui-même lors de la première utilisation.
                                 </p>
                             </div>
 
@@ -583,21 +781,9 @@ function AdminCards({ user }) {
                                     <div className="text-white">{approvedCard.card_holder}</div>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-2 text-xs">
-                                    <div className="bg-gray-700/50 rounded-lg p-2">
-                                        <div className="text-gray-400">Limite jour</div>
-                                        <div className="text-white">{Number(approvedCard.daily_limit).toLocaleString()} F</div>
-                                    </div>
-                                    <div className="bg-gray-700/50 rounded-lg p-2">
-                                        <div className="text-gray-400">Limite mois</div>
-                                        <div className="text-white">{Number(approvedCard.monthly_limit).toLocaleString()} F</div>
-                                    </div>
-                                </div>
-
                                 <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
                                     <p className="text-xs text-purple-300">
                                         💡 <strong>Info client :</strong> Communiquez uniquement le numéro de carte et le CVV.
-                                        Le client définira son PIN lui-même depuis son application CashPays.
                                     </p>
                                 </div>
                             </div>
