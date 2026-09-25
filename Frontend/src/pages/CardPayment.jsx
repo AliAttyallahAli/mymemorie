@@ -10,7 +10,8 @@ import {
 } from 'react-icons/fa';
 import Layout from '../components/Layout';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// ✅ API_URL vide → utilise le proxy Vite
+const API_URL = '';
 
 function CardPayment({ user }) {
     const navigate = useNavigate();
@@ -30,7 +31,7 @@ function CardPayment({ user }) {
     const getAuthHeaders = () => ({ headers: { Authorization: `Bearer ${getToken()}` } });
 
     // ============================================
-    // ✅ PRÉ-REMPLIR LE NUMÉRO DEPUIS L'URL
+    // PRÉ-REMPLIR LE NUMÉRO DEPUIS L'URL
     // ============================================
     useEffect(() => {
         const cardFromUrl = searchParams.get('card');
@@ -284,7 +285,7 @@ function CardPayment({ user }) {
                 {step === 1 && (
                     <div className="bg-white rounded-2xl shadow-xl p-6">
 
-                        {/* ✅ BANNIÈRE QR CODE */}
+                        {/* BANNIÈRE QR CODE */}
                         {searchParams.get('card') && (
                             <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 mb-4 flex items-center gap-2">
                                 <FaQrcode className="text-purple-600 text-xl" />

@@ -11,7 +11,8 @@ import {
 } from 'react-icons/fa';
 import Layout from '../components/Layout';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// ✅ API_URL vide → utilise le proxy Vite automatiquement
+const API_URL = '';
 
 // ✅ Extraction robuste
 const extractArray = (data, ...keys) => {
@@ -22,7 +23,6 @@ const extractArray = (data, ...keys) => {
     if (data && Array.isArray(data.data)) return data.data;
     return [];
 };
-
 
 function VirtualCard({ user }) {
     const navigate = useNavigate();
@@ -65,7 +65,7 @@ function VirtualCard({ user }) {
         }
         fetchCard();
         fetchTransactions();
-        fetchResetStatus(); // ✅ Charger le statut de la demande de reset
+        fetchResetStatus();
     }, [user]);
 
     const fetchCard = async () => {
@@ -89,7 +89,6 @@ function VirtualCard({ user }) {
         }
     };
 
-    // ✅ Récupérer le statut de la demande de reset PIN
     const fetchResetStatus = async () => {
         try {
             const response = await axios.get(`${API_URL}/api/cards/pin-reset-status`, getAuthHeaders());
@@ -138,7 +137,6 @@ function VirtualCard({ user }) {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 await navigator.clipboard.writeText(text);
             } else {
-                // Fallback
                 const textarea = document.createElement('textarea');
                 textarea.value = text;
                 textarea.style.position = 'fixed';
@@ -201,7 +199,7 @@ function VirtualCard({ user }) {
     };
 
     // ============================================
-    // ✅ DEMANDER UN RESET PIN
+    // DEMANDER UN RESET PIN
     // ============================================
     const handleRequestReset = async () => {
         if (!resetReason.trim()) {
@@ -246,7 +244,7 @@ function VirtualCard({ user }) {
     };
 
     // ============================================
-    // TÉLÉCHARGER LA CARTE EN PDF
+    // TÉLÉCHARGER LA CARTE EN PDF (via Axios)
     // ============================================
     const handleDownloadPDF = async () => {
         if (!card) return;
@@ -593,7 +591,7 @@ function VirtualCard({ user }) {
                                     </div>
                                 </div>
 
-                                {/* ✅ BOUTON DE DEMANDE DE RÉINITIALISATION DU PIN */}
+                                {/* BOUTON DE DEMANDE DE RÉINITIALISATION DU PIN */}
                                 {card.pin_set && (
                                     <div className="mt-4 pt-4 border-t border-gray-100">
                                         {resetRequest?.status === 'pending' ? (
@@ -944,7 +942,7 @@ function VirtualCard({ user }) {
                     </div>
                 )}
 
-                {/* ✅ MODAL RESET PIN */}
+                {/* MODAL RESET PIN */}
                 {showResetModal && (
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                         <div className="bg-white rounded-2xl max-w-md w-full">

@@ -3,7 +3,7 @@ import axios from 'axios'
 import toast from 'react-hot-toast'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000' || 'http://192.168.1.199:5000',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000',
 })
 // API calls
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
