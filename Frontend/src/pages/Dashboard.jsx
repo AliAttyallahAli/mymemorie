@@ -3,8 +3,11 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import axios from 'axios'
 import { 
-  FaArrowUp, FaHistory, FaNewspaper,FaBell, FaBullhorn, FaQrcode, FaWallet, FaCopy, FaCheckCircle, FaCalendarAlt, FaUser, 
-  FaTimes, FaEye, FaEyeSlash,FaArrowDown, FaChartLine, FaWater, FaBolt, FaLandmark,FaMoneyBillWave, FaBus, FaFileInvoice 
+  FaArrowUp, FaHistory, FaNewspaper, FaBell, FaBullhorn, FaQrcode, 
+  FaWallet, FaCopy, FaCheckCircle, FaCalendarAlt, FaUser, 
+  FaTimes, FaEye, FaEyeSlash, FaArrowDown, FaChartLine, FaWater, 
+  FaBolt, FaLandmark, FaMoneyBillWave, FaBus, FaFileInvoice,
+  FaCreditCard, FaUniversity
 } from 'react-icons/fa'
 import toast from 'react-hot-toast'
 import Layout from '../components/Layout'
@@ -16,10 +19,12 @@ function Dashboard({ user, socket }) {
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [showBalance, setShowBalance] = useState(false)
+  const [hasCard, setHasCard] = useState(false) // ✅ Nouveau
   const modalRef = useRef(null)
 
   useEffect(() => {
     fetchData()
+    checkCardStatus() // ✅ Nouveau
     
     if (socket) {
       socket.on('transaction_update', () => fetchData())
@@ -44,6 +49,20 @@ function Dashboard({ user, socket }) {
       toast.error('Erreur lors du chargement')
     } finally {
       setLoading(false)
+    }
+  }
+
+  // ✅ Nouveau : Vérifier si l'utilisateur a une carte
+  const checkCardStatus = async () => {
+    try {
+      const token = localStorage.getItem('accessToken')
+      const res = await axios.get('/api/cards/my-card', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      setHasCard(res.data.card && res.data.card.status === 'active')
+    } catch (error) {
+      console.error('Erreur card status:', error)
+      setHasCard(false)
     }
   }
 
@@ -135,6 +154,46 @@ function Dashboard({ user, socket }) {
           <p className="text-white font-semibold">Mon QR Code</p>
           <p className="text-white/50 text-xs">Recevoir un paiement</p>
         </button>
+      </div>
+
+      {/* ✅ NOUVELLE SECTION : CARTE VIRTUELLE */}
+      <div className="mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <FaCreditCard className="text-purple-400 text-xl" />
+          <h3 className="text-white font-semibold">Carte Virtuelle</h3>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <Link 
+            to="/virtual-card" 
+            className="bg-gradient-to-br from-purple-500/30 to-indigo-600/30 hover:from-purple-500/40 hover:to-indigo-600/40 border border-purple-500/40 rounded-xl p-4 text-center transition-all transform hover:scale-105"
+          >
+            <div className="bg-purple-500/40 w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-2">
+              <FaCreditCard className="text-purple-200 text-2xl" />
+            </div>
+            <p className="text-white font-semibold text-sm">
+              {hasCard ? 'Ma Carte' : 'Demander une carte'}
+            </p>
+            <p className="text-white/50 text-xs">
+              {hasCard ? 'Voir ma carte' : 'Carte virtuelle'}
+            </p>
+            {hasCard && (
+              <span className="inline-block mt-2 px-2 py-0.5 bg-green-500/30 text-green-300 text-xs rounded-full">
+                ✅ Active
+              </span>
+            )}
+          </Link>
+
+          <Link 
+            to="/card-payment" 
+            className="bg-gradient-to-br from-indigo-500/30 to-blue-600/30 hover:from-indigo-500/40 hover:to-blue-600/40 border border-indigo-500/40 rounded-xl p-4 text-center transition-all transform hover:scale-105"
+          >
+            <div className="bg-indigo-500/40 w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-2">
+              <FaUniversity className="text-indigo-200 text-2xl" />
+            </div>
+            <p className="text-white font-semibold text-sm">Encaisser</p>
+            <p className="text-white/50 text-xs">Paiement par carte</p>
+          </Link>
+        </div>
       </div>
 
       {/* Section Paiement de factures */}

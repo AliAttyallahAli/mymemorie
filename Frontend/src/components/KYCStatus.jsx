@@ -38,7 +38,7 @@ const KYCStatus = ({
                     borderColor: 'border-yellow-200',
                     textColor: 'text-yellow-700',
                     title: '⏳ En attente de vérification',
-                    description: 'Votre demande KYC est en cours de traitement',
+                    description: 'Veillez patienté votre demande KYC est en cours de traitement',
                     actionText: 'Voir le statut',
                     actionColor: 'bg-yellow-600 hover:bg-yellow-700',
                     levelLabel: 'En attente'

@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS agents (
     total_sales INTEGER DEFAULT 0,
     total_commission INTEGER DEFAULT 0,
     is_active INTEGER DEFAULT 1,
-    created_by INTEGER,
+    created_by INTEGER ,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (created_by) REFERENCES users(id)
@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS communes (
     contact_phone TEXT(8),
     email TEXT,
     logo TEXT,
+    code TEXT UNIQUE,
     is_active INTEGER DEFAULT 1,
     created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -135,32 +136,6 @@ CREATE TABLE IF NOT EXISTS communes (
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
 
--- ============================================
--- TABLE DES PAIEMENTS DE TAXES
--- ============================================
-CREATE TABLE IF NOT EXISTS tax_payments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    receipt_number TEXT UNIQUE NOT NULL,
-    payer_id INTEGER NOT NULL,
-    commune_id INTEGER NOT NULL,
-    taxpayer_name TEXT NOT NULL,
-    taxpayer_phone TEXT(8) NOT NULL,
-    taxpayer_address TEXT,
-    business_number TEXT,
-    property_address TEXT,
-    tax_type TEXT NOT NULL,
-    tax_period TEXT,
-    amount INTEGER NOT NULL,
-    fee INTEGER DEFAULT 0,
-    total_amount INTEGER NOT NULL,
-    payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-    payment_status TEXT DEFAULT 'paid',
-    AlkherPay_transaction_ref TEXT,
-    notes TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (payer_id) REFERENCES users(id),
-    FOREIGN KEY (commune_id) REFERENCES communes(id)
-);
 
 -- ============================================
 -- TABLE DES TYPES DE TAXES
@@ -310,13 +285,16 @@ CREATE TABLE IF NOT EXISTS kyc_requests (
 CREATE TABLE IF NOT EXISTS kyc_documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kyc_request_id INTEGER NOT NULL,
+    user_id INTEGER,
     document_type TEXT NOT NULL,
     filename TEXT NOT NULL,
     file_path TEXT NOT NULL,
     file_size INTEGER,
     mime_type TEXT,
     uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (kyc_request_id) REFERENCES kyc_requests(id) ON DELETE CASCADE
+    FOREIGN KEY (kyc_request_id) REFERENCES kyc_requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+
 );
 
 -- ============================================
@@ -367,6 +345,7 @@ CREATE TABLE IF NOT EXISTS agent_reviews (
     rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
     comment TEXT,
     status TEXT DEFAULT 'pending',
+    created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (agent_id) REFERENCES agents(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
@@ -695,6 +674,7 @@ CREATE TABLE IF NOT EXISTS investments (
     amount INTEGER NOT NULL,
     shares INTEGER NOT NULL,
     share_price INTEGER NOT NULL,
+    reference INTEGER no
     total_amount INTEGER NOT NULL,
     status TEXT DEFAULT 'pending',
     contract_url TEXT,
@@ -745,8 +725,9 @@ CREATE TABLE IF NOT EXISTS investment_history (
 -- ============================================
 CREATE TABLE IF NOT EXISTS tax_payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    receipt_number TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL,
     payer_id INTEGER NOT NULL,
+    receipt_number TEXT UNIQUE NOT NULL,
     commune_id INTEGER NOT NULL,
     taxpayer_name TEXT NOT NULL,
     taxpayer_phone TEXT(8) NOT NULL,
@@ -766,9 +747,243 @@ CREATE TABLE IF NOT EXISTS tax_payments (
     FOREIGN KEY (payer_id) REFERENCES users(id),
     FOREIGN KEY (commune_id) REFERENCES users(id)
 );
+
+-- Table des compteurs (mètres)
+CREATE TABLE IF NOT EXISTS meters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    meter_number TEXT NOT NULL,
+    customer_name TEXT NOT NULL,
+    customer_phone TEXT,
+    customer_email TEXT,
+    address TEXT,
+    outstanding_amount INTEGER DEFAULT 0,
+    period TEXT,
+    last_payment_date DATETIME,
+    status TEXT DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (company_id) REFERENCES service_companies(id),
+    UNIQUE(company_id, meter_number)
+);
+
+-- ============================================
+-- TABLE DES ÉPARGNES
+-- ============================================
+CREATE TABLE IF NOT EXISTS savings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('simple', 'term')),
+    name TEXT,
+    target_amount INTEGER DEFAULT 0,
+    current_amount INTEGER DEFAULT 0,
+    interest_rate REAL DEFAULT 0,
+    start_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    end_date DATETIME,
+    status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'cancelled', 'withdrawn')),
+    is_locked INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ============================================
+-- TABLE DES TRANSACTIONS D'ÉPARGNE
+-- ============================================
+CREATE TABLE IF NOT EXISTS savings_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    savings_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('deposit', 'withdrawal', 'interest', 'penalty')),
+    amount INTEGER NOT NULL,
+    fee INTEGER DEFAULT 0,
+    net_amount INTEGER DEFAULT 0,
+    balance_before INTEGER DEFAULT 0,
+    balance_after INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'completed' CHECK(status IN ('pending', 'completed', 'failed', 'cancelled')),
+    reference TEXT UNIQUE,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (savings_id) REFERENCES savings(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ============================================
+-- TABLE DES DEMANDES DE RETRAIT D'ÉPARGNE
+-- ============================================
+CREATE TABLE IF NOT EXISTS savings_withdrawal_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    savings_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    fee INTEGER DEFAULT 0,
+    net_amount INTEGER DEFAULT 0,
+    reason TEXT,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    admin_id INTEGER,
+    admin_comment TEXT,
+    requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    processed_at DATETIME,
+    FOREIGN KEY (savings_id) REFERENCES savings(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS virtual_cards (
+    -- ============================================
+    -- IDENTIFIANTS
+    -- ============================================
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    
+    -- ============================================
+    -- INFORMATIONS DE LA CARTE
+    -- ============================================
+    card_number TEXT,
+    card_holder TEXT,
+    expiry_month INTEGER,
+    expiry_year INTEGER,
+    cvv TEXT,
+    pin_set INTEGER DEFAULT 0,
+    pin_hash TEXT,
+    
+    -- ============================================
+    -- SOLDE ET LIMITES
+    -- ============================================
+    balance INTEGER DEFAULT 0,
+    daily_limit INTEGER DEFAULT 500000,
+    monthly_limit INTEGER DEFAULT 5000000,
+    
+    -- ============================================
+    -- STATUT ET TYPE
+    -- ============================================
+    status TEXT DEFAULT 'pending' 
+        CHECK(status IN ('pending', 'active', 'blocked', 'expired', 'cancelled')),
+    card_type TEXT DEFAULT 'classic' 
+        CHECK(card_type IN ('classic', 'premium', 'gold')),
+    
+    -- ============================================
+    -- TRAÇABILITÉ
+    -- ============================================
+    requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    approved_at DATETIME,
+    approved_by INTEGER,
+    rejection_reason TEXT,
+    expires_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    -- ============================================
+    -- CLÉS ÉTRANGÈRES
+    -- ============================================
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS card_transactions (
+    -- ============================================
+    -- IDENTIFIANTS
+    -- ============================================
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL,
+    card_number TEXT NOT NULL,
+    card_holder_id INTEGER NOT NULL,
+    merchant_id INTEGER NOT NULL,
+    
+    -- ============================================
+    -- MONTANTS
+    -- ============================================
+    amount INTEGER NOT NULL,
+    fee INTEGER DEFAULT 0,
+    total_amount INTEGER NOT NULL,
+    
+    -- ============================================
+    -- TYPE ET STATUT
+    -- ============================================
+    transaction_type TEXT DEFAULT 'payment' 
+        CHECK(transaction_type IN ('payment', 'refund', 'withdrawal')),
+    description TEXT,
+    status TEXT DEFAULT 'completed' 
+        CHECK(status IN ('pending', 'completed', 'failed', 'refunded')),
+    
+    -- ============================================
+    -- TRAÇABILITÉ
+    -- ============================================
+    receipt_number TEXT UNIQUE NOT NULL,
+    ip_address TEXT,
+    reference TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    -- ============================================
+    -- CLÉS ÉTRANGÈRES
+    -- ============================================
+    FOREIGN KEY (card_id) REFERENCES virtual_cards(id) ON DELETE CASCADE,
+    FOREIGN KEY (card_holder_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (merchant_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS card_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    card_type TEXT DEFAULT 'classic',
+    reason TEXT,
+    status TEXT DEFAULT 'pending' 
+        CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    admin_id INTEGER,
+    admin_note TEXT,
+    processed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS card_pin_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    reason TEXT,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+    admin_id INTEGER,
+    admin_note TEXT,
+    processed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (card_id) REFERENCES virtual_cards(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- ============================================
 -- INDEX POUR PERFORMANCES
 -- ============================================
+-- Index pour les performances
+-- Index pour virtual_cards
+
+CREATE INDEX IF NOT EXISTS idx_pin_resets_user ON card_pin_resets(user_id);
+CREATE INDEX IF NOT EXISTS idx_pin_resets_status ON card_pin_resets(status);
+
+CREATE INDEX IF NOT EXISTS idx_vcards_user ON virtual_cards(user_id);
+CREATE INDEX IF NOT EXISTS idx_vcards_status ON virtual_cards(status);
+CREATE INDEX IF NOT EXISTS idx_vcards_number ON virtual_cards(card_number);
+CREATE INDEX IF NOT EXISTS idx_vcards_type ON virtual_cards(card_type);
+
+-- Index pour card_transactions
+CREATE INDEX IF NOT EXISTS idx_ctrans_card ON card_transactions(card_id);
+CREATE INDEX IF NOT EXISTS idx_ctrans_holder ON card_transactions(card_holder_id);
+CREATE INDEX IF NOT EXISTS idx_ctrans_merchant ON card_transactions(merchant_id);
+CREATE INDEX IF NOT EXISTS idx_ctrans_status ON card_transactions(status);
+CREATE INDEX IF NOT EXISTS idx_ctrans_date ON card_transactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_ctrans_receipt ON card_transactions(receipt_number);
+
+-- Index pour card_requests
+CREATE INDEX IF NOT EXISTS idx_crequests_user ON card_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_crequests_status ON card_requests(status);
+CREATE INDEX IF NOT EXISTS idx_savings_user_id ON savings(user_id);
+CREATE INDEX IF NOT EXISTS idx_savings_status ON savings(status);
+CREATE INDEX IF NOT EXISTS idx_savings_type ON savings(type);
+CREATE INDEX IF NOT EXISTS idx_savings_tx_savings_id ON savings_transactions(savings_id);
+CREATE INDEX IF NOT EXISTS idx_savings_tx_user_id ON savings_transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_savings_withdrawal_user ON savings_withdrawal_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_savings_withdrawal_status ON savings_withdrawal_requests(status);
+
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -828,6 +1043,11 @@ CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals(referrer_id);
 CREATE INDEX IF NOT EXISTS idx_referrals_referred_user_id ON referrals(referred_id);
 CREATE INDEX IF NOT EXISTS idx_referrals_status ON referrals(status);
 CREATE INDEX IF NOT EXISTS idx_referrals_code ON referrals(referral_code);
+CREATE INDEX IF NOT EXISTS idx_meters_company_id ON meters(company_id);
+CREATE INDEX IF NOT EXISTS idx_meters_meter_number ON meters(meter_number);
+CREATE INDEX IF NOT EXISTS idx_bill_payments_company ON bill_payments(company_id);
+CREATE INDEX IF NOT EXISTS idx_bill_payments_customer ON bill_payments(customer_phone);
+CREATE INDEX IF NOT EXISTS idx_bill_payments_date ON bill_payments(created_at);
 
 -- ============================================
 -- DONNÉES INITIALES
@@ -857,7 +1077,9 @@ INSERT OR IGNORE INTO provinces (name, region) VALUES
 ('Sila', 'Est'),
 ('Tandjilé', 'Sud'),
 ('Tibesti', 'Nord'),
-('N''Djaména', 'Centre');
+('N''Djaména', 'Centre'),
+('Autres-pays', 'afrique'),
+('Autres-pays', 'du-monde');
 
 -- Insertion des limites KYC
 INSERT OR IGNORE INTO kyc_limits (level, daily_transaction_limit, monthly_transaction_limit, single_transaction_limit, withdrawal_limit, description)
@@ -924,7 +1146,7 @@ CREATE TRIGGER IF NOT EXISTS create_wallet_on_user_insert
 AFTER INSERT ON users
 WHEN NEW.role = 'user'
 BEGIN
-    INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 500);
+    INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 250);
 END;
 
 CREATE TRIGGER IF NOT EXISTS create_wallet_on_agent_insert

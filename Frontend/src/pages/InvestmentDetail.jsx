@@ -1,4 +1,4 @@
-// src/pages/InvestmentDetail.jsx - Version corrigée
+// src/pages/InvestmentDetail.jsx
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -11,31 +11,35 @@ import {
   FaShieldAlt, FaCheckCircle, FaClock, FaInfoCircle, FaCopy,
   FaWallet, FaChartPie, FaUserPlus, FaHandshake, FaStar,
   FaGlobe, FaMapMarkerAlt, FaBriefcase, FaAward, FaTrophy,
-  FaTimes, FaFilePdf, FaHistory
-  // FaTrendDown et FaTrendUp supprimés car ils n'existent pas
+  FaTimes, FaFilePdf, FaHistory, FaExternalLinkAlt, FaLink
 } from 'react-icons/fa';
 
 const InvestmentDetail = ({ user, socket }) => {
   const { id } = useParams();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [company, setCompany] = useState(null);
   const [investors, setInvestors] = useState([]);
   const [investAmount, setInvestAmount] = useState('');
   const [shares, setShares] = useState(1);
   const [showInvestModal, setShowInvestModal] = useState(false);
   const [showInvestorsModal, setShowInvestorsModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [userBalance, setUserBalance] = useState(0);
   const [isOwner, setIsOwner] = useState(false);
   const [isInvested, setIsInvested] = useState(false);
+  const [myInvestment, setMyInvestment] = useState(null);
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
 
   useEffect(() => {
-    if (user) {
+    if (user && id) {
       fetchCompanyDetail();
       fetchUserBalance();
     }
   }, [id, user]);
 
+  // ✅ Récupération des détails de l'entreprise
   const fetchCompanyDetail = async () => {
     setLoading(true);
     try {
@@ -43,25 +47,43 @@ const InvestmentDetail = ({ user, socket }) => {
       const response = await axios.get(`/api/investment/companies/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setCompany(response.data);
-      setInvestors(response.data.investors || []);
       
-      if (user && response.data.user_id === user.id) {
+      const data = response.data.data || response.data;
+      setCompany(data);
+      setInvestors(data.investors || []);
+      
+      // Vérifier si l'utilisateur est le propriétaire
+      if (user && (data.created_by === user.id || data.user_id === user.id)) {
         setIsOwner(true);
       }
       
-      if (user && response.data.investors) {
-        const hasInvested = response.data.investors.some(inv => inv.investor_id === user.id);
-        setIsInvested(hasInvested);
+      // Vérifier si l'utilisateur a investi
+      if (user && data.investors) {
+        const userInvestment = data.investors.find(inv => 
+          inv.investor_id === user.id || inv.user_id === user.id
+        );
+        if (userInvestment) {
+          setIsInvested(true);
+          setMyInvestment(userInvestment);
+        }
       }
+
+      // Générer le QR Code
+      const shareUrl = `${window.location.origin}/investment/${data.id}`;
+      setQrCodeUrl(`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}`);
+      
     } catch (error) {
-      console.error('Erreur:', error);
+      console.error('❌ Erreur:', error);
       toast.error('Erreur lors du chargement des détails');
+      if (error.response?.status === 404) {
+        navigate('/investments');
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // ✅ Récupération du solde
   const fetchUserBalance = async () => {
     try {
       const token = localStorage.getItem('accessToken');
@@ -74,6 +96,7 @@ const InvestmentDetail = ({ user, socket }) => {
     }
   };
 
+  // ✅ Investir dans l'entreprise
   const handleInvest = async () => {
     const amount = parseFloat(investAmount);
     const sharesCount = parseInt(shares);
@@ -93,7 +116,12 @@ const InvestmentDetail = ({ user, socket }) => {
       return;
     }
 
-    setLoading(true);
+    if (sharesCount > availableShares) {
+      toast.error(`Seulement ${availableShares} actions disponibles`);
+      return;
+    }
+
+    setSubmitting(true);
     try {
       const token = localStorage.getItem('accessToken');
       const response = await axios.post('/api/investment/invest', {
@@ -105,21 +133,65 @@ const InvestmentDetail = ({ user, socket }) => {
       });
 
       if (response.data.success) {
-        toast.success(`Investissement de ${amount.toLocaleString()} FCFA réussi !`);
+        toast.success(`✅ Investissement de ${amount.toLocaleString()} FCFA réussi !`);
         setShowInvestModal(false);
         setInvestAmount('');
         setShares(1);
         fetchCompanyDetail();
         fetchUserBalance();
+      } else {
+        toast.error(response.data.error || 'Erreur lors de l\'investissement');
       }
     } catch (error) {
+      console.error('❌ Erreur investissement:', error);
       toast.error(error.response?.data?.error || 'Erreur lors de l\'investissement');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
+    }
+  };
+
+  // ✅ Partager
+  const shareCompany = (platform = 'copy') => {
+    const shareUrl = `${window.location.origin}/investment/${company.id}`;
+    const message = `🚀 Découvrez "${company.name}" sur AlkherPay ! Investissez dès maintenant : ${shareUrl}`;
+    
+    switch(platform) {
+      case 'copy':
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(shareUrl);
+          toast.success('🔗 Lien copié !');
+        } else {
+          const textArea = document.createElement('textarea');
+          textArea.value = shareUrl;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          toast.success('🔗 Lien copié !');
+        }
+        break;
+      case 'whatsapp':
+        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+        break;
+      case 'facebook':
+        window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank');
+        break;
+      case 'twitter':
+        window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(message)}`, '_blank');
+        break;
+      case 'linkedin':
+        window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`, '_blank');
+        break;
+      case 'email':
+        window.open(`mailto:?subject=${encodeURIComponent('Découvrez ' + company.name)}&body=${encodeURIComponent(message)}`, '_blank');
+        break;
+      default:
+        break;
     }
   };
 
   const formatDate = (date) => {
+    if (!date) return 'N/A';
     return new Date(date).toLocaleDateString('fr-FR', {
       day: '2-digit',
       month: '2-digit',
@@ -127,11 +199,8 @@ const InvestmentDetail = ({ user, socket }) => {
     });
   };
 
-  const formatAmount = (amount) => {
-    return amount?.toLocaleString() + ' FCFA' || '0 FCFA';
-  };
-
   const formatDateFull = (date) => {
+    if (!date) return 'N/A';
     return new Date(date).toLocaleString('fr-FR', {
       day: '2-digit',
       month: '2-digit',
@@ -139,6 +208,18 @@ const InvestmentDetail = ({ user, socket }) => {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const formatAmount = (amount) => {
+    if (!amount && amount !== 0) return '0 FCFA';
+    return amount.toLocaleString() + ' FCFA';
+  };
+
+  const getProgressColor = (progress) => {
+    if (progress >= 100) return 'bg-green-500';
+    if (progress >= 60) return 'bg-blue-500';
+    if (progress >= 30) return 'bg-yellow-500';
+    return 'bg-red-500';
   };
 
   if (loading) {
@@ -154,14 +235,17 @@ const InvestmentDetail = ({ user, socket }) => {
   if (!company) {
     return (
       <Layout user={user} socket={socket}>
-        <div className="text-center py-12">
-          <p className="text-white/50">Entreprise non trouvée</p>
-          <button 
-            onClick={() => navigate('/investments')}
-            className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
-          >
-            Retour aux investissements
-          </button>
+        <div className="container mx-auto px-4 py-8">
+          <div className="text-center py-12">
+            <FaBuilding className="text-gray-300 text-5xl mx-auto mb-3" />
+            <p className="text-gray-500 text-lg">Entreprise non trouvée</p>
+            <button 
+              onClick={() => navigate('/investments')}
+              className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+            >
+              Retour aux investissements
+            </button>
+          </div>
         </div>
       </Layout>
     );
@@ -181,13 +265,24 @@ const InvestmentDetail = ({ user, socket }) => {
     <Layout user={user} socket={socket}>
       <div className="container mx-auto px-4 py-8">
         {/* Bouton de retour */}
-        <button
-          onClick={() => navigate(-1)}
-          className="mb-6 flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors bg-white rounded-lg shadow-sm hover:shadow-md"
-        >
-          <FaArrowLeft className="text-lg" />
-          <span>Retour</span>
-        </button>
+        <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
+          <button
+            onClick={() => navigate(-1)}
+            className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors bg-white rounded-lg shadow-sm hover:shadow-md"
+          >
+            <FaArrowLeft className="text-lg" />
+            <span>Retour</span>
+          </button>
+          
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowShareModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <FaShare /> Partager
+            </button>
+          </div>
+        </div>
 
         {/* En-tête de l'entreprise */}
         <div className="bg-gradient-to-r from-blue-800 via-blue-700 to-indigo-800 rounded-2xl p-6 mb-8 shadow-lg">
@@ -213,7 +308,7 @@ const InvestmentDetail = ({ user, socket }) => {
                       👑 Propriétaire
                     </span>
                   )}
-                  {isInvested && (
+                  {isInvested && !isOwner && (
                     <span className="text-xs px-2 py-0.5 bg-green-500/30 text-green-300 rounded-full">
                       💰 Investi
                     </span>
@@ -236,14 +331,14 @@ const InvestmentDetail = ({ user, socket }) => {
           <div className="lg:col-span-2 space-y-6">
             {/* Description */}
             <div className="bg-white rounded-xl shadow-lg p-6">
-              <h3 className="font-bold text-lg mb-4">📝 Description</h3>
+              <h3 className="font-bold text-lg mb-4 text-black">📝 Description</h3>
               <p className="text-gray-700 leading-relaxed">{company.description}</p>
             </div>
 
             {/* Pitch */}
             {company.pitch && (
               <div className="bg-white rounded-xl shadow-lg p-6">
-                <h3 className="font-bold text-lg mb-4">🎯 Pitch</h3>
+                <h3 className="font-bold text-lg mb-4 text-black">🎯 Pitch</h3>
                 <p className="text-gray-700 leading-relaxed">{company.pitch}</p>
               </div>
             )}
@@ -251,34 +346,48 @@ const InvestmentDetail = ({ user, socket }) => {
             {/* Équipe */}
             {company.team && (
               <div className="bg-white rounded-xl shadow-lg p-6">
-                <h3 className="font-bold text-lg mb-4">👥 Équipe</h3>
+                <h3 className="font-bold text-lg mb-4 text-black">👥 Équipe</h3>
                 <p className="text-gray-700 leading-relaxed">{company.team}</p>
               </div>
             )}
 
             {/* Objectifs */}
             <div className="bg-white rounded-xl shadow-lg p-6">
-              <h3 className="font-bold text-lg mb-4">🎯 Objectifs de financement</h3>
+              <h3 className="font-bold text-lg mb-4 text-black">🎯 Objectifs de financement</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-gray-50 rounded-lg p-4 text-center">
+                <div className="bg-blue-50 rounded-lg p-4 text-center">
                   <p className="text-sm text-gray-500">Objectif</p>
                   <p className="text-xl font-bold text-blue-600">{formatAmount(company.funding_goal)}</p>
                 </div>
-                <div className="bg-gray-50 rounded-lg p-4 text-center">
+                <div className="bg-green-50 rounded-lg p-4 text-center">
                   <p className="text-sm text-gray-500">Collecté</p>
                   <p className="text-xl font-bold text-green-600">{formatAmount(company.collected_amount)}</p>
                 </div>
-                <div className="bg-gray-50 rounded-lg p-4 text-center">
+                <div className="bg-yellow-50 rounded-lg p-4 text-center">
                   <p className="text-sm text-gray-500">Restant</p>
                   <p className="text-xl font-bold text-yellow-600">{formatAmount(remainingAmount)}</p>
+                </div>
+              </div>
+
+              {/* Barre de progression */}
+              <div className="mt-6">
+                <div className="flex justify-between text-sm mb-2">
+                  <span className="text-gray-500">Progression</span>
+                  <span className="font-bold">{progress.toFixed(1)}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-4">
+                  <div 
+                    className={`h-4 rounded-full transition-all duration-500 ${getProgressColor(progress)}`}
+                    style={{ width: `${Math.min(progress, 100)}%` }}
+                  />
                 </div>
               </div>
             </div>
 
             {/* Investisseurs */}
-            <div className="bg rounded-xl shadow-lg overflow-hidden">
+            <div className="bg-white rounded-xl shadow-lg overflow-hidden">
               <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
-                <h3 className="font-bold text-lg flex items-center gap-2">
+                <h3 className="font-bold text-lg flex items-center gap-2 text-black">
                   <FaUsers className="text-blue-500" />
                   Investisseurs ({investors.length})
                 </h3>
@@ -295,17 +404,23 @@ const InvestmentDetail = ({ user, socket }) => {
                 <div className="text-center py-8 text-gray-500">
                   <FaUsers className="text-gray-300 text-4xl mx-auto mb-2" />
                   <p>Aucun investisseur pour le moment</p>
+                  <p className="text-sm text-gray-400 mt-1">Soyez le premier à investir !</p>
                 </div>
               ) : (
                 <div className="divide-y max-h-60 overflow-y-auto">
                   {investors.slice(0, 5).map((investor, index) => (
-                    <div key={investor.id} className="p-4 hover:bg-gray-50 transition-colors">
+                    <div key={investor.id || index} className="p-4 hover:bg-gray-50 transition-colors">
                       <div className="flex justify-between items-center">
-                        <div>
-                          <p className="font-medium">{investor.investor_name}</p>
-                          <p className="text-sm text-gray-500">
-                            {investor.shares || 0} actions • {formatDate(investor.created_at)}
-                          </p>
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold">
+                            {investor.investor_name?.charAt(0) || '?'}
+                          </div>
+                          <div>
+                            <p className="font-medium">{investor.investor_name || 'Anonyme'}</p>
+                            <p className="text-sm text-gray-500">
+                              {investor.shares || 0} actions • {formatDate(investor.created_at)}
+                            </p>
+                          </div>
                         </div>
                         <div className="text-right">
                           <p className="font-bold text-green-600">{formatAmount(investor.amount)}</p>
@@ -314,8 +429,13 @@ const InvestmentDetail = ({ user, socket }) => {
                     </div>
                   ))}
                   {investors.length > 5 && (
-                    <div className="p-3 text-center text-gray-500 text-sm">
-                      + {investors.length - 5} autres investisseurs
+                    <div className="p-3 text-center">
+                      <button
+                        onClick={() => setShowInvestorsModal(true)}
+                        className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                      >
+                        + {investors.length - 5} autres investisseurs
+                      </button>
                     </div>
                   )}
                 </div>
@@ -327,7 +447,7 @@ const InvestmentDetail = ({ user, socket }) => {
           <div className="space-y-6">
             {/* Progression */}
             <div className="bg-white rounded-xl shadow-lg p-6">
-              <h3 className="font-bold text-lg mb-4">📈 Progression</h3>
+              <h3 className="font-bold text-lg mb-4 text-black">📈 Progression</h3>
               <div className="flex justify-between text-sm mb-2">
                 <span className="text-gray-500">{progress.toFixed(0)}%</span>
                 <span className="text-gray-500">{formatAmount(company.collected_amount)}</span>
@@ -347,8 +467,8 @@ const InvestmentDetail = ({ user, socket }) => {
             </div>
 
             {/* Informations */}
-            <div className="bg-blue-300 rounded-xl shadow-lg p-6">
-              <h3 className="font-bold text-lg mb-4">ℹ️ Informations</h3>
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <h3 className="font-bold text-lg mb-4 text-black">ℹ️ Informations</h3>
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-gray-500">Secteur</span>
@@ -377,13 +497,40 @@ const InvestmentDetail = ({ user, socket }) => {
                 {company.location && (
                   <div className="flex justify-between">
                     <span className="text-gray-500">Localisation</span>
-                    <span className="font-medium">{company.location}</span>
+                    <span className="font-medium flex items-center gap-1">
+                      <FaMapMarkerAlt className="text-gray-400" size={12} />
+                      {company.location}
+                    </span>
+                  </div>
+                )}
+                {company.phone && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Téléphone</span>
+                    <span className="font-medium flex items-center gap-1">
+                      <FaPhone className="text-gray-400" size={12} />
+                      {company.phone}
+                    </span>
+                  </div>
+                )}
+                {company.email && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Email</span>
+                    <span className="font-medium flex items-center gap-1">
+                      <FaEnvelope className="text-gray-400" size={12} />
+                      {company.email}
+                    </span>
                   </div>
                 )}
                 {company.website && (
                   <div className="flex justify-between">
                     <span className="text-gray-500">Site web</span>
-                    <a href={company.website} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-[150px]">
+                    <a 
+                      href={company.website} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="text-blue-600 hover:underline truncate max-w-[150px] flex items-center gap-1"
+                    >
+                      <FaGlobe size={12} />
                       {company.website.replace(/^https?:\/\//, '')}
                     </a>
                   </div>
@@ -416,9 +563,9 @@ const InvestmentDetail = ({ user, socket }) => {
                 </p>
                 <button
                   onClick={() => navigate('/my-company')}
-                  className="mt-3 w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                  className="mt-3 w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center justify-center gap-2"
                 >
-                  Gérer mon entreprise
+                  <FaChartLine /> Gérer mon entreprise
                 </button>
               </div>
             )}
@@ -431,39 +578,17 @@ const InvestmentDetail = ({ user, socket }) => {
               </div>
             )}
 
-            {isInvested && !isOwner && (
+            {isInvested && !isOwner && myInvestment && (
               <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
-                <p className="text-blue-800 text-sm flex items-center gap-2">
-                  <FaCheckCircle /> Vous avez déjà investi dans cette entreprise
+                <p className="text-blue-800 text-sm flex items-center gap-2 mb-2">
+                  <FaCheckCircle /> Vous avez déjà investi
                 </p>
+                <div className="text-sm text-blue-700">
+                  <p>Montant: <strong>{formatAmount(myInvestment.amount)}</strong></p>
+                  <p>Actions: <strong>{myInvestment.shares}</strong></p>
+                </div>
               </div>
             )}
-
-            {/* Partager */}
-            <div className="bg-gray-50 rounded-xl p-4">
-              <p className="text-sm text-gray-600 mb-2">Partager cette entreprise</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const url = `${window.location.origin}/investment/${company.id}`;
-                    navigator.clipboard.writeText(url);
-                    toast.success('Lien copié !');
-                  }}
-                  className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm flex items-center justify-center gap-2"
-                >
-                  <FaCopy /> Copier le lien
-                </button>
-                <button
-                  onClick={() => {
-                    const url = `${window.location.origin}/investment/${company.id}`;
-                    window.open(`https://wa.me/?text=Investissez dans ${company.name} - ${url}`, '_blank');
-                  }}
-                  className="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition-colors text-sm flex items-center justify-center gap-2"
-                >
-                  <FaShare /> WhatsApp
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -471,7 +596,7 @@ const InvestmentDetail = ({ user, socket }) => {
       {/* Modal: Investir */}
       {showInvestModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
-          <div className="relative max-w-md w-full bg-blue-500 rounded-2xl shadow-2xl">
+          <div className="relative max-w-md w-full bg-white rounded-2xl shadow-2xl">
             <div className="p-4 border-b flex justify-between items-center">
               <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                 <FaMoneyBillWave className="text-green-600" />
@@ -493,8 +618,13 @@ const InvestmentDetail = ({ user, socket }) => {
                 </div>
                 <div className="flex justify-between text-sm mt-2">
                   <span className="text-gray-500">Votre solde</span>
-                  <span className="font-bold text-green-600">{formatAmount(userBalance)}</span>
+                  <span className={`font-bold ${userBalance >= sharePrice ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatAmount(userBalance)}
+                  </span>
                 </div>
+                {userBalance < sharePrice && (
+                  <p className="text-xs text-red-500 mt-1">Solde insuffisant pour investir</p>
+                )}
               </div>
 
               <div className="space-y-4">
@@ -507,16 +637,17 @@ const InvestmentDetail = ({ user, socket }) => {
                     value={shares}
                     onChange={(e) => {
                       const val = parseInt(e.target.value) || 1;
-                      setShares(Math.max(1, Math.min(val, availableShares)));
-                      setInvestAmount((val * sharePrice).toString());
+                      const maxShares = Math.min(val, availableShares);
+                      setShares(maxShares);
+                      setInvestAmount((maxShares * sharePrice).toString());
                     }}
                     className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-green-500"
                     min="1"
                     max={availableShares}
                   />
-                  {shares > availableShares && (
-                    <p className="text-red-500 text-xs mt-1">
-                      ⚠️ Seulement {availableShares} actions disponibles
+                  {shares >= availableShares && (
+                    <p className="text-yellow-600 text-xs mt-1">
+                      ⚠️ Maximum {availableShares} actions disponibles
                     </p>
                   )}
                 </div>
@@ -538,38 +669,38 @@ const InvestmentDetail = ({ user, socket }) => {
                     step="100"
                   />
                   <p className="text-xs text-gray-400 mt-1">
-                    Prix minimum: {formatAmount(sharePrice)} ({sharePrice} FCFA × 1 action)
+                    Prix minimum: {formatAmount(sharePrice)}
                   </p>
                 </div>
               </div>
 
               <div className="mt-6 p-4 bg-green-50 rounded-lg border border-green-200">
                 <p className="text-sm text-green-800 flex items-start gap-2">
-                  <FaShieldAlt className="mt-0.5" />
+                  <FaShieldAlt className="mt-0.5 flex-shrink-0" />
                   <span>
-                    <strong>Résumé</strong><br />
-                    Vous allez acheter <strong>{shares}</strong> action(s) 
-                    pour un total de <strong>{formatAmount(parseFloat(investAmount) || 0)}</strong>
+                    <strong>Résumé de l'investissement</strong><br />
+                    Actions: <strong>{shares}</strong><br />
+                    Montant total: <strong>{formatAmount(parseFloat(investAmount) || 0)}</strong>
                   </span>
                 </p>
               </div>
 
-              <div className="flex gap-3 mt-6 text-black">
+              <div className="flex gap-3 mt-6">
                 <button
                   onClick={() => setShowInvestModal(false)}
-                  className="flex-1 border bg-red-700 border-l-2 border-gray-300 placeholder-gray-800 rounded-lg hover:bg-red-400 transition-colors"
+                  className="flex-1 border border-gray-300 py-2 rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   Annuler
                 </button>
                 <button
                   onClick={handleInvest}
-                  disabled={loading || parseFloat(investAmount) > userBalance || shares > availableShares || !investAmount}
+                  disabled={submitting || parseFloat(investAmount) > userBalance || shares > availableShares || !investAmount}
                   className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white py-2 rounded-lg hover:from-green-700 hover:to-green-800 disabled:opacity-50 flex items-center justify-center gap-2 transition-all"
                 >
-                  {loading ? (
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  {submitting ? (
+                    <FaSpinner className="animate-spin" />
                   ) : (
-                    <><FaCheckCircle /> Confirmer l'investissement</>
+                    <><FaCheckCircle /> Confirmer</>
                   )}
                 </button>
               </div>
@@ -600,18 +731,20 @@ const InvestmentDetail = ({ user, socket }) => {
               ) : (
                 <div className="space-y-3">
                   {investors.map((investor, index) => (
-                    <div key={investor.id} className="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors">
+                    <div key={investor.id || index} className="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors">
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-blue-500/20 rounded-full flex items-center justify-center text-blue-600 font-bold">
+                          <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold">
                             {investor.investor_name?.charAt(0) || '?'}
                           </div>
                           <div>
-                            <p className="font-medium">{investor.investor_name}</p>
-                            <p className="text-sm text-gray-500">
-                              <FaPhone className="inline mr-1 text-xs" />
-                              {investor.investor_phone || 'N/A'}
-                            </p>
+                            <p className="font-medium">{investor.investor_name || 'Anonyme'}</p>
+                            {investor.investor_phone && (
+                              <p className="text-sm text-gray-500">
+                                <FaPhone className="inline mr-1 text-xs" />
+                                {investor.investor_phone}
+                              </p>
+                            )}
                             {investor.investor_email && (
                               <p className="text-sm text-gray-500">
                                 <FaEnvelope className="inline mr-1 text-xs" />
@@ -630,7 +763,7 @@ const InvestmentDetail = ({ user, socket }) => {
                   ))}
                   <div className="bg-gray-100 rounded-lg p-4 text-center">
                     <p className="font-bold">
-                      Total collecté: {formatAmount(investors.reduce((sum, inv) => sum + inv.amount, 0))}
+                      Total collecté: {formatAmount(investors.reduce((sum, inv) => sum + (inv.amount || 0), 0))}
                     </p>
                     <p className="text-sm text-gray-500">
                       {investors.reduce((sum, inv) => sum + (inv.shares || 0), 0)} actions vendues
@@ -638,6 +771,77 @@ const InvestmentDetail = ({ user, socket }) => {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Partager */}
+      {showShareModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="relative max-w-md w-full bg-white rounded-2xl shadow-2xl">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h3 className="text-xl font-bold text-gray-800">🔗 Partager l'entreprise</h3>
+              <button onClick={() => setShowShareModal(false)} className="text-gray-400 hover:text-gray-600">
+                <FaTimes size={20} />
+              </button>
+            </div>
+            <div className="p-6 text-center">
+              {qrCodeUrl && (
+                <img src={qrCodeUrl} alt="QR Code" className="w-40 h-40 mx-auto mb-4 border rounded-lg p-2" />
+              )}
+              <p className="text-sm text-gray-500 mb-4">Scannez ce QR code ou partagez le lien</p>
+              
+              <div className="flex justify-center gap-3 mb-4 flex-wrap">
+                <button
+                  onClick={() => shareCompany('whatsapp')}
+                  className="p-3 bg-green-500 text-white rounded-full hover:bg-green-600 transition-colors"
+                  title="WhatsApp"
+                >
+                  <FaPhone />
+                </button>
+                <button
+                  onClick={() => shareCompany('facebook')}
+                  className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors"
+                  title="Facebook"
+                >
+                  <FaShare />
+                </button>
+                <button
+                  onClick={() => shareCompany('twitter')}
+                  className="p-3 bg-sky-500 text-white rounded-full hover:bg-sky-600 transition-colors"
+                  title="Twitter"
+                >
+                  <FaShare />
+                </button>
+                <button
+                  onClick={() => shareCompany('linkedin')}
+                  className="p-3 bg-blue-700 text-white rounded-full hover:bg-blue-800 transition-colors"
+                  title="LinkedIn"
+                >
+                  <FaShare />
+                </button>
+                <button
+                  onClick={() => shareCompany('email')}
+                  className="p-3 bg-gray-600 text-white rounded-full hover:bg-gray-700 transition-colors"
+                  title="Email"
+                >
+                  <FaEnvelope />
+                </button>
+                <button
+                  onClick={() => shareCompany('copy')}
+                  className="p-3 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors"
+                  title="Copier le lien"
+                >
+                  <FaCopy />
+                </button>
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-xs text-gray-500 break-all">
+                  {`${window.location.origin}/investment/${company.id}`}
+                </p>
+              </div>
             </div>
           </div>
         </div>

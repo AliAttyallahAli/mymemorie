@@ -359,8 +359,8 @@ const BillPayment = ({ user, socket }) => {
                 <p className="text-gray-500 mb-6">Votre paiement a été effectué avec succès</p>
                 <div className="bg-gray-50 rounded-xl p-6 mb-6 max-w-md mx-auto text-left">
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between"><span className="text-gray-500">Reçu</span><span className="font-mono font-semibold">{generatedReceipt.receipt_number}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-500">Fournisseur</span><span className="font-semibold">{generatedReceipt.company_name}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">Reçu</span><span className="font-mono text-black font-semibold">{generatedReceipt.receipt_number}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">Fournisseur</span><span className="font-semibold text-black">{generatedReceipt.company_name}</span></div>
                     <div className="flex justify-between"><span className="text-gray-500">Montant</span><span className="font-bold text-blue-700">{generatedReceipt.amount.toLocaleString()} FCFA</span></div>
                     <div className="flex justify-between"><span className="text-gray-500">Date</span><span className="text-gray-700">{new Date(generatedReceipt.payment_date).toLocaleString()}</span></div>
                   </div>
@@ -416,7 +416,7 @@ const BillPayment = ({ user, socket }) => {
                           const company = companies.find(c => c.id === parseInt(e.target.value)); 
                           handleCompanySelect(company); 
                         }} 
-                        className=" bg-blue-800/100 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        className=" bg-blue-800/50 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                         required
                       >
                         <option value="">Sélectionnez un fournisseur</option>
@@ -429,7 +429,7 @@ const BillPayment = ({ user, socket }) => {
                       
                       {/* Affichage de l'entreprise sélectionnée */}
                       {selectedCompany && (
-                        <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
+                        <div className="mt-2 p-2 bg-yellow-500 rounded-lg border border-blue-200">
                           <div className="flex items-center gap-2">
                             <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
                               {selectedType === 'water' ? <FaWater className="text-blue-600" /> : <FaBolt className="text-yellow-600" />}
@@ -437,7 +437,7 @@ const BillPayment = ({ user, socket }) => {
                             <div>
                               <p className="font-medium text-gray-800">{selectedCompany.name}</p>
                               <p className="text-xs text-white">{selectedCompany.fullName}</p>
-                              <p className="text-xs text-white">📱 {selectedCompany.agent_phone}</p>
+                              <p className="text-xs text-white">📱 {selectedCompany.agent_phon}</p>
                             </div>
                           </div>
                         </div>
@@ -446,7 +446,7 @@ const BillPayment = ({ user, socket }) => {
 
                     {/* Recherche par compteur */}
                     <div className="bg-blue-800 rounded-xl p-4">
-                      <label className="block text-sm font-medium mb-2 text-gray-700">Numéro de compteur</label>
+                      <label className="block text-sm font-medium mb-2 text-gray-70">Numéro de compteur</label>
                       <div className="flex gap-2">
                         <input 
                           type="text" 
@@ -662,15 +662,15 @@ const BillPayment = ({ user, socket }) => {
                       {paymentHistory.map(payment => (
                         <tr key={payment.id} className="hover:bg-gray-50">
                           <td className="px-4 py-3 text-sm font-mono text-blue-600">{payment.receipt_number}</td>
-                          <td className="px-4 py-3 text-sm font-medium">{payment.company_name}</td>
+                          <td className="px-4 py-3 text-black font-medium">{payment.company_name}</td>
                           <td className="px-4 py-3 text-sm">
                             <span className={`px-2 py-1 rounded-full text-xs ${payment.service_type === 'water' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'}`}>
                               {payment.service_type === 'water' ? '💧 EAU' : '⚡ ÉLECTRICITÉ'}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-sm">{payment.customer_name}</td>
+                          <td className="px-4 py-3 text-black">{payment.customer_name}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-blue-700 text-right">{payment.amount.toLocaleString()} FCFA</td>
-                          <td className="px-4 py-3 text-sm">{new Date(payment.created_at).toLocaleDateString('fr-FR')}</td>
+                          <td className="px-4 py-3 text-black">{new Date(payment.created_at).toLocaleDateString('fr-FR')}</td>
                           <td className="px-4 py-3">
                             <button 
                               onClick={() => handlePrintReceipt(payment)} 

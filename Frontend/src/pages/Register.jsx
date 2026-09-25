@@ -118,7 +118,9 @@ function Register() {
     { id: 20, name: 'Sila' },
     { id: 21, name: 'Tandjilé' },
     { id: 22, name: 'Tibesti' },
-    { id: 23, name: 'N\'Djaména' }
+    { id: 23, name: 'N\'Djaména' },
+    { id: 24, name: 'Pays-d-afrique' },
+    { id: 24, name: 'Pays-du-monde' }
   ]
 
   const handleChange = (e) => {

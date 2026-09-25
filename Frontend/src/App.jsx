@@ -26,6 +26,8 @@ import Fees from './pages/Fees'
 import BecomeAgent from './pages/BecomeAgent'
 import FAQ from './pages/FAQ'
 import Blog from './pages/Blog'
+import LoanRequest from './pages/LoanRequest';
+import AdminLoans from './pages/AdminLoans';
 import Investments from './pages/Investments';
 import InvestmentDetail from './pages/InvestmentDetail';
 import Agents from './pages/Agents'
@@ -38,12 +40,18 @@ import NotificationDetail from './pages/NotificationDetail'
 import AgentApplicationDetail from './pages/AgentApplicationDetail'
 import KYCDetail from './pages/KYCDetail'
 import CompanyDashboard from './pages/CompanyDashboard';
-import TaxPayment from './pages/TaxPayment'
-import AdminTaxes from './pages/AdminTaxes'
+import TaxPayment from './pages/TaxPayment';
+import AdminTaxes from './pages/AdminTaxes';
 import MyCompany from './pages/MyCompany';
+import Chat from './pages/Chat';
+import VirtualCard from './pages/VirtualCard';
+import CardPayment from './pages/CardPayment';
+import AdminCards from './pages/AdminCards';
 import BillPayment from './pages/BillPayment';
 import BusBooking from './pages/BusBooking';
 import KYCLevel2 from './pages/KYCLevel2';
+import Savings from './pages/Savings';
+import AdminSavings from './pages/AdminSavings';
 import AgencyManagement from './pages/AgencyManagement';
 import TaxManagement from './pages/TaxManagement'; // ✅ NOUVEAU
 import AdminBillCompanies from './pages/AdminBillCompanies';
@@ -194,6 +202,10 @@ function App() {
           <Route element={<PrivateRoute user={user} />}>
             <Route path="/tax-payment" element={<TaxPayment user={user} />} />
             <Route path="/admin/taxes" element={<AdminTaxes user={user} />} />
+            <Route path="/loans" element={<LoanRequest user={user} socket={socket} />} />
+            <Route path="/admin/loans" element={<AdminLoans user={user} socket={socket} />} />
+            <Route path="/chat" element={<Chat user={user} socket={socket} />} />
+            <Route path="/chat/:conversationId" element={<Chat user={user} socket={socket} />} />
             <Route path="/dashboard" element={<Dashboard user={user} socket={socket} />} />
             <Route path="/transfer" element={<Transfer user={user} socket={socket} />} />
             <Route path="/settings/2fa" element={<TwoFactorAuth user={user} />} />
@@ -208,7 +220,12 @@ function App() {
             <Route path="/investment/:id" element={<InvestmentDetail user={user} socket={socket} />} />
             <Route path="/history" element={<History user={user} />} />
             <Route path="/tax-management" element={<TaxManagement />} />
+            <Route path="/virtual-card" element={<VirtualCard user={user} />} />
+            <Route path="/card-payment" element={<CardPayment user={user} />} />
+            <Route path="/admin/cards" element={<AdminCards user={user} />} />
             <Route path="/profile" element={<Profile user={user} />} />
+            <Route path="/savings" element={<Savings user={user} socket={socket} />} />
+            <Route path="/admin/savings" element={<AdminSavings user={user} socket={socket} />} />  
             <Route path="/bus-booking" element={<BusBooking user={user} socket={socket} />} />
             <Route path="/agency-management" element={<AgencyManagement user={user} socket={socket} />} />
             <Route path="/deposit" element={<Deposit user={user} socket={socket} />} />

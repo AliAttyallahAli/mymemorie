@@ -60,7 +60,7 @@ Montant: ${formatAmount(transaction?.amount)}
 Frais (2%): ${formatAmount(transaction?.fee)}
 Total: ${formatAmount((transaction?.amount || 0) + (transaction?.fee || 0))}
 
-Service client: 62 78 73 07 | support@AlkherPay.td
+Service client: 62 78 73 07 |supportalkher@gmail.com
 © 2026 AlkherPay - GOUROUSDJA
     `
     const blob = new Blob([receipt], { type: 'text/plain' })

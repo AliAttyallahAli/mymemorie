@@ -26,9 +26,30 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIO(server, {
   cors: {
-    origin: "http://Backend/public", // Remplacez par l'URL de votre frontend
-    methods: ["GET", "POST"]
-  }
+    origin: [
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'http://192.168.1.199:5173',
+      'http://localhost:5000',
+      'http://Frotend/src/api',
+
+      process.env.FRONTEND_URL
+    ].filter(Boolean),
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  allowEIO3: true
+});
+// ✅ Rendre io accessible
+app.set('io', io);
+
+// ✅ Middleware pour attacher io
+app.use((req, res, next) => {
+  req.io = io;
+  next();
 });
 
 // Middlewares
@@ -2540,7 +2561,8 @@ app.get('/api/agents', async (req, res) => {
         a.agency_type,
         a.commission_rate, 
         a.is_active,
-        a.created_at
+        a.created_at,
+        a.created_by
       FROM users u
       INNER JOIN agents a ON u.id = a.user_id
       WHERE u.role = 'agent' 
@@ -6159,6 +6181,88 @@ app.get('/api/admin/users/:userId', authenticateToken, requireAdmin, async (req,
   }
 });
 
+app.get('/api/tax/offices', async (req, res) => {
+    console.log('🔍 GET /api/tax/offices');
+    try {
+        const { province, city, search } = req.query;
+
+        // Vérifier les colonnes disponibles dans communes
+        const columns = await query("PRAGMA table_info(communes)").catch(() => []);
+        const cols = columns.map(c => c.name);
+
+        // Si la table n'existe pas → créer et retourner vide
+        if (cols.length === 0) {
+            console.log('⚠️ Table communes inexistante - création...');
+            await run(`
+                CREATE TABLE IF NOT EXISTS communes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    code TEXT,
+                    office_number TEXT,
+                    province TEXT,
+                    city TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            return res.json({ success: true, offices: [] });
+        }
+
+        // Champs dynamiques selon les colonnes disponibles
+        const codeField = cols.includes('code') ? 'code' :
+                         cols.includes('office_number') ? 'office_number' : 'NULL';
+        const provinceField = cols.includes('province') ? 'province' : 'NULL';
+        const cityField = cols.includes('city') ? 'city' : 'NULL';
+        const activeFilter = cols.includes('is_active') ? 'is_active = 1' : '1=1';
+
+        let sql = `
+            SELECT 
+                id, 
+                name,
+                ${codeField} as code,
+                ${codeField} as office_number,
+                ${provinceField} as province,
+                ${cityField} as city
+            FROM communes 
+            WHERE ${activeFilter}
+        `;
+        const params = [];
+
+        if (province && cols.includes('province')) {
+            sql += ' AND province = ?';
+            params.push(province);
+        }
+        if (city && cols.includes('city')) {
+            sql += ' AND city = ?';
+            params.push(city);
+        }
+        if (search && cols.includes('name')) {
+            sql += ' AND (name LIKE ? OR ' + codeField + ' LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`);
+        }
+
+        sql += ' ORDER BY name ASC';
+
+        const offices = await query(sql, params);
+
+        console.log(`✅ ${offices?.length || 0} communes retournées`);
+
+        res.json({
+            success: true,
+            offices: offices || [],
+            count: offices?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur /api/tax/offices:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            offices: []
+        });
+    }
+});
+
 // server.js - Ajouter ces routes
 // ============================================
 // ROUTES COMMUNES (SERVICES D'IMPÔTS)
@@ -6801,441 +6905,6 @@ app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (re
   }
 });
 
-// Récupérer la liste des communes pour les paiements
-app.get('/api/communes', authenticateToken, async (req, res) => {
-  try {
-    const communes = await query(`
-            SELECT 
-                id, 
-                phone, 
-                commune_name as name, 
-                commune_address as address,
-                email
-            FROM users 
-            WHERE role = 'commune' AND is_active = 1
-            ORDER BY commune_name
-        `);
-
-    res.json(communes || []);
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Récupérer les statistiques d'une commune
-app.get('/api/commune/stats', authenticateToken, async (req, res) => {
-  // Vérifier que l'utilisateur est une commune
-  const user = await get('SELECT role FROM users WHERE id = ?', [req.user.userId]);
-  if (user.role !== 'commune') {
-    return res.status(403).json({ error: 'Accès réservé aux communes' });
-  }
-
-  try {
-    // Récupérer le solde du wallet
-    const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [req.user.userId]);
-
-    // Récupérer les paiements reçus
-    const payments = await query(`
-            SELECT 
-                COUNT(*) as total_count,
-                SUM(amount) as total_amount,
-                SUM(fee) as total_fees,
-                DATE(created_at) as payment_date
-            FROM tax_payments
-            WHERE commune_id = ?
-            GROUP BY DATE(created_at)
-            ORDER BY payment_date DESC
-            LIMIT 30
-        `, [req.user.userId]);
-
-    res.json({
-      balance: wallet?.balance || 0,
-      total_payments: payments.reduce((sum, p) => sum + p.total_count, 0),
-      total_amount: payments.reduce((sum, p) => sum + (p.total_amount || 0), 0),
-      recent_payments: payments.slice(0, 10)
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur stats:', error);
-    res.json({ balance: 0, total_payments: 0, total_amount: 0 });
-  }
-});
-
-
-
-// ============================================
-// ROUTES PAIEMENTS DE TAXES
-// ============================================
-
-// Paiement d'une taxe vers une commune
-app.post('/api/tax/pay', authenticateToken, async (req, res) => {
-  const {
-    commune_id,
-    taxpayer_name,
-    taxpayer_phone,
-    taxpayer_address,
-    business_number,
-    property_address,
-    tax_type,
-    tax_period,
-    amount,
-    notes
-  } = req.body;
-
-  console.log('=== PAIEMENT TAXE ===');
-  console.log('Commune ID:', commune_id);
-  console.log('Montant:', amount);
-  console.log('User:', req.user.userId);
-
-  try {
-    // Validation
-    if (!commune_id) {
-      return res.status(400).json({ error: 'Veuillez sélectionner une commune' });
-    }
-    if (!taxpayer_name) {
-      return res.status(400).json({ error: 'Nom du contribuable requis' });
-    }
-    if (!taxpayer_phone) {
-      return res.status(400).json({ error: 'Téléphone requis' });
-    }
-    if (!amount || amount < 100) {
-      return res.status(400).json({ error: 'Montant minimum 100 FCFA' });
-    }
-
-    // Récupérer l'utilisateur payeur
-    const payer = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
-    if (!payer) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // Récupérer la commune (destinataire)
-    const commune = await get('SELECT id, phone, commune_name, fullname FROM users WHERE id = ? AND role = "commune"', [commune_id]);
-    if (!commune) {
-      return res.status(404).json({ error: 'Commune non trouvée' });
-    }
-
-    // Calculer les frais (1% pour la plateforme)
-    const fee = Math.floor(amount * 0.01);
-    const totalAmount = amount + fee;
-
-    // Vérifier le solde du payeur
-    const payerWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [payer.id]);
-    if (!payerWallet || payerWallet.balance < totalAmount) {
-      return res.status(400).json({ error: 'Solde insuffisant' });
-    }
-
-    // Générer le reçu
-    const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-    // Effectuer les transferts
-    await run('BEGIN TRANSACTION');
-
-    try {
-      // Débiter le payeur
-      await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, payer.id]);
-
-      // Créditer la commune (montant sans frais)
-      await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, commune.id]);
-
-      // Créditer le wallet principal des frais
-      const mainWallet = await get('SELECT id FROM main_wallet LIMIT 1');
-      if (mainWallet) {
-        await run('UPDATE main_wallet SET balance = balance + ?, total_revenue = total_revenue + ?', [fee, fee]);
-      }
-
-      // Enregistrer la transaction
-      const transactionRef = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      await run(
-        `INSERT INTO transactions (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description)
-                 VALUES (?, ?, ?, ?, ?, ?, 'tax_payment', 'completed', ?)`,
-        [transactionRef, payer.phone, commune.phone, amount, fee, amount, `Paiement de taxe - ${receiptNumber}`]
-      );
-
-      // Créer la table tax_payments si elle n'existe pas
-      await run(`CREATE TABLE IF NOT EXISTS tax_payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                receipt_number TEXT UNIQUE,
-                payer_id INTEGER,
-                commune_id INTEGER,
-                taxpayer_name TEXT,
-                taxpayer_phone TEXT,
-                taxpayer_address TEXT,
-                business_number TEXT,
-                property_address TEXT,
-                tax_type TEXT,
-                tax_period TEXT,
-                amount INTEGER,
-                fee INTEGER,
-                total_amount INTEGER,
-                payment_status TEXT DEFAULT 'paid',
-                alkherpay_transaction_ref TEXT,
-                notes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (payer_id) REFERENCES users(id),
-                FOREIGN KEY (commune_id) REFERENCES users(id)
-            )`);
-
-      // Enregistrer le paiement
-      await run(
-        `INSERT INTO tax_payments (
-                    receipt_number, payer_id, commune_id, taxpayer_name, taxpayer_phone,
-                    taxpayer_address, business_number, property_address, tax_type,
-                    tax_period, amount, fee, total_amount, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          receiptNumber, payer.id, commune.id, taxpayer_name, taxpayer_phone,
-          taxpayer_address || '', business_number || '', property_address || '',
-          tax_type, tax_period || new Date().getFullYear().toString(),
-          amount, fee, totalAmount, notes || ''
-        ]
-      );
-
-      await run('COMMIT');
-
-    } catch (err) {
-      await run('ROLLBACK');
-      throw err;
-    }
-
-    // Notification pour le payeur
-    await run(
-      `INSERT INTO notifications (user_id, title, message, type, link, created_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-      [payer.id, '✅ Paiement de taxe effectué',
-      `Vous avez payé ${amount.toLocaleString()} FCFA pour ${tax_type} à ${commune.commune_name}. Reçu: ${receiptNumber}`,
-        'tax_payment', `/tax-payment?receipt=${receiptNumber}`]
-    );
-
-    // Notification pour la commune
-    await run(
-      `INSERT INTO notifications (user_id, title, message, type, link, created_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-      [commune.id, '💰 Nouveau paiement de taxe reçu',
-      `${payer.fullname} (${payer.phone}) a payé ${amount.toLocaleString()} FCFA pour ${tax_type}`,
-        'tax_received', `/commune/payments`]
-    );
-
-    console.log('✅ Paiement enregistré:', receiptNumber);
-
-    res.json({
-      success: true,
-      receipt: {
-        receipt_number: receiptNumber,
-        taxpayer_name,
-        taxpayer_phone,
-        tax_type,
-        amount,
-        fee,
-        total_amount: totalAmount,
-        commune_name: commune.commune_name,
-        commune_phone: commune.phone,
-        payment_date: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur paiement taxe:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Historique des paiements de taxes de l'utilisateur
-app.get('/api/tax/payments', authenticateToken, async (req, res) => {
-  try {
-    const payments = await query(`
-            SELECT tp.*, u.commune_name, u.phone as commune_phone
-            FROM tax_payments tp
-            LEFT JOIN users u ON tp.commune_id = u.id
-            WHERE tp.payer_id = ?
-            ORDER BY tp.created_at DESC
-            LIMIT 50
-        `, [req.user.userId]);
-
-    res.json(payments || []);
-
-  } catch (error) {
-    console.error('❌ Erreur historique:', error);
-    res.json([]);
-  }
-});
-
-// Récupérer un reçu spécifique
-app.get('/api/tax/receipt/:receipt_number', authenticateToken, async (req, res) => {
-  const { receipt_number } = req.params;
-
-  try {
-    const receipt = await get(`
-            SELECT tp.*, u.commune_name, u.phone as commune_phone, u.commune_address
-            FROM tax_payments tp
-            LEFT JOIN users u ON tp.commune_id = u.id
-            WHERE tp.receipt_number = ? AND tp.payer_id = ?
-        `, [receipt_number, req.user.userId]);
-
-    if (!receipt) {
-      return res.status(404).json({ error: 'Reçu non trouvé' });
-    }
-
-    res.json(receipt);
-
-  } catch (error) {
-    console.error('❌ Erreur reçu:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Récupérer les paiements reçus par une commune
-app.get('/api/commune/payments', authenticateToken, async (req, res) => {
-  // Vérifier que l'utilisateur est une commune
-  const user = await get('SELECT role FROM users WHERE id = ?', [req.user.userId]);
-  if (user.role !== 'commune') {
-    return res.status(403).json({ error: 'Accès réservé aux communes' });
-  }
-
-  try {
-    const payments = await query(`
-            SELECT tp.*, u.fullname as payer_name, u.phone as payer_phone
-            FROM tax_payments tp
-            JOIN users u ON tp.payer_id = u.id
-            WHERE tp.commune_id = ?
-            ORDER BY tp.created_at DESC
-            LIMIT 50
-        `, [req.user.userId]);
-
-    res.json(payments || []);
-
-  } catch (error) {
-    console.error('❌ Erreur paiements reçus:', error);
-    res.json([]);
-  }
-});
-
-// server.js - Route corrigée pour les paiements des communes
-
-// GET - Récupérer les paiements d'une commune (pour la commune connectée)
-app.get('/api/commune/payments', authenticateToken, async (req, res) => {
-  const { status, limit = 100, offset = 0 } = req.query;
-
-  try {
-    console.log('📋 GET /api/commune/payments - User:', req.user.userId, 'Role:', req.user.role);
-
-    // ✅ Vérifier que l'utilisateur est une commune (ou admin)
-    const user = await get('SELECT id, role, phone FROM users WHERE id = ?', [req.user.userId]);
-
-    if (!user) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // ✅ Si admin, récupérer toutes les communes ou une spécifique
-    let communeId = null;
-    let communeName = null;
-
-    if (user.role === 'admin') {
-      // Admin peut voir toutes les communes
-      // On peut filtrer par commune_id si passé en paramètre
-      const { commune_id } = req.query;
-      if (commune_id) {
-        communeId = commune_id;
-        const commune = await get('SELECT id, name FROM communes WHERE id = ?', [communeId]);
-        communeName = commune?.name || null;
-      }
-    } else if (user.role === 'commune') {
-      // ✅ Commune ne voit que ses propres paiements
-      const commune = await get('SELECT id, name FROM communes WHERE phone = ? AND is_active = 1', [user.phone]);
-      if (!commune) {
-        return res.status(404).json({ error: 'Commune non trouvée' });
-      }
-      communeId = commune.id;
-      communeName = commune.name;
-    } else {
-      return res.status(403).json({ error: 'Accès non autorisé' });
-    }
-
-    // Si pas de commune trouvée
-    if (!communeId) {
-      return res.json({
-        success: true,
-        payments: [],
-        stats: {
-          total_amount: 0,
-          total_count: 0,
-          today_amount: 0,
-          month_amount: 0,
-          pending_count: 0
-        }
-      });
-    }
-
-    // ✅ Construire la requête SQL
-    let sql = `
-            SELECT 
-                tp.*,
-                u.fullname as payer_name,
-                u.phone as payer_phone,
-                u.email as payer_email
-            FROM tax_payments tp
-            JOIN users u ON tp.payer_id = u.id
-            WHERE tp.commune_id = ?
-        `;
-    const params = [communeId];
-
-    if (status && status !== 'all') {
-      sql += ' AND tp.status = ?';
-      params.push(status);
-    }
-
-    sql += ' ORDER BY tp.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
-
-    const payments = await query(sql, params);
-
-    // ✅ Statistiques
-    const stats = await get(`
-            SELECT 
-                COALESCE(SUM(amount), 0) as total_amount,
-                COUNT(*) as total_count,
-                COALESCE(SUM(CASE WHEN DATE(created_at) = DATE('now') THEN amount ELSE 0 END), 0) as today_amount,
-                COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN amount ELSE 0 END), 0) as month_amount,
-                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending_count
-            FROM tax_payments
-            WHERE commune_id = ?
-        `, [communeId]);
-
-    console.log(`✅ ${payments.length} paiements trouvés pour la commune ${communeName || communeId}`);
-
-    res.json({
-      success: true,
-      payments: payments || [],
-      commune: {
-        id: communeId,
-        name: communeName
-      },
-      stats: {
-        total_amount: stats?.total_amount || 0,
-        total_count: stats?.total_count || 0,
-        today_amount: stats?.today_amount || 0,
-        month_amount: stats?.month_amount || 0,
-        pending_count: stats?.pending_count || 0
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur récupération paiements commune:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// ============================================
-// DÉMARRAGE DU SERVEUR
-// ============================================
-// ============================================
-// ADMIN: RÉINITIALISATION DE LA CLÉ PRIVÉE
-// ============================================
-
 app.post('/api/admin/users/:id/reset-key', authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
 
@@ -7477,35 +7146,6 @@ app.post('/api/admin/users/:userId/reset-password', authenticateToken, requireAd
     res.status(500).json({ error: error.message });
   }
 });
-// ============================================
-// 
-// ============================================
-// Endpoint de secours pour la compatibilité
-app.get('/api/tax/offices', async (req, res) => {
-  try {
-    const offices = await query(`
-            SELECT id, name, type, description, contact_phone, contact_email
-            FROM service_companies
-            WHERE is_active = 1
-            ORDER BY name ASC
-        `);
-
-    res.json(offices || []);
-  } catch (error) {
-    // Données par défaut
-    res.json([
-      { id: 1, name: 'STE', type: 'water', description: 'Société Tchadienne des Eaux', contact_phone: 'XX XX XX XX' },
-      { id: 2, name: 'ZIZ', type: 'electricity', description: 'Électricité du Tchad', contact_phone: 'XX XX XX XX' }
-    ]);
-  }
-});
-
-//=============================================
-// kyc limits
-//=============================================
-
-// ============================================
-// ROUTES KYC - HISTORIQUE
 // ============================================
 
 // Récupérer l'historique KYC de l'utilisateur
@@ -8266,722 +7906,9 @@ app.get('/api/tax-periods', async (req, res) => {
     ]);
   }
 });
-
-// POST - Paiement d'une taxe
-app.post('/api/tax/pay', authenticateToken, async (req, res) => {
-  const {
-    commune_id,
-    taxpayer_name,
-    taxpayer_phone,
-    taxpayer_email,
-    taxpayer_address,
-    business_number,
-    property_address,
-    tax_type,
-    tax_period,
-    amount,
-    notes
-  } = req.body;
-
-  console.log('💰 Paiement taxe reçu:', { commune_id, taxpayer_name, amount, tax_type });
-
-  try {
-    // Validation
-    if (!commune_id) {
-      return res.status(400).json({ error: 'Veuillez sélectionner une commune' });
-    }
-    if (!taxpayer_name) {
-      return res.status(400).json({ error: 'Nom du contribuable requis' });
-    }
-    if (!taxpayer_phone) {
-      return res.status(400).json({ error: 'Téléphone requis' });
-    }
-    if (!amount || amount < 100) {
-      return res.status(400).json({ error: 'Montant minimum 100 FCFA' });
-    }
-
-    // Récupérer l'utilisateur payeur
-    const payer = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
-    if (!payer) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // Récupérer la commune (destinataire)
-    const commune = await get(`
-            SELECT id, phone, name, address, contact_name 
-            FROM communes 
-            WHERE id = ? AND is_active = 1
-        `, [commune_id]);
-
-    if (!commune) {
-      return res.status(404).json({ error: 'Commune non trouvée' });
-    }
-
-    // Calculer les frais (1% pour la plateforme)
-    const fee = Math.floor(amount * 0.01);
-    const totalAmount = amount + fee;
-
-    // Vérifier le solde du payeur
-    const payerWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [payer.id]);
-    if (!payerWallet || payerWallet.balance < totalAmount) {
-      return res.status(400).json({
-        error: 'Solde insuffisant',
-        balance: payerWallet?.balance || 0,
-        required: totalAmount,
-        missing: totalAmount - (payerWallet?.balance || 0)
-      });
-    }
-
-    // Générer le reçu
-    const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    const transactionRef = `TXN-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-    await run('BEGIN TRANSACTION');
-
-    try {
-      // 1. Débiter le payeur
-      await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, payer.id]);
-
-      // 2. Créditer la commune (montant sans frais)
-      const communeUser = await get('SELECT id FROM users WHERE phone = ?', [commune.phone]);
-      if (communeUser) {
-        await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, communeUser.id]);
-      }
-
-      // 3. Créditer les frais au wallet admin
-      const adminWallet = await get(`
-                SELECT w.id FROM wallets w 
-                JOIN users u ON w.user_id = u.id 
-                WHERE u.role = 'admin' LIMIT 1
-            `);
-      if (adminWallet) {
-        await run('UPDATE wallets SET balance = balance + ? WHERE id = ?', [fee, adminWallet.id]);
-      }
-
-      // 4. Enregistrer la transaction principale
-      await run(`
-                INSERT INTO transactions (
-                    reference, sender_phone, receiver_phone, amount, fee, net_amount,
-                    type, status, description, created_at, completed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'tax_payment', 'completed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `, [
-        transactionRef,
-        payer.phone,
-        commune.phone,
-        amount,
-        fee,
-        amount - fee,
-        `Paiement ${tax_type} - ${receiptNumber}`
-      ]);
-
-      // 5. Enregistrer le paiement de taxe
-      await run(`
-                INSERT INTO tax_payments (
-                    receipt_number, payer_id, commune_id, commune_name, taxpayer_name,
-                    taxpayer_phone, taxpayer_email, taxpayer_address, business_number,
-                    property_address, tax_type, tax_period, amount, fee, total_amount,
-                    transaction_ref, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [
-        receiptNumber, payer.id, commune.id, commune.name, taxpayer_name,
-        taxpayer_phone, taxpayer_email || '', taxpayer_address || '', business_number || '',
-        property_address || '', tax_type, tax_period || '', amount, fee, totalAmount,
-        transactionRef, notes || ''
-      ]);
-
-      await run('COMMIT');
-
-    } catch (err) {
-      await run('ROLLBACK');
-      throw err;
-    }
-
-    // Notification pour le payeur
-    await run(`
-            INSERT INTO notifications (user_id, title, message, type, created_at)
-            VALUES (?, '✅ Paiement de taxe effectué', 
-                    'Vous avez payé ${amount.toLocaleString()} FCFA pour ${tax_type} à ${commune.name}', 
-                    'tax_payment', CURRENT_TIMESTAMP)
-        `, [payer.id]);
-
-    // Notification pour la commune
-    if (communeUser) {
-      await run(`
-                INSERT INTO notifications (user_id, title, message, type, created_at)
-                VALUES (?, '💰 Nouveau paiement de taxe reçu',
-                        '${payer.fullname} (${payer.phone}) a payé ${amount.toLocaleString()} FCFA pour ${tax_type}',
-                        'tax_received', CURRENT_TIMESTAMP)
-            `, [communeUser.id]);
-    }
-
-    console.log('✅ Paiement enregistré:', receiptNumber);
-
-    res.json({
-      success: true,
-      receipt: {
-        receipt_number: receiptNumber,
-        taxpayer_name,
-        taxpayer_phone,
-        tax_type,
-        amount,
-        fee,
-        total_amount: totalAmount,
-        commune_name: commune.name,
-        commune_phone: commune.phone,
-        payment_date: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    await run('ROLLBACK');
-    console.error('❌ Erreur paiement taxe:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET - Historique des paiements de l'utilisateur
-app.get('/api/tax/payments', authenticateToken, async (req, res) => {
-  const { limit = 50, offset = 0 } = req.query;
-
-  try {
-    const payments = await query(`
-            SELECT 
-                tp.*,
-                c.name as commune_name,
-                c.phone as commune_phone,
-                c.address as commune_address
-            FROM tax_payments tp
-            LEFT JOIN communes c ON tp.commune_id = c.id
-            WHERE tp.payer_id = ?
-            ORDER BY tp.created_at DESC
-            LIMIT ? OFFSET ?
-        `, [req.user.userId, parseInt(limit), parseInt(offset)]);
-
-    const total = await get('SELECT COUNT(*) as total FROM tax_payments WHERE payer_id = ?', [req.user.userId]);
-
-    res.json({
-      success: true,
-      payments: payments || [],
-      total: total?.total || 0
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur historique:', error);
-    res.json({ success: true, payments: [] });
-  }
-});
-
-// GET - Récupérer un reçu spécifique
-app.get('/api/tax/receipt/:receipt_number', authenticateToken, async (req, res) => {
-  const { receipt_number } = req.params;
-
-  try {
-    const receipt = await get(`
-            SELECT 
-                tp.*,
-                c.name as commune_name,
-                c.phone as commune_phone,
-                c.address as commune_address
-            FROM tax_payments tp
-            LEFT JOIN communes c ON tp.commune_id = c.id
-            WHERE tp.receipt_number = ? AND tp.payer_id = ?
-        `, [receipt_number, req.user.userId]);
-
-    if (!receipt) {
-      return res.status(404).json({ error: 'Reçu non trouvé' });
-    }
-
-    res.json(receipt);
-
-  } catch (error) {
-    console.error('❌ Erreur reçu:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // ============================================
 // 3. ROUTES - COMMUNES (ADMIN)
 // ============================================
-
-// GET - Récupérer toutes les communes
-app.get('/api/communes', authenticateToken, async (req, res) => {
-  try {
-    const communes = await query(`
-            SELECT 
-                c.*,
-                u.fullname as created_by_name
-            FROM communes c
-            LEFT JOIN users u ON c.created_by = u.id
-            WHERE c.is_active = 1
-            ORDER BY c.name ASC
-        `);
-
-    res.json(communes || []);
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET - Récupérer les communes avec leurs soldes
-app.get('/api/communes/with-balance', authenticateToken, async (req, res) => {
-  try {
-    const communes = await query(`
-            SELECT 
-                c.*,
-                u.id as user_id,
-                u.phone as user_phone,
-                w.balance,
-                COALESCE((
-                    SELECT SUM(amount) FROM tax_payments 
-                    WHERE commune_id = c.id AND status = 'paid'
-                ), 0) as total_collected,
-                COALESCE((
-                    SELECT COUNT(*) FROM tax_payments 
-                    WHERE commune_id = c.id AND status = 'paid'
-                ), 0) as total_payments
-            FROM communes c
-            LEFT JOIN users u ON c.phone = u.phone
-            LEFT JOIN wallets w ON u.id = w.user_id
-            WHERE c.is_active = 1
-            ORDER BY c.name ASC
-        `);
-
-    res.json(communes || []);
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST - Créer une commune (admin)
-app.post('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
-  const { phone, name, address, contact_name, contact_phone, email, password } = req.body;
-
-  console.log('🏛️ Création commune:', { phone, name });
-
-  // Validation
-  if (!phone || !/^\d{8}$/.test(phone)) {
-    return res.status(400).json({ error: 'Le numéro de téléphone doit contenir 8 chiffres' });
-  }
-
-  if (!name) {
-    return res.status(400).json({ error: 'Le nom de la commune est requis' });
-  }
-
-  try {
-    // Vérifier si le numéro existe déjà
-    const existingUser = await get('SELECT id FROM users WHERE phone = ?', [phone]);
-    if (existingUser) {
-      return res.status(400).json({ error: 'Ce numéro de téléphone est déjà utilisé' });
-    }
-
-    // Vérifier si la commune existe déjà
-    const existingCommune = await get('SELECT id FROM communes WHERE phone = ?', [phone]);
-    if (existingCommune) {
-      return res.status(400).json({ error: 'Une commune avec ce numéro existe déjà' });
-    }
-
-    // Générer un mot de passe par défaut
-    const finalPassword = password || Math.floor(1000 + Math.random() * 9000).toString();
-    const hashedPassword = await bcrypt.hash(finalPassword, 10);
-
-    // Générer une clé privée
-    const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
-    const hashedKey = await bcrypt.hash(privateKey, 10);
-
-    await run('BEGIN TRANSACTION');
-
-    try {
-      // 1. Créer l'utilisateur
-      const userResult = await run(`
-                INSERT INTO users (
-                    phone, fullname, password_hash, private_key_6, 
-                    role, is_active, is_verified, created_at
-                ) VALUES (?, ?, ?, ?, 'commune', 1, 1, CURRENT_TIMESTAMP)
-            `, [phone, name, hashedPassword, hashedKey]);
-
-      const userId = userResult.lastID;
-
-      // 2. Créer le wallet
-      await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [userId]);
-
-      // 3. Créer la commune
-      await run(`
-                INSERT INTO communes (
-                    phone, name, address, contact_name, contact_phone, email, 
-                    created_by, is_active, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
-            `, [phone, name, address || '', contact_name || name, contact_phone || phone, email || '', req.user.userId]);
-
-      await run('COMMIT');
-
-      console.log('✅ Commune créée:', { id: userId, phone, name });
-
-      res.status(201).json({
-        success: true,
-        message: 'Commune créée avec succès',
-        commune: {
-          id: userId,
-          phone: phone,
-          name: name,
-          address: address || '',
-          password: finalPassword,
-          private_key: privateKey
-        }
-      });
-
-    } catch (err) {
-      await run('ROLLBACK');
-      throw err;
-    }
-
-  } catch (error) {
-    console.error('❌ Erreur création commune:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// PUT - Modifier une commune (admin)
-app.put('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { name, address, contact_name, contact_phone, email, is_active } = req.body;
-
-  try {
-    // Vérifier si la commune existe
-    const commune = await get('SELECT phone FROM communes WHERE id = ?', [id]);
-    if (!commune) {
-      return res.status(404).json({ error: 'Commune non trouvée' });
-    }
-
-    // Mettre à jour la commune
-    await run(`
-            UPDATE communes 
-            SET name = ?, 
-                address = ?, 
-                contact_name = ?, 
-                contact_phone = ?, 
-                email = ?,
-                is_active = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        `, [name, address || '', contact_name || name, contact_phone || commune.phone, email || '', is_active ? 1 : 0, id]);
-
-    // Mettre à jour l'utilisateur associé
-    const user = await get('SELECT id FROM users WHERE phone = ?', [commune.phone]);
-    if (user) {
-      await run('UPDATE users SET fullname = ?, is_active = ? WHERE id = ?', [name, is_active ? 1 : 0, user.id]);
-    }
-
-    res.json({ success: true, message: 'Commune modifiée avec succès' });
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// DELETE - Supprimer une commune (admin)
-app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    // Soft delete
-    await run('UPDATE communes SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [id]);
-
-    // Désactiver l'utilisateur associé
-    const commune = await get('SELECT phone FROM communes WHERE id = ?', [id]);
-    if (commune) {
-      const user = await get('SELECT id FROM users WHERE phone = ?', [commune.phone]);
-      if (user) {
-        await run('UPDATE users SET is_active = 0 WHERE id = ?', [user.id]);
-      }
-    }
-
-    res.json({ success: true, message: 'Commune désactivée avec succès' });
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// 4. ROUTES - PAIEMENTS REÇUS PAR UNE COMMUNE
-// ============================================
-
-// GET - Récupérer les paiements d'une commune (pour la commune connectée)
-app.get('/api/commune/payments', authenticateToken, async (req, res) => {
-  const { status, limit = 100, offset = 0 } = req.query;
-
-  try {
-    // Vérifier que l'utilisateur est une commune
-    const user = await get('SELECT role, phone FROM users WHERE id = ?', [req.user.userId]);
-    if (user.role !== 'commune') {
-      return res.status(403).json({ error: 'Accès réservé aux communes' });
-    }
-
-    // Récupérer la commune
-    const commune = await get('SELECT id, name FROM communes WHERE phone = ? AND is_active = 1', [user.phone]);
-    if (!commune) {
-      return res.status(404).json({ error: 'Commune non trouvée' });
-    }
-
-    let sql = `
-            SELECT 
-                tp.*,
-                u.fullname as payer_name,
-                u.phone as payer_phone,
-                u.email as payer_email
-            FROM tax_payments tp
-            JOIN users u ON tp.payer_id = u.id
-            WHERE tp.commune_id = ?
-        `;
-    const params = [commune.id];
-
-    if (status && status !== 'all') {
-      sql += ' AND tp.status = ?';
-      params.push(status);
-    }
-
-    sql += ' ORDER BY tp.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
-
-    const payments = await query(sql, params);
-
-    // Statistiques
-    const stats = await get(`
-            SELECT 
-                COALESCE(SUM(amount), 0) as total_amount,
-                COUNT(*) as total_count,
-                COALESCE(SUM(CASE WHEN DATE(created_at) = DATE('now') THEN amount ELSE 0 END), 0) as today_amount,
-                COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN amount ELSE 0 END), 0) as month_amount,
-                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending_count
-            FROM tax_payments
-            WHERE commune_id = ?
-        `, [commune.id]);
-
-    res.json({
-      success: true,
-      payments: payments || [],
-      stats: {
-        total_amount: stats?.total_amount || 0,
-        total_count: stats?.total_count || 0,
-        today_amount: stats?.today_amount || 0,
-        month_amount: stats?.month_amount || 0,
-        pending_count: stats?.pending_count || 0
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur récupération paiements commune:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET - Récupérer les paiements d'une commune spécifique (admin)
-app.get('/api/admin/communes/:id/payments', authenticateToken, requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { status, limit = 50, offset = 0 } = req.query;
-
-  try {
-    let sql = `
-            SELECT 
-                tp.*,
-                u.fullname as payer_name,
-                u.phone as payer_phone
-            FROM tax_payments tp
-            JOIN users u ON tp.payer_id = u.id
-            WHERE tp.commune_id = ?
-        `;
-    const params = [id];
-
-    if (status && status !== 'all') {
-      sql += ' AND tp.status = ?';
-      params.push(status);
-    }
-
-    sql += ' ORDER BY tp.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
-
-    const payments = await query(sql, params);
-
-    // Statistiques
-    const stats = await get(`
-            SELECT 
-                COALESCE(SUM(amount), 0) as total_amount,
-                COUNT(*) as total_count
-            FROM tax_payments
-            WHERE commune_id = ?
-        `, [id]);
-
-    res.json({
-      success: true,
-      payments: payments || [],
-      stats: {
-        total_amount: stats?.total_amount || 0,
-        total_count: stats?.total_count || 0
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// GET - Statistiques d'une commune
-app.get('/api/commune/stats', authenticateToken, async (req, res) => {
-  try {
-    // Vérifier que l'utilisateur est une commune
-    const user = await get('SELECT role, phone FROM users WHERE id = ?', [req.user.userId]);
-    if (user.role !== 'commune') {
-      return res.status(403).json({ error: 'Accès réservé aux communes' });
-    }
-
-    const commune = await get('SELECT id FROM communes WHERE phone = ? AND is_active = 1', [user.phone]);
-    if (!commune) {
-      return res.json({
-        balance: 0,
-        total_payments: 0,
-        total_amount: 0,
-        recent_payments: []
-      });
-    }
-
-    // Récupérer le solde
-    const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [req.user.userId]);
-
-    // Récupérer les paiements reçus
-    const payments = await query(`
-            SELECT 
-                COUNT(*) as total_count,
-                SUM(amount) as total_amount,
-                SUM(fee) as total_fees,
-                DATE(created_at) as payment_date
-            FROM tax_payments
-            WHERE commune_id = ?
-            GROUP BY DATE(created_at)
-            ORDER BY payment_date DESC
-            LIMIT 30
-        `, [commune.id]);
-
-    // Récupérer les derniers paiements
-    const recentPayments = await query(`
-            SELECT 
-                tp.*,
-                u.fullname as payer_name,
-                u.phone as payer_phone
-            FROM tax_payments tp
-            JOIN users u ON tp.payer_id = u.id
-            WHERE tp.commune_id = ?
-            ORDER BY tp.created_at DESC
-            LIMIT 10
-        `, [commune.id]);
-
-    res.json({
-      balance: wallet?.balance || 0,
-      total_payments: payments.reduce((sum, p) => sum + p.total_count, 0),
-      total_amount: payments.reduce((sum, p) => sum + (p.total_amount || 0), 0),
-      total_fees: payments.reduce((sum, p) => sum + (p.total_fees || 0), 0),
-      recent_payments: recentPayments || []
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur stats:', error);
-    res.json({
-      balance: 0,
-      total_payments: 0,
-      total_amount: 0,
-      total_fees: 0,
-      recent_payments: []
-    });
-  }
-});
-
-// GET - Récupérer les statistiques globales des communes (admin)
-app.get('/api/admin/communes/stats', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const stats = await get(`
-            SELECT 
-                COUNT(*) as total_communes,
-                SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_communes,
-                COALESCE((
-                    SELECT SUM(amount) FROM tax_payments WHERE status = 'paid'
-                ), 0) as total_collected,
-                COALESCE((
-                    SELECT COUNT(*) FROM tax_payments WHERE status = 'paid'
-                ), 0) as total_payments,
-                COALESCE((
-                    SELECT SUM(fee) FROM tax_payments WHERE status = 'paid'
-                ), 0) as total_fees
-            FROM communes
-        `);
-
-    // Top communes par collecte
-    const topCommunes = await query(`
-            SELECT 
-                c.id,
-                c.name,
-                c.phone,
-                COALESCE(SUM(tp.amount), 0) as collected
-            FROM communes c
-            LEFT JOIN tax_payments tp ON c.id = tp.commune_id AND tp.status = 'paid'
-            WHERE c.is_active = 1
-            GROUP BY c.id
-            ORDER BY collected DESC
-            LIMIT 10
-        `);
-
-    res.json({
-      success: true,
-      stats: {
-        total_communes: stats?.total_communes || 0,
-        active_communes: stats?.active_communes || 0,
-        total_collected: stats?.total_collected || 0,
-        total_payments: stats?.total_payments || 0,
-        total_fees: stats?.total_fees || 0
-      },
-      top_communes: topCommunes || []
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// 5. ROUTES - TYPES DE TAXES (ADMIN)
-// ============================================
-
-// POST - Créer un type de taxe (admin)
-app.post('/api/admin/tax-types', authenticateToken, requireAdmin, async (req, res) => {
-  const { name, description, rate } = req.body;
-
-  if (!name) {
-    return res.status(400).json({ error: 'Le nom est requis' });
-  }
-
-  try {
-    const result = await run(`
-            INSERT INTO tax_types (name, description, rate, is_active)
-            VALUES (?, ?, ?, 1)
-        `, [name, description || '', rate || 0]);
-
-    res.status(201).json({
-      success: true,
-      message: 'Type de taxe créé',
-      id: result.lastID
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
 
 // ============================================
@@ -10573,41 +9500,6 @@ app.get('/api/company/stats/monthly', authenticateToken, async (req, res) => {
 //  PDF IMPORT ENDPOINT
 //=============================================
 
-// GET - Récupérer les communes (agents)
-app.get('/api/communes', authenticateToken, async (req, res) => {
-  try {
-    const communes = await query(`
-            SELECT u.id, u.phone, u.fullname as name, u.commune_address as address
-            FROM users u
-            WHERE u.role = 'commune' AND u.is_active = 1
-            ORDER BY u.fullname
-        `);
-    res.json(communes || []);
-  } catch (error) {
-    res.json([]);
-  }
-});
-
-// GET - Solde du wallet
-app.get('/api/wallet/balance', authenticateToken, async (req, res) => {
-  try {
-    const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [req.user.userId]);
-    res.json({ balance: wallet?.balance || 0 });
-  } catch (error) {
-    res.json({ balance: 0 });
-  }
-});
-
-
-
-
-//=============================================
-//
-//  FIN DES ENDPOINTS
-// ============================================
-// ROUTES POUR LES SERVICES D'IMPÔTS (COMMUNES)
-// ============================================
-
 // 1. Créer la table des services d'impôts
 async function createTaxOfficesTable() {
   try {
@@ -10636,7 +9528,7 @@ async function createTaxOfficesTable() {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 receipt_number TEXT UNIQUE NOT NULL,
                 payer_id INTEGER NOT NULL,
-                office_id INTEGER NOT NULL,
+                commune_id INTEGER NOT NULL,
                 office_name TEXT NOT NULL,
                 taxpayer_name TEXT NOT NULL,
                 taxpayer_phone TEXT NOT NULL,
@@ -10653,7 +9545,7 @@ async function createTaxOfficesTable() {
                 transaction_ref TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (payer_id) REFERENCES users(id),
-                FOREIGN KEY (office_id) REFERENCES tax_offices(id)
+                FOREIGN KEY (commune_id) REFERENCES tax_offices(id)
             )
         `);
 
@@ -10765,211 +9657,6 @@ app.get('/api/tax-offices', async (req, res) => {
   }
 });
 
-// 3. POST - Paiement d'une taxe
-app.post('/api/tax/pay', authenticateToken, async (req, res) => {
-  const {
-    office_id,
-    taxpayer_name,
-    taxpayer_phone,
-    taxpayer_email,
-    taxpayer_address,
-    business_number,
-    property_address,
-    tax_type,
-    tax_period,
-    amount,
-    notes
-  } = req.body;
-
-  console.log('💰 Paiement taxe reçu:', { office_id, taxpayer_name, amount, tax_type });
-
-  try {
-    // Récupérer le service d'impôts
-    const office = await get(`
-            SELECT toff.*, u.id as agent_user_id, u.phone as agent_phone, u.fullname as agent_name
-            FROM tax_offices toff
-            LEFT JOIN users u ON toff.user_id = u.id
-            WHERE toff.id = ? AND toff.is_active = 1
-        `, [office_id]);
-
-    if (!office) {
-      return res.status(404).json({ error: 'Service d\'impôts non trouvé' });
-    }
-
-    // Récupérer l'utilisateur payeur
-    const payer = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
-
-    // Vérifier le solde
-    const payerWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [payer.id]);
-
-    const fee = Math.floor(amount * 0.01);
-    const totalAmount = amount + fee;
-
-    if (!payerWallet || payerWallet.balance < totalAmount) {
-      return res.status(400).json({ error: 'Solde insuffisant' });
-    }
-
-    // Générer le reçu
-    const receipt_number = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    const transactionRef = `TXN-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-    await run('BEGIN TRANSACTION');
-
-    try {
-      // 1. Débiter le payeur
-      await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, payer.id]);
-
-      // 2. Créditer le service d'impôts
-      if (office.agent_user_id) {
-        await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, office.agent_user_id]);
-      }
-
-      // 3. Créditer les frais au wallet admin
-      const adminWallet = await get(`
-                SELECT w.id FROM wallets w 
-                JOIN users u ON w.user_id = u.id 
-                WHERE u.role = 'admin' LIMIT 1
-            `);
-      if (adminWallet) {
-        await run('UPDATE wallets SET balance = balance + ? WHERE id = ?', [fee, adminWallet.id]);
-      }
-
-      // 4. Enregistrer la transaction principale
-      await run(`
-                INSERT INTO transactions 
-                (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description)
-                VALUES (?, ?, ?, ?, ?, ?, 'tax_payment', 'completed', ?)
-            `, [transactionRef, payer.phone, office.agent_phone, amount, fee, amount, `Paiement ${tax_type} - ${receipt_number}`]);
-
-      // 5. Enregistrer le paiement de taxe
-      await run(`
-                INSERT INTO tax_payments (
-                    receipt_number, payer_id, office_id, office_name, taxpayer_name,
-                    taxpayer_phone, taxpayer_email, taxpayer_address, business_number,
-                    property_address, tax_type, tax_period, amount, fee, total_amount,
-                    transaction_ref
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [
-        receipt_number, payer.id, office.id, office.name, taxpayer_name,
-        taxpayer_phone, taxpayer_email || '', taxpayer_address || '', business_number || '',
-        property_address || '', tax_type, tax_period || '', amount, fee, totalAmount, transactionRef
-      ]);
-
-      await run('COMMIT');
-
-    } catch (err) {
-      await run('ROLLBACK');
-      throw err;
-    }
-
-    // Notification pour le payeur
-    await run(`
-            INSERT INTO notifications (user_id, title, message, type, created_at)
-            VALUES (?, '✅ Paiement effectué', 
-                    'Vous avez payé ${amount.toLocaleString()} FCFA pour ${tax_type}', 
-                    'tax_payment', CURRENT_TIMESTAMP)
-        `, [payer.id]);
-
-    // Notification pour le service d'impôts
-    if (office.agent_user_id) {
-      await run(`
-                INSERT INTO notifications (user_id, title, message, type, metadata, created_at)
-                VALUES (?, '💰 Paiement de taxe reçu', 
-                        '${payer.fullname} a payé ${amount.toLocaleString()} FCFA pour ${tax_type}', 
-                        'tax_received', '${JSON.stringify({ payer: payer.fullname, amount, receipt: receipt_number })}', 
-                        CURRENT_TIMESTAMP)
-            `, [office.agent_user_id]);
-
-      // Envoyer via WebSocket
-      if (io) {
-        io.to(`user_${office.agent_user_id}`).emit('tax-payment', {
-          receipt: receipt_number,
-          taxpayer_name: taxpayer_name,
-          amount: amount,
-          tax_type: tax_type,
-          office: office.name,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      receipt: {
-        receipt_number: receipt_number,
-        office_name: office.name,
-        tax_type: tax_type,
-        taxpayer_name: taxpayer_name,
-        taxpayer_phone: taxpayer_phone,
-        taxpayer_email: taxpayer_email,
-        taxpayer_address: taxpayer_address,
-        business_number: business_number,
-        property_address: property_address,
-        tax_period: tax_period || new Date().getFullYear().toString(),
-        amount: amount,
-        fee: fee,
-        total_amount: totalAmount,
-        payment_date: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    await run('ROLLBACK');
-    console.error('❌ Erreur paiement taxe:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 4. GET - Historique des paiements de taxes de l'utilisateur
-app.get('/api/tax/payments', authenticateToken, async (req, res) => {
-  const { limit = 50, offset = 0 } = req.query;
-
-  try {
-    const payments = await query(`
-            SELECT * FROM tax_payments 
-            WHERE payer_id = ?
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        `, [req.user.userId, parseInt(limit), parseInt(offset)]);
-
-    const total = await get('SELECT COUNT(*) as total FROM tax_payments WHERE payer_id = ?', [req.user.userId]);
-
-    res.json({
-      success: true,
-      payments: payments || [],
-      total: total?.total || 0
-    });
-
-  } catch (error) {
-    console.error('Erreur historique:', error);
-    res.json([]);
-  }
-});
-
-// 5. GET - Récupérer un reçu spécifique
-app.get('/api/tax/receipt/:receipt_number', authenticateToken, async (req, res) => {
-  const { receipt_number } = req.params;
-
-  try {
-    const receipt = await get(`
-            SELECT tp.*, toff.name as office_name, toff.address as office_address
-            FROM tax_payments tp
-            LEFT JOIN tax_offices toff ON tp.office_id = toff.id
-            WHERE tp.receipt_number = ? AND tp.payer_id = ?
-        `, [receipt_number, req.user.userId]);
-
-    if (!receipt) {
-      return res.status(404).json({ error: 'Reçu non trouvé' });
-    }
-
-    res.json(receipt);
-
-  } catch (error) {
-    console.error('Erreur reçu:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // 6. GET - Paiements reçus par un service d'impôts (pour l'agent)
 app.get('/api/tax-office/payments', authenticateToken, async (req, res) => {
   try {
@@ -10985,12 +9672,12 @@ app.get('/api/tax-office/payments', authenticateToken, async (req, res) => {
             SELECT tp.*, u.fullname as payer_name, u.phone as payer_phone
             FROM tax_payments tp
             JOIN users u ON tp.payer_id = u.id
-            WHERE tp.office_id = ?
+            WHERE tp.commune_id = ?
             ORDER BY tp.created_at DESC
             LIMIT 100
         `, [office.id]);
 
-    const total = await get('SELECT SUM(amount) as total_amount, COUNT(*) as count FROM tax_payments WHERE office_id = ?', [office.id]);
+    const total = await get('SELECT SUM(amount) as total_amount, COUNT(*) as count FROM tax_payments WHERE commune_id = ?', [office.id]);
 
     res.json({
       payments: payments || [],
@@ -11003,403 +9690,1040 @@ app.get('/api/tax-office/payments', authenticateToken, async (req, res) => {
     res.json({ payments: [], total_amount: 0, total_count: 0 });
   }
 });
-
-
-//=============================================
-//
-//
-//=============================================
 // ============================================
-// ROUTE - SOLDE DU WALLET DE L'ENTREPRISE
+// COMPANY DASHBOARD - BACKEND ENDPOINTS
 // ============================================
 
-// GET - Récupérer le solde du wallet de l'entreprise
+// ✅ 1. GET - Solde et données de l'entreprise
 app.get('/api/company/wallet/balance', authenticateToken, async (req, res) => {
-  console.log('📊 GET /api/company/wallet/balance - User:', req.user.userId);
-
-  try {
-    // Vérifier si l'utilisateur est un agent (entreprise)
-    const user = await db.get('SELECT id, role, fullname FROM users WHERE id = ?', [req.user.userId]);
-
-    if (!user) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // Si l'utilisateur n'est pas un agent, vérifier s'il a une entreprise associée
-    if (user.role !== 'agent') {
-      // Vérifier si l'utilisateur est associé à une entreprise via service_companies
-      const company = await db.get(`
-                SELECT sc.id, sc.name, sc.user_id 
-                FROM service_companies sc 
-                WHERE sc.user_id = ? AND sc.is_active = 1
-            `, [req.user.userId]);
-
-      if (!company) {
-        // Vérifier dans tax_offices
-        const taxOffice = await db.get(`
-                    SELECT id, name, user_id 
-                    FROM tax_offices 
-                    WHERE user_id = ? AND is_active = 1
-                `, [req.user.userId]);
-
-        if (!taxOffice) {
-          // Vérifier dans travel_agencies
-          const travelAgency = await db.get(`
-                        SELECT id, name, user_id 
-                        FROM travel_agencies 
-                        WHERE user_id = ? AND is_active = 1
-                    `, [req.user.userId]);
-
-          if (!travelAgency) {
-            return res.status(404).json({
-              error: 'Aucune entreprise associée à cet utilisateur'
-            });
-          }
-        }
-      }
-    }
-
-    // Récupérer le solde du wallet
-    const wallet = await db.get(
-      'SELECT balance FROM wallets WHERE user_id = ?',
-      [req.user.userId]
-    );
-
-    if (!wallet) {
-      // Créer un wallet si inexistant
-      await db.run(
-        'INSERT INTO wallets (user_id, balance) VALUES (?, 0)',
-        [req.user.userId]
-      );
-
-      return res.json({
-        balance: 0,
-        currency: 'XAF',
-        fullname: user.fullname
-      });
-    }
-
-    res.json({
-      balance: wallet.balance || 0,
-      currency: 'XAF',
-      fullname: user.fullname
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur récupération solde entreprise:', error);
-    res.status(500).json({
-      error: 'Erreur lors de la récupération du solde',
-      details: error.message
-    });
-  }
-});
-// GET - Solde du wallet de l'entreprise avec détails
-app.get('/api/company/wallet/balance', authenticateToken, async (req, res) => {
-  console.log('📊 GET /api/company/wallet/balance - User:', req.user.userId);
-
-  try {
-    // Récupérer les infos de l'utilisateur
-    const user = await db.get('SELECT id, role, fullname, phone FROM users WHERE id = ?', [req.user.userId]);
-
-    if (!user) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // Récupérer les informations de l'entreprise associée
-    let companyInfo = null;
-
-    // 1. Vérifier dans service_companies (eau/électricité)
-    const serviceCompany = await db.get(`
-            SELECT id, name, type, 'service' as company_type 
-            FROM service_companies 
-            WHERE user_id = ? AND is_active = 1
-        `, [req.user.userId]);
-
-    if (serviceCompany) {
-      companyInfo = serviceCompany;
-    }
-
-    // 2. Si pas trouvé, vérifier dans tax_offices (impôts)
-    if (!companyInfo) {
-      const taxOffice = await db.get(`
-                SELECT id, name, 'tax_office' as company_type 
-                FROM tax_offices 
-                WHERE user_id = ? AND is_active = 1
-            `, [req.user.userId]);
-
-      if (taxOffice) {
-        companyInfo = taxOffice;
-      }
-    }
-
-    // 3. Si pas trouvé, vérifier dans travel_agencies (voyages)
-    if (!companyInfo) {
-      const travelAgency = await db.get(`
-                SELECT id, name, 'travel_agency' as company_type 
-                FROM travel_agencies 
-                WHERE user_id = ? AND is_active = 1
-            `, [req.user.userId]);
-
-      if (travelAgency) {
-        companyInfo = travelAgency;
-      }
-    }
-
-    // Récupérer le solde du wallet
-    const wallet = await db.get(
-      'SELECT balance FROM wallets WHERE user_id = ?',
-      [req.user.userId]
-    );
-
-    // Créer un wallet si inexistant
-    if (!wallet) {
-      await db.run(
-        'INSERT INTO wallets (user_id, balance, created_at) VALUES (?, 0, CURRENT_TIMESTAMP)',
-        [req.user.userId]
-      );
-
-      return res.json({
-        balance: 0,
-        currency: 'XAF',
-        fullname: user.fullname,
-        phone: user.phone,
-        company: companyInfo || null
-      });
-    }
-
-    res.json({
-      balance: wallet.balance || 0,
-      currency: 'XAF',
-      fullname: user.fullname,
-      phone: user.phone,
-      company: companyInfo || null
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur récupération solde entreprise:', error);
-    res.status(500).json({
-      error: 'Erreur lors de la récupération du solde',
-      details: error.message
-    });
-  }
-});
-// ============================================
-// ROUTE - TABLEAU DE BORD DE L'ENTREPRISE
-// ============================================
-
-// GET - Récupérer toutes les données du tableau de bord
-app.get('/api/company/wallet/balance', authenticateToken, async (req, res) => {
-  console.log('📊 GET /api/company/wallet/balance - User:', req.user.userId);
-
-  try {
-    // 1. Récupérer l'utilisateur
-    const user = await db.get(
-      'SELECT id, phone, fullname, role FROM users WHERE id = ?',
-      [req.user.userId]
-    );
-
-    if (!user) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // 2. Récupérer l'entreprise associée
-    let company = await db.get(`
+    const userId = req.user.userId;
+    
+    console.log(`📊 Récupération données entreprise pour user ${userId}`);
+    
+    try {
+        // Récupérer l'entreprise associée à l'utilisateur
+        const company = await get(`
             SELECT 
-                id, 
-                name, 
-                type, 
-                fullName,
-                description,
-                logo,
-                contact_phone,
-                contact_email,
-                address,
-                color,
-                is_active
-            FROM service_companies 
-            WHERE user_id = ? AND is_active = 1
-        `, [req.user.userId]);
-
-    if (!company) {
-      // Vérifier dans tax_offices
-      company = await db.get(`
+                sc.id,
+                sc.name,
+                sc.type,
+                sc.fullName,
+                sc.description,
+                sc.logo,
+                sc.contact_phone,
+                sc.contact_email,
+                sc.address,
+                sc.color,
+                sc.is_active,
+                sc.user_id,
+                sc.created_by,
+                sc.created_at
+            FROM service_companies sc
+            WHERE sc.user_id = ? AND sc.is_active = 1
+            ORDER BY sc.id DESC
+            LIMIT 1
+        `, [userId]);
+        
+        if (!company) {
+            // Essayer avec created_by
+            const companyByCreator = await get(`
                 SELECT 
-                    id, 
-                    name, 
-                    'tax_office' as type,
-                    fullName,
-                    description,
-                    NULL as logo,
-                    phone as contact_phone,
-                    email as contact_email,
-                    address,
-                    NULL as color,
-                    is_active
-                FROM tax_offices 
-                WHERE user_id = ? AND is_active = 1
-            `, [req.user.userId]);
+                    sc.id,
+                    sc.name,
+                    sc.type,
+                    sc.fullName,
+                    sc.description,
+                    sc.logo,
+                    sc.contact_phone,
+                    sc.contact_email,
+                    sc.address,
+                    sc.color,
+                    sc.is_active,
+                    sc.user_id,
+                    sc.created_by,
+                    sc.created_at
+                FROM service_companies sc
+                WHERE sc.created_by = ? AND sc.is_active = 1
+                ORDER BY sc.id DESC
+                LIMIT 1
+            `, [userId]);
+            
+            if (!companyByCreator) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Aucune entreprise associée à votre compte'
+                });
+            }
+            
+            return await getCompanyData(companyByCreator, userId, res);
+        }
+        
+        return await getCompanyData(company, userId, res);
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
     }
+});
 
-    if (!company) {
-      // Vérifier dans travel_agencies
-      company = await db.get(`
+// ✅ Fonction utilitaire pour récupérer les données de l'entreprise
+async function getCompanyData(company, userId, res) {
+    try {
+        // Récupérer le wallet de l'entreprise (via l'utilisateur associé)
+        let wallet = await get(`
+            SELECT id, user_id, balance, bonus_balance, currency, created_at
+            FROM wallets 
+            WHERE user_id = ?
+        `, [company.user_id || company.created_by]);
+        
+        // Si pas de wallet, en créer un
+        if (!wallet) {
+            const walletUserId = company.user_id || company.created_by;
+            await run(`
+                INSERT INTO wallets (user_id, balance, currency)
+                VALUES (?, 0, 'XAF')
+            `, [walletUserId]);
+            
+            wallet = await get(`
+                SELECT id, user_id, balance, bonus_balance, currency, created_at
+                FROM wallets 
+                WHERE user_id = ?
+            `, [walletUserId]);
+        }
+        
+        // Récupérer les statistiques des paiements
+        const statistics = await get(`
+            SELECT 
+                COUNT(*) as total_payments,
+                COUNT(DISTINCT customer_phone) as total_clients,
+                COALESCE(SUM(amount), 0) as total_received,
+                COALESCE(SUM(fee), 0) as total_fees,
+                COALESCE(SUM(amount), 0) - COALESCE(SUM(fee), 0) as total_net
+            FROM bill_payments 
+            WHERE company_id = ? AND status = 'completed'
+        `, [company.id]);
+        
+        // Récupérer les derniers paiements
+        const recent_payments = await query(`
+            SELECT 
+                id,
+                receipt_number,
+                customer_name,
+                customer_phone,
+                customer_email,
+                customer_address,
+                meter_number,
+                account_number,
+                amount,
+                fee,
+                total_amount,
+                period,
+                invoice_number,
+                service_type,
+                status,
+                transaction_ref,
+                created_at,
+                (amount - COALESCE(fee, 0)) as amount_to_company
+            FROM bill_payments 
+            WHERE company_id = ? AND status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 50
+        `, [company.id]);
+        
+        res.json({
+            success: true,
+            company: {
+                id: company.id,
+                name: company.name,
+                type: company.type,
+                fullName: company.fullName,
+                description: company.description,
+                logo: company.logo,
+                contact_phone: company.contact_phone,
+                contact_email: company.contact_email,
+                address: company.address,
+                color: company.color,
+                is_active: company.is_active,
+                created_at: company.created_at
+            },
+            wallet: {
+                id: wallet?.id,
+                balance: wallet?.balance || 0,
+                bonus_balance: wallet?.bonus_balance || 0,
+                currency: wallet?.currency || 'XAF'
+            },
+            statistics: {
+                total_payments: statistics?.total_payments || 0,
+                total_clients: statistics?.total_clients || 0,
+                total_received: statistics?.total_received || 0,
+                total_fees: statistics?.total_fees || 0,
+                total_net: statistics?.total_net || 0
+            },
+            recent_payments: recent_payments || []
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur getCompanyData:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+}
+
+// ✅ 2. POST - Rechercher un compteur
+app.post('/api/bill-payments/search-meter', authenticateToken, async (req, res) => {
+    const { meter_number, company_id } = req.body;
+    const userId = req.user.userId;
+    
+    console.log(`🔍 Recherche compteur: ${meter_number}`);
+    
+    try {
+        if (!meter_number) {
+            return res.status(400).json({
+                success: false,
+                error: 'Numéro de compteur requis'
+            });
+        }
+        
+        // Vérifier que l'utilisateur est associé à l'entreprise
+        const company = await get(`
+            SELECT id, name, type FROM service_companies 
+            WHERE (id = ? OR user_id = ?) AND is_active = 1
+        `, [company_id, userId]);
+        
+        if (!company) {
+            return res.status(403).json({
+                success: false,
+                error: 'Entreprise non trouvée ou accès non autorisé'
+            });
+        }
+        
+        // Rechercher le compteur dans la table des compteurs (si elle existe)
+        let meterInfo = null;
+        
+        try {
+            meterInfo = await get(`
                 SELECT 
-                    id, 
-                    name, 
-                    'travel_agency' as type,
-                    description,
-                    NULL as logo,
-                    phone as contact_phone,
-                    email as contact_email,
-                    address,
-                    NULL as color,
-                    is_active
-                FROM travel_agencies 
-                WHERE user_id = ? AND is_active = 1
-            `, [req.user.userId]);
-    }
-
-    if (!company) {
-      return res.status(404).json({
-        error: 'Aucune entreprise associée à cet utilisateur'
-      });
-    }
-
-    // 3. Récupérer le solde du wallet
-    let wallet = await db.get(
-      'SELECT balance FROM wallets WHERE user_id = ?',
-      [req.user.userId]
-    );
-
-    if (!wallet) {
-      await db.run(
-        'INSERT INTO wallets (user_id, balance) VALUES (?, 0)',
-        [req.user.userId]
-      );
-      wallet = { balance: 0 };
-    }
-
-    // 4. Récupérer les statistiques
-    let statistics = {
-      total_received: 0,
-      total_payments: 0,
-      total_fees: 0
-    };
-
-    // Pour les services d'eau/électricité
-    if (company.type === 'water' || company.type === 'electricity') {
-      const stats = await db.get(`
-                SELECT 
-                    COALESCE(SUM(amount), 0) as total_received,
-                    COUNT(*) as total_payments,
-                    COALESCE(SUM(fee), 0) as total_fees
-                FROM bill_payments
-                WHERE company_id = ? AND status = 'completed'
-            `, [company.id]);
-
-      if (stats) {
-        statistics = stats;
-      }
-    }
-
-    // Pour les offices de taxe
-    if (company.type === 'tax_office') {
-      const stats = await db.get(`
-                SELECT 
-                    COALESCE(SUM(amount), 0) as total_received,
-                    COUNT(*) as total_payments,
-                    COALESCE(SUM(fee), 0) as total_fees
-                FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
-            `, [company.id]);
-
-      if (stats) {
-        statistics = stats;
-      }
-    }
-
-    // 5. Récupérer les derniers paiements
-    let recent_payments = [];
-
-    // Pour les services d'eau/électricité
-    if (company.type === 'water' || company.type === 'electricity') {
-      recent_payments = await db.query(`
-                SELECT 
-                    receipt_number,
+                    id,
+                    meter_number,
                     customer_name,
                     customer_phone,
-                    amount,
-                    fee,
-                    amount - fee as amount_to_company,
-                    created_at,
+                    customer_email,
+                    address,
+                    outstanding_amount,
+                    period,
+                    last_payment_date,
                     status
-                FROM bill_payments
-                WHERE company_id = ? AND status = 'completed'
-                ORDER BY created_at DESC
-                LIMIT 10
-            `, [company.id]);
-    }
-
-    // Pour les offices de taxe
-    if (company.type === 'tax_office') {
-      recent_payments = await db.query(`
+                FROM meters 
+                WHERE meter_number = ? AND company_id = ?
+            `, [meter_number, company.id]);
+        } catch (err) {
+            // Table meters n'existe pas, utiliser une autre source
+            console.log('ℹ️ Table meters non trouvée');
+        }
+        
+        // Si pas trouvé dans meters, chercher dans bill_payments
+        if (!meterInfo) {
+            meterInfo = await get(`
                 SELECT 
-                    receipt_number,
-                    taxpayer_name as customer_name,
-                    taxpayer_phone as customer_phone,
-                    amount,
-                    fee,
-                    amount - fee as amount_to_company,
-                    created_at,
-                    status
-                FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                    meter_number,
+                    customer_name,
+                    customer_phone,
+                    customer_email,
+                    customer_address as address,
+                    amount as outstanding_amount,
+                    period,
+                    created_at as last_payment_date,
+                    'pending' as status
+                FROM bill_payments 
+                WHERE meter_number = ? AND company_id = ?
                 ORDER BY created_at DESC
-                LIMIT 10
-            `, [company.id]);
+                LIMIT 1
+            `, [meter_number, company.id]);
+        }
+        
+        if (!meterInfo) {
+            // Retourner des données vides pour permettre la saisie manuelle
+            return res.json({
+                success: true,
+                data: {
+                    meter_number: meter_number,
+                    customer_name: '',
+                    customer_phone: '',
+                    customer_email: '',
+                    address: '',
+                    outstanding_amount: 0,
+                    period: '',
+                    status: 'new'
+                },
+                message: 'Nouveau compteur - saisie manuelle'
+            });
+        }
+        
+        console.log('✅ Compteur trouvé:', meterInfo);
+        
+        res.json({
+            success: true,
+            data: {
+                meter_number: meterInfo.meter_number,
+                customer_name: meterInfo.customer_name || '',
+                customer_phone: meterInfo.customer_phone || '',
+                customer_email: meterInfo.customer_email || '',
+                address: meterInfo.address || '',
+                outstanding_amount: meterInfo.outstanding_amount || 0,
+                period: meterInfo.period || '',
+                status: meterInfo.status || 'active'
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur recherche compteur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
     }
+});
 
-    // 6. Construire la réponse
-    const responseData = {
-      company: {
-        id: company.id,
-        name: company.name,
-        type: company.type,
-        fullName: company.fullName || company.name,
-        description: company.description || '',
-        logo: company.logo || (company.type === 'water' ? '💧' : company.type === 'electricity' ? '⚡' : '🏢'),
-        contact_phone: company.contact_phone || user.phone,
-        contact_email: company.contact_email || '',
-        address: company.address || '',
-        color: company.color || '#DAA520',
-        is_active: company.is_active
-      },
-      wallet: {
-        balance: wallet.balance || 0,
-        currency: 'XAF'
-      },
-      statistics: {
-        total_received: statistics.total_received || 0,
-        total_payments: statistics.total_payments || 0,
-        total_fees: statistics.total_fees || 0
-      },
-      recent_payments: recent_payments || [],
-      user: {
-        phone: user.phone,
-        fullname: user.fullname
-      }
-    };
+// ✅ 3. POST - Effectuer un paiement de facture
+app.post('/api/bill-payment', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const {
+        company_id,
+        customer_name,
+        customer_phone,
+        customer_email,
+        customer_address,
+        meter_number,
+        account_number,
+        amount,
+        period,
+        invoice_number
+    } = req.body;
+    
+    console.log(`💰 Paiement facture: ${amount} FCFA pour ${customer_name}`);
+    
+    let transactionActive = false;
+    
+    try {
+        // Validation
+        if (!company_id || !customer_name || !customer_phone || !amount || !meter_number) {
+            return res.status(400).json({
+                success: false,
+                error: 'Données de paiement incomplètes'
+            });
+        }
+        
+        const amountNum = parseInt(amount);
+        if (amountNum < 100) {
+            return res.status(400).json({
+                success: false,
+                error: 'Montant minimum 100 FCFA'
+            });
+        }
+        
+        // Vérifier l'entreprise
+        const company = await get(`
+            SELECT id, name, type, user_id, created_by 
+            FROM service_companies 
+            WHERE id = ? AND is_active = 1
+        `, [company_id]);
+        
+        if (!company) {
+            return res.status(404).json({
+                success: false,
+                error: 'Entreprise non trouvée'
+            });
+        }
+        
+        // Vérifier que l'utilisateur est associé
+        if (company.user_id !== userId && company.created_by !== userId) {
+            return res.status(403).json({
+                success: false,
+                error: 'Vous n\'êtes pas autorisé à effectuer des paiements pour cette entreprise'
+            });
+        }
+        
+        // Générer le numéro de reçu
+        const receiptNumber = `RCP${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        
+        // Calculer les frais (1.5%)
+        const fee = Math.round(amountNum * 0.015);
+        const amountToCompany = amountNum - fee;
+        const totalAmount = amountNum;
+        
+        // Démarrer la transaction
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+        
+        // 1. Enregistrer le paiement
+        const result = await run(`
+            INSERT INTO bill_payments (
+                receipt_number,
+                payer_id,
+                company_id,
+                company_name,
+                customer_name,
+                customer_phone,
+                customer_email,
+                customer_address,
+                meter_number,
+                account_number,
+                amount,
+                fee,
+                total_amount,
+                period,
+                invoice_number,
+                service_type,
+                status,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', CURRENT_TIMESTAMP)
+        `, [
+            receiptNumber,
+            userId,
+            company.id,
+            company.name,
+            customer_name,
+            customer_phone,
+            customer_email || '',
+            customer_address || '',
+            meter_number,
+            account_number || '',
+            amountNum,
+            fee,
+            totalAmount,
+            period || '',
+            invoice_number || '',
+            company.type || 'water'
+        ]);
+        
+        const paymentId = result.lastID;
+        
+        // 2. Créditer le wallet de l'entreprise
+        const companyWalletUserId = company.user_id || company.created_by;
+        
+        // Vérifier si le wallet existe
+        let companyWallet = await get(`
+            SELECT id, balance FROM wallets WHERE user_id = ?
+        `, [companyWalletUserId]);
+        
+        if (!companyWallet) {
+            await run(`
+                INSERT INTO wallets (user_id, balance, currency)
+                VALUES (?, 0, 'XAF')
+            `, [companyWalletUserId]);
+            
+            companyWallet = await get(`
+                SELECT id, balance FROM wallets WHERE user_id = ?
+            `, [companyWalletUserId]);
+        }
+        
+        // Créditer le montant net
+        await run(`
+            UPDATE wallets 
+            SET balance = balance + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [amountToCompany, companyWalletUserId]);
+        
+        // 3. Enregistrer la transaction
+        await run(`
+            INSERT INTO transactions (
+                reference,
+                sender_phone,
+                receiver_phone,
+                amount,
+                fee,
+                net_amount,
+                type,
+                status,
+                description,
+                created_at,
+                completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'bill_payment', 'completed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `, [
+            receiptNumber,
+            customer_phone,
+            company.contact_phone || '',
+            amountNum,
+            fee,
+            amountToCompany,
+            `Paiement facture ${company.name} - ${customer_name}`
+        ]);
+        
+        // Valider la transaction
+        await run('COMMIT');
+        transactionActive = false;
+        
+        console.log(`✅ Paiement enregistré: ${receiptNumber}`);
+        
+        // Notification à l'entreprise
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '💰 Nouveau paiement reçu', 
+                    'Paiement de ' || ? || ' FCFA de ' || ? || ' - Reçu: ' || ?,
+                    'success', CURRENT_TIMESTAMP)
+        `, [companyWalletUserId, amountNum, customer_name, receiptNumber]);
+        
+        res.json({
+            success: true,
+            message: 'Paiement effectué avec succès',
+            data: {
+                payment_id: paymentId,
+                receipt_number: receiptNumber,
+                amount: amountNum,
+                fee: fee,
+                amount_to_company: amountToCompany,
+                customer_name: customer_name,
+                customer_phone: customer_phone,
+                company_name: company.name,
+                created_at: new Date().toISOString()
+            }
+        });
+        
+    } catch (error) {
+        if (transactionActive) {
+            try {
+                await run('ROLLBACK');
+                console.log('✅ Rollback effectué');
+            } catch (rollbackError) {
+                console.error('❌ Erreur rollback:', rollbackError);
+            }
+        }
+        console.error('❌ Erreur paiement:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
 
-    console.log(`✅ Données chargées pour ${company.name}`);
-    res.json(responseData);
+// ✅ 4. POST - Transfert depuis le wallet de l'entreprise
+app.post('/api/company/transfer', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { to_phone, amount, description } = req.body;
+    
+    console.log(`💸 Transfert entreprise: ${amount} FCFA vers ${to_phone}`);
+    
+    let transactionActive = false;
+    
+    try {
+        // Validation
+        if (!to_phone || !amount) {
+            return res.status(400).json({
+                success: false,
+                error: 'Téléphone et montant requis'
+            });
+        }
+        
+        const amountNum = parseInt(amount);
+        if (amountNum < 100) {
+            return res.status(400).json({
+                success: false,
+                error: 'Montant minimum 100 FCFA'
+            });
+        }
+        
+        // Récupérer l'entreprise de l'utilisateur
+        const company = await get(`
+            SELECT id, name, user_id, created_by 
+            FROM service_companies 
+            WHERE (user_id = ? OR created_by = ?) AND is_active = 1
+            ORDER BY id DESC LIMIT 1
+        `, [userId, userId]);
+        
+        if (!company) {
+            return res.status(404).json({
+                success: false,
+                error: 'Aucune entreprise associée'
+            });
+        }
+        
+        // Récupérer le wallet de l'entreprise
+        const companyWalletUserId = company.user_id || company.created_by;
+        const companyWallet = await get(`
+            SELECT id, user_id, balance FROM wallets WHERE user_id = ?
+        `, [companyWalletUserId]);
+        
+        if (!companyWallet) {
+            return res.status(404).json({
+                success: false,
+                error: 'Wallet entreprise non trouvé'
+            });
+        }
+        
+        if (companyWallet.balance < amountNum) {
+            return res.status(400).json({
+                success: false,
+                error: 'Solde insuffisant'
+            });
+        }
+        
+        // Récupérer le destinataire
+        const receiver = await get(`
+            SELECT id, phone, fullname FROM users WHERE phone = ?
+        `, [to_phone]);
+        
+        if (!receiver) {
+            return res.status(404).json({
+                success: false,
+                error: 'Destinataire non trouvé'
+            });
+        }
+        
+        if (receiver.id === companyWalletUserId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Impossible de transférer vers vous-même'
+            });
+        }
+        
+        // Récupérer ou créer le wallet du destinataire
+        let receiverWallet = await get(`
+            SELECT id, user_id, balance FROM wallets WHERE user_id = ?
+        `, [receiver.id]);
+        
+        if (!receiverWallet) {
+            await run(`
+                INSERT INTO wallets (user_id, balance, currency)
+                VALUES (?, 0, 'XAF')
+            `, [receiver.id]);
+            
+            receiverWallet = await get(`
+                SELECT id, user_id, balance FROM wallets WHERE user_id = ?
+            `, [receiver.id]);
+        }
+        
+        // Générer la référence
+        const reference = `TRF${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        
+        // Démarrer la transaction
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+        
+        // Débiter le wallet de l'entreprise
+        await run(`
+            UPDATE wallets 
+            SET balance = balance - ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [amountNum, companyWalletUserId]);
+        
+        // Créditer le destinataire
+        await run(`
+            UPDATE wallets 
+            SET balance = balance + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [amountNum, receiver.id]);
+        
+        // Enregistrer la transaction
+        await run(`
+            INSERT INTO transactions (
+                reference,
+                sender_phone,
+                receiver_phone,
+                amount,
+                fee,
+                net_amount,
+                type,
+                status,
+                description,
+                created_at,
+                completed_at
+            ) VALUES (?, ?, ?, ?, 0, ?, 'transfer', 'completed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `, [
+            reference,
+            (await get('SELECT phone FROM users WHERE id = ?', [companyWalletUserId]))?.phone || '',
+            to_phone,
+            amountNum,
+            amountNum,
+            description || `Transfert depuis ${company.name}`
+        ]);
+        
+        await run('COMMIT');
+        transactionActive = false;
+        
+        console.log(`✅ Transfert effectué: ${reference}`);
+        
+        // Notifications
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '💸 Transfert envoyé', 
+                    'Vous avez transféré ' || ? || ' FCFA à ' || ?,
+                    'success', CURRENT_TIMESTAMP)
+        `, [companyWalletUserId, amountNum, receiver.fullname]);
+        
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '💰 Fonds reçus', 
+                    'Vous avez reçu ' || ? || ' FCFA de ' || ?,
+                    'success', CURRENT_TIMESTAMP)
+        `, [receiver.id, amountNum, company.name]);
+        
+        res.json({
+            success: true,
+            message: 'Transfert effectué avec succès',
+            data: {
+                reference: reference,
+                amount: amountNum,
+                to_phone: to_phone,
+                receiver_name: receiver.fullname,
+                company_name: company.name
+            }
+        });
+        
+    } catch (error) {
+        if (transactionActive) {
+            try {
+                await run('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('❌ Erreur rollback:', rollbackError);
+            }
+        }
+        console.error('❌ Erreur transfert:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
 
-  } catch (error) {
-    console.error('❌ Erreur récupération données:', error);
-    res.status(500).json({
-      error: 'Erreur lors de la récupération des données',
-      details: error.message
-    });
-  }
+// ✅ 5. GET - Historique des paiements de l'entreprise
+app.get('/api/company/payments', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { limit = 50, offset = 0, start_date, end_date, search } = req.query;
+    
+    try {
+        // Récupérer l'entreprise
+        const company = await get(`
+            SELECT id, name FROM service_companies 
+            WHERE (user_id = ? OR created_by = ?) AND is_active = 1
+            ORDER BY id DESC LIMIT 1
+        `, [userId, userId]);
+        
+        if (!company) {
+            return res.status(404).json({
+                success: false,
+                error: 'Aucune entreprise associée'
+            });
+        }
+        
+        let sql = `
+            SELECT 
+                id,
+                receipt_number,
+                customer_name,
+                customer_phone,
+                customer_email,
+                meter_number,
+                amount,
+                fee,
+                total_amount,
+                period,
+                invoice_number,
+                status,
+                created_at,
+                (amount - COALESCE(fee, 0)) as amount_to_company
+            FROM bill_payments 
+            WHERE company_id = ?
+        `;
+        const params = [company.id];
+        
+        if (start_date) {
+            sql += ' AND DATE(created_at) >= DATE(?)';
+            params.push(start_date);
+        }
+        
+        if (end_date) {
+            sql += ' AND DATE(created_at) <= DATE(?)';
+            params.push(end_date);
+        }
+        
+        if (search) {
+            sql += ' AND (customer_name LIKE ? OR customer_phone LIKE ? OR receipt_number LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        }
+        
+        sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const payments = await query(sql, params);
+        
+        // Compter le total
+        const total = await get(`
+            SELECT COUNT(*) as count FROM bill_payments WHERE company_id = ?
+        `, [company.id]);
+        
+        res.json({
+            success: true,
+            data: payments || [],
+            total: total?.count || 0,
+            company: company.name
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: []
+        });
+    }
+});
+
+// ✅ 6. GET - Statistiques de l'entreprise
+app.get('/api/company/statistics', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { period = 'month' } = req.query;
+    
+    try {
+        const company = await get(`
+            SELECT id, name FROM service_companies 
+            WHERE (user_id = ? OR created_by = ?) AND is_active = 1
+            ORDER BY id DESC LIMIT 1
+        `, [userId, userId]);
+        
+        if (!company) {
+            return res.status(404).json({
+                success: false,
+                error: 'Aucune entreprise associée'
+            });
+        }
+        
+        let dateFilter = '';
+        switch(period) {
+            case 'today':
+                dateFilter = "AND DATE(created_at) = DATE('now')";
+                break;
+            case 'week':
+                dateFilter = "AND created_at >= DATE('now', '-7 days')";
+                break;
+            case 'month':
+                dateFilter = "AND created_at >= DATE('now', '-30 days')";
+                break;
+            case 'year':
+                dateFilter = "AND created_at >= DATE('now', '-365 days')";
+                break;
+            default:
+                break;
+        }
+        
+        // Statistiques générales
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_payments,
+                COUNT(DISTINCT customer_phone) as total_clients,
+                COALESCE(SUM(amount), 0) as total_received,
+                COALESCE(SUM(fee), 0) as total_fees,
+                COALESCE(AVG(amount), 0) as average_payment,
+                COALESCE(MAX(amount), 0) as max_payment,
+                COALESCE(MIN(amount), 0) as min_payment
+            FROM bill_payments 
+            WHERE company_id = ? ${dateFilter}
+        `, [company.id]);
+        
+        // Statistiques par jour (7 derniers jours)
+        const dailyStats = await query(`
+            SELECT 
+                DATE(created_at) as date,
+                COUNT(*) as count,
+                COALESCE(SUM(amount), 0) as amount
+            FROM bill_payments 
+            WHERE company_id = ? 
+                AND created_at >= DATE('now', '-7 days')
+            GROUP BY DATE(created_at)
+            ORDER BY date ASC
+        `, [company.id]);
+        
+        res.json({
+            success: true,
+            data: {
+                period: period,
+                total_payments: stats?.total_payments || 0,
+                total_clients: stats?.total_clients || 0,
+                total_received: stats?.total_received || 0,
+                total_fees: stats?.total_fees || 0,
+                average_payment: Math.round(stats?.average_payment || 0),
+                max_payment: stats?.max_payment || 0,
+                min_payment: stats?.min_payment || 0,
+                daily_stats: dailyStats || []
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ✅ 7. GET - Détails d'un paiement
+app.get('/api/bill-payments/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.userId;
+    
+    try {
+        const payment = await get(`
+            SELECT 
+                bp.*,
+                sc.name as company_name,
+                sc.type as company_type
+            FROM bill_payments bp
+            LEFT JOIN service_companies sc ON bp.company_id = sc.id
+            WHERE bp.id = ? AND (sc.user_id = ? OR sc.created_by = ?)
+        `, [id, userId, userId]);
+        
+        if (!payment) {
+            return res.status(404).json({
+                success: false,
+                error: 'Paiement non trouvé'
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: {
+                ...payment,
+                amount_to_company: (payment.amount || 0) - (payment.fee || 0)
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ✅ 8. GET - Reçu d'un paiement
+app.get('/api/bill-payments/:id/receipt', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.userId;
+    
+    try {
+        const payment = await get(`
+            SELECT 
+                bp.*,
+                sc.name as company_name,
+                sc.contact_phone as company_phone,
+                sc.address as company_address,
+                sc.logo as company_logo
+            FROM bill_payments bp
+            LEFT JOIN service_companies sc ON bp.company_id = sc.id
+            WHERE bp.id = ? AND (bp.payer_id = ? OR sc.user_id = ? OR sc.created_by = ?)
+        `, [id, userId, userId, userId]);
+        
+        if (!payment) {
+            return res.status(404).json({
+                success: false,
+                error: 'Paiement non trouvé'
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: {
+                receipt_number: payment.receipt_number,
+                company: {
+                    name: payment.company_name,
+                    phone: payment.company_phone,
+                    address: payment.company_address,
+                    logo: payment.company_logo
+                },
+                customer: {
+                    name: payment.customer_name,
+                    phone: payment.customer_phone,
+                    email: payment.customer_email,
+                    address: payment.customer_address
+                },
+                payment: {
+                    amount: payment.amount,
+                    fee: payment.fee,
+                    total: payment.total_amount,
+                    meter_number: payment.meter_number,
+                    period: payment.period,
+                    invoice_number: payment.invoice_number,
+                    date: payment.created_at
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ✅ 9. GET - Notifications de l'entreprise
+app.get('/api/company/notifications', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        const notifications = await query(`
+            SELECT * FROM notifications 
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 50
+        `, [userId]);
+        
+        // Compter les non lues
+        const unread = await get(`
+            SELECT COUNT(*) as count FROM notifications 
+            WHERE user_id = ? AND is_read = 0
+        `, [userId]);
+        
+        res.json({
+            success: true,
+            data: notifications || [],
+            unread_count: unread?.count || 0
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: []
+        });
+    }
+});
+
+// ✅ 10. PUT - Marquer une notification comme lue
+app.put('/api/company/notifications/:id/read', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user.userId;
+    
+    try {
+        await run(`
+            UPDATE notifications 
+            SET is_read = 1, read_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND user_id = ?
+        `, [id, userId]);
+        
+        res.json({
+            success: true,
+            message: 'Notification marquée comme lue'
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 // ============================================
 // ROUTE - TRANSFERT DEPUIS L'ENTREPRISE
@@ -11754,7 +11078,7 @@ app.get('/api/company/payments', authenticateToken, async (req, res) => {
                     COALESCE(SUM(CASE WHEN DATE(created_at) = ? THEN amount ELSE 0 END), 0) as today_amount,
                     COALESCE(SUM(CASE WHEN DATE(created_at) >= ? THEN amount ELSE 0 END), 0) as this_month_amount
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
             `, [today, firstDayOfMonth, companyId]);
 
       payments = await query(`
@@ -11778,7 +11102,7 @@ app.get('/api/company/payments', authenticateToken, async (req, res) => {
                     u.phone as payer_phone
                 FROM tax_payments tp
                 LEFT JOIN users u ON tp.payer_id = u.id
-                WHERE tp.office_id = ? AND tp.status = 'completed'
+                WHERE tp.commune_id = ? AND tp.status = 'completed'
                 ORDER BY tp.created_at DESC
                 LIMIT ? OFFSET ?
             `, [companyId, parseInt(limit), parseInt(offset)]);
@@ -11923,7 +11247,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COALESCE(SUM(amount), 0) as total_amount,
                     COALESCE(AVG(amount), 0) as average_amount
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
             `, [companyId]);
 
       monthlyStats = await query(`
@@ -11932,7 +11256,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COUNT(*) as count,
                     COALESCE(SUM(amount), 0) as total
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
                 GROUP BY strftime('%Y-%m', created_at)
                 ORDER BY month DESC
                 LIMIT 12
@@ -12164,233 +11488,6 @@ app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (re
     res.status(500).json({ error: error.message });
   }
 });
-
-// Récupérer la liste des communes pour les paiements
-app.get('/api/communes', authenticateToken, async (req, res) => {
-  try {
-    const communes = await query(`
-            SELECT 
-                id, 
-                phone, 
-                commune_name as name, 
-                commune_address as address,
-                email
-            FROM users 
-            WHERE role = 'commune' AND is_active = 1
-            ORDER BY commune_name
-        `);
-
-    res.json(communes || []);
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Récupérer les statistiques d'une commune
-app.get('/api/commune/stats', authenticateToken, async (req, res) => {
-  // Vérifier que l'utilisateur est une commune
-  const user = await get('SELECT role FROM users WHERE id = ?', [req.user.userId]);
-  if (user.role !== 'commune') {
-    return res.status(403).json({ error: 'Accès réservé aux communes' });
-  }
-
-  try {
-    // Récupérer le solde du wallet
-    const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [req.user.userId]);
-
-    // Récupérer les paiements reçus
-    const payments = await query(`
-            SELECT 
-                COUNT(*) as total_count,
-                SUM(amount) as total_amount,
-                SUM(fee) as total_fees,
-                DATE(created_at) as payment_date
-            FROM tax_payments
-            WHERE commune_id = ?
-            GROUP BY DATE(created_at)
-            ORDER BY payment_date DESC
-            LIMIT 30
-        `, [req.user.userId]);
-
-    res.json({
-      balance: wallet?.balance || 0,
-      total_payments: payments.reduce((sum, p) => sum + p.total_count, 0),
-      total_amount: payments.reduce((sum, p) => sum + (p.total_amount || 0), 0),
-      recent_payments: payments.slice(0, 10)
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur stats:', error);
-    res.json({ balance: 0, total_payments: 0, total_amount: 0 });
-  }
-});
-
-// ============================================
-// ROUTES POUR LES ENTREPRISES (AGENTS) - PAIEMENTS REÇUS
-// ============================================
-
-// GET - Paiements reçus par l'entreprise
-app.get('/api/company/payments', authenticateToken, async (req, res) => {
-  const { limit = 100, offset = 0 } = req.query;
-
-  console.log('📋 GET /api/company/payments - User:', req.user.userId);
-
-  try {
-    // Récupérer l'ID de l'entreprise associée
-    let companyId = null;
-    let companyName = null;
-    let companyType = null;
-
-    // Chercher dans service_companies
-    const serviceCompany = await get(`
-            SELECT id, name, type FROM service_companies WHERE user_id = ?
-        `, [req.user.userId]);
-
-    if (serviceCompany) {
-      companyId = serviceCompany.id;
-      companyName = serviceCompany.name;
-      companyType = serviceCompany.type;
-    }
-
-    // Si pas trouvé, chercher dans tax_offices
-    if (!companyId) {
-      const taxOffice = await get(`
-                SELECT id, name FROM tax_offices WHERE user_id = ?
-            `, [req.user.userId]);
-
-      if (taxOffice) {
-        companyId = taxOffice.id;
-        companyName = taxOffice.name;
-        companyType = 'tax_office';
-      }
-    }
-
-    if (!companyId) {
-      return res.json({
-        payments: [],
-        total_amount: 0,
-        total_count: 0,
-        today_amount: 0,
-        this_month_amount: 0,
-        message: 'Aucune entreprise associée'
-      });
-    }
-
-    // Calculer les statistiques
-    const today = new Date().toISOString().split('T')[0];
-    const firstDayOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-
-    let stats = { total_amount: 0, total_count: 0, today_amount: 0, this_month_amount: 0 };
-    let payments = [];
-
-    // Si c'est un service d'eau/électricité, chercher dans bill_payments
-    if (companyType === 'water' || companyType === 'electricity') {
-      stats = await get(`
-                SELECT 
-                    COALESCE(SUM(amount), 0) as total_amount,
-                    COUNT(*) as total_count,
-                    COALESCE(SUM(CASE WHEN DATE(created_at) = ? THEN amount ELSE 0 END), 0) as today_amount,
-                    COALESCE(SUM(CASE WHEN DATE(created_at) >= ? THEN amount ELSE 0 END), 0) as this_month_amount
-                FROM bill_payments
-                WHERE company_id = ? AND status = 'completed'
-            `, [today, firstDayOfMonth, companyId]);
-
-      payments = await query(`
-                SELECT 
-                    bp.id,
-                    bp.receipt_number,
-                    bp.customer_name,
-                    bp.customer_phone,
-                    bp.customer_email,
-                    bp.customer_address,
-                    bp.meter_number,
-                    bp.amount,
-                    bp.fee,
-                    bp.total_amount,
-                    bp.period,
-                    bp.invoice_number,
-                    bp.service_type,
-                    bp.status,
-                    bp.created_at,
-                    u.fullname as payer_name,
-                    u.phone as payer_phone
-                FROM bill_payments bp
-                LEFT JOIN users u ON bp.payer_id = u.id
-                WHERE bp.company_id = ? AND bp.status = 'completed'
-                ORDER BY bp.created_at DESC
-                LIMIT ? OFFSET ?
-            `, [companyId, parseInt(limit), parseInt(offset)]);
-    }
-
-    // Si c'est un service d'impôts, chercher dans tax_payments
-    if (companyType === 'tax_office') {
-      stats = await get(`
-                SELECT 
-                    COALESCE(SUM(amount), 0) as total_amount,
-                    COUNT(*) as total_count,
-                    COALESCE(SUM(CASE WHEN DATE(created_at) = ? THEN amount ELSE 0 END), 0) as today_amount,
-                    COALESCE(SUM(CASE WHEN DATE(created_at) >= ? THEN amount ELSE 0 END), 0) as this_month_amount
-                FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
-            `, [today, firstDayOfMonth, companyId]);
-
-      payments = await query(`
-                SELECT 
-                    tp.id,
-                    tp.receipt_number,
-                    tp.taxpayer_name as customer_name,
-                    tp.taxpayer_phone as customer_phone,
-                    tp.taxpayer_email as customer_email,
-                    tp.taxpayer_address as customer_address,
-                    NULL as meter_number,
-                    tp.amount,
-                    tp.fee,
-                    tp.total_amount,
-                    tp.tax_period as period,
-                    NULL as invoice_number,
-                    tp.tax_type as service_type,
-                    tp.status,
-                    tp.created_at,
-                    u.fullname as payer_name,
-                    u.phone as payer_phone
-                FROM tax_payments tp
-                LEFT JOIN users u ON tp.payer_id = u.id
-                WHERE tp.office_id = ? AND tp.status = 'completed'
-                ORDER BY tp.created_at DESC
-                LIMIT ? OFFSET ?
-            `, [companyId, parseInt(limit), parseInt(offset)]);
-    }
-
-    console.log(`✅ ${payments.length} paiements trouvés pour ${companyName}`);
-
-    res.json({
-      payments: payments || [],
-      total_amount: stats?.total_amount || 0,
-      total_count: stats?.total_count || 0,
-      today_amount: stats?.today_amount || 0,
-      this_month_amount: stats?.this_month_amount || 0,
-      company: {
-        id: companyId,
-        name: companyName,
-        type: companyType
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur /api/company/payments:', error);
-    res.status(500).json({
-      error: error.message,
-      payments: [],
-      total_amount: 0,
-      total_count: 0,
-      today_amount: 0,
-      this_month_amount: 0
-    });
-  }
-});
-
 // GET - Détails d'un paiement spécifique pour l'entreprise
 app.get('/api/company/payments/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
@@ -12506,7 +11603,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COALESCE(SUM(amount), 0) as total_amount,
                     COALESCE(AVG(amount), 0) as average_amount
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
             `, [companyId]);
 
       monthlyStats = await query(`
@@ -12515,7 +11612,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COUNT(*) as count,
                     COALESCE(SUM(amount), 0) as total
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
                 GROUP BY strftime('%Y-%m', created_at)
                 ORDER BY month DESC
                 LIMIT 12
@@ -12539,203 +11636,6 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
     });
   }
 });
-// Appeler la création des tables au démarrage
-// createTaxOfficesTable();
-
-
-
-// Paiement d'une taxe vers une commune
-app.post('/api/tax/pay', authenticateToken, async (req, res) => {
-  const {
-    commune_id,
-    taxpayer_name,
-    taxpayer_phone,
-    taxpayer_address,
-    business_number,
-    property_address,
-    tax_type,
-    tax_period,
-    amount,
-    notes
-  } = req.body;
-
-  console.log('=== PAIEMENT TAXE ===');
-  console.log('Commune ID:', commune_id);
-  console.log('Montant:', amount);
-  console.log('User:', req.user.userId);
-
-  try {
-    // Validation
-    if (!commune_id) {
-      return res.status(400).json({ error: 'Veuillez sélectionner une commune' });
-    }
-    if (!taxpayer_name) {
-      return res.status(400).json({ error: 'Nom du contribuable requis' });
-    }
-    if (!taxpayer_phone) {
-      return res.status(400).json({ error: 'Téléphone requis' });
-    }
-    if (!amount || amount < 100) {
-      return res.status(400).json({ error: 'Montant minimum 100 FCFA' });
-    }
-
-    // Récupérer l'utilisateur payeur
-    const payer = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
-    if (!payer) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // Récupérer la commune (destinataire)
-    const commune = await get('SELECT id, phone, commune_name, fullname FROM users WHERE id = ? AND role = "commune"', [commune_id]);
-    if (!commune) {
-      return res.status(404).json({ error: 'Commune non trouvée' });
-    }
-
-    // Calculer les frais (1% pour la plateforme)
-    const fee = Math.floor(amount * 0.01);
-    const totalAmount = amount + fee;
-
-    // Vérifier le solde du payeur
-    const payerWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [payer.id]);
-    if (!payerWallet || payerWallet.balance < totalAmount) {
-      return res.status(400).json({ error: 'Solde insuffisant' });
-    }
-
-    // Générer le reçu
-    const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-    // Effectuer les transferts
-    await run('BEGIN TRANSACTION');
-
-    try {
-      // Débiter le payeur
-      await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, payer.id]);
-
-      // Créditer la commune (montant sans frais)
-      await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, commune.id]);
-
-      // Créditer le wallet principal des frais
-      const mainWallet = await get('SELECT id FROM main_wallet LIMIT 1');
-      if (mainWallet) {
-        await run('UPDATE main_wallet SET balance = balance + ?, total_revenue = total_revenue + ?', [fee, fee]);
-      }
-
-      // Enregistrer la transaction
-      const transactionRef = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      await run(
-        `INSERT INTO transactions (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description)
-                 VALUES (?, ?, ?, ?, ?, ?, 'tax_payment', 'completed', ?)`,
-        [transactionRef, payer.phone, commune.phone, amount, fee, amount, `Paiement de taxe - ${receiptNumber}`]
-      );
-
-      // Créer la table tax_payments si elle n'existe pas
-      await run(`CREATE TABLE IF NOT EXISTS tax_payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                receipt_number TEXT UNIQUE,
-                payer_id INTEGER,
-                commune_id INTEGER,
-                taxpayer_name TEXT,
-                taxpayer_phone TEXT,
-                taxpayer_address TEXT,
-                business_number TEXT,
-                property_address TEXT,
-                tax_type TEXT,
-                tax_period TEXT,
-                amount INTEGER,
-                fee INTEGER,
-                total_amount INTEGER,
-                payment_status TEXT DEFAULT 'paid',
-                alkherpay_transaction_ref TEXT,
-                notes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (payer_id) REFERENCES users(id),
-                FOREIGN KEY (commune_id) REFERENCES users(id)
-            )`);
-
-      // Enregistrer le paiement
-      await run(
-        `INSERT INTO tax_payments (
-                    receipt_number, payer_id, commune_id, taxpayer_name, taxpayer_phone,
-                    taxpayer_address, business_number, property_address, tax_type,
-                    tax_period, amount, fee, total_amount, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          receiptNumber, payer.id, commune.id, taxpayer_name, taxpayer_phone,
-          taxpayer_address || '', business_number || '', property_address || '',
-          tax_type, tax_period || new Date().getFullYear().toString(),
-          amount, fee, totalAmount, notes || ''
-        ]
-      );
-
-      await run('COMMIT');
-
-    } catch (err) {
-      await run('ROLLBACK');
-      throw err;
-    }
-
-    // Notification pour le payeur
-    await run(
-      `INSERT INTO notifications (user_id, title, message, type, link, created_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-      [payer.id, '✅ Paiement de taxe effectué',
-      `Vous avez payé ${amount.toLocaleString()} FCFA pour ${tax_type} à ${commune.commune_name}. Reçu: ${receiptNumber}`,
-        'tax_payment', `/tax-payment?receipt=${receiptNumber}`]
-    );
-
-    // Notification pour la commune
-    await run(
-      `INSERT INTO notifications (user_id, title, message, type, link, created_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-      [commune.id, '💰 Nouveau paiement de taxe reçu',
-      `${payer.fullname} (${payer.phone}) a payé ${amount.toLocaleString()} FCFA pour ${tax_type}`,
-        'tax_received', `/commune/payments`]
-    );
-
-    console.log('✅ Paiement enregistré:', receiptNumber);
-
-    res.json({
-      success: true,
-      receipt: {
-        receipt_number: receiptNumber,
-        taxpayer_name,
-        taxpayer_phone,
-        tax_type,
-        amount,
-        fee,
-        total_amount: totalAmount,
-        commune_name: commune.commune_name,
-        commune_phone: commune.phone,
-        payment_date: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur paiement taxe:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Historique des paiements de taxes de l'utilisateur
-app.get('/api/tax/payments', authenticateToken, async (req, res) => {
-  try {
-    const payments = await query(`
-            SELECT tp.*, u.commune_name, u.phone as commune_phone
-            FROM tax_payments tp
-            LEFT JOIN users u ON tp.commune_id = u.id
-            WHERE tp.payer_id = ?
-            ORDER BY tp.created_at DESC
-            LIMIT 50
-        `, [req.user.userId]);
-
-    res.json(payments || []);
-
-  } catch (error) {
-    console.error('❌ Erreur historique:', error);
-    res.json([]);
-  }
-});
-
 // Récupérer un reçu spécifique
 app.get('/api/tax/receipt/:receipt_number', authenticateToken, async (req, res) => {
   const { receipt_number } = req.params;
@@ -12968,34 +11868,6 @@ app.post('/api/admin/users/:userId/reset-password', authenticateToken, requireAd
   }
 });
 // ============================================
-// 
-// ============================================
-// Endpoint de secours pour la compatibilité
-app.get('/api/tax/offices', async (req, res) => {
-  try {
-    const offices = await query(`
-            SELECT id, name, type, description, contact_phone, contact_email
-            FROM service_companies
-            WHERE is_active = 1
-            ORDER BY name ASC
-        `);
-
-    res.json(offices || []);
-  } catch (error) {
-    // Données par défaut
-    res.json([
-      { id: 1, name: 'STE', type: 'water', description: 'Société Tchadienne des Eaux', contact_phone: 'XX XX XX XX' },
-      { id: 2, name: 'ZIZ', type: 'electricity', description: 'Électricité du Tchad', contact_phone: 'XX XX XX XX' }
-    ]);
-  }
-});
-// ============================================
-// CORRECTION COMPLÈTE DE L'ENDPOINT KYC STATUS
-// ============================================
-// ============================================
-// SERVER.JS - ENDPOINTS KYC COMPLETS
-// ============================================
-
 // ============================================
 // CRÉATION DE LA TABLE KYC - VERSION COMPLÈTE
 // ============================================
@@ -15354,6 +14226,902 @@ app.get('/api/admin/kyc/stats', authenticateToken, requireAdmin, async (req, res
 // ROUTES KYC - HISTORIQUE
 // ============================================
 
+
+// ============================================================
+// SYSTÈME COMPLET DE GESTION DES TAXES ET COMMUNES
+// ============================================================
+
+// ------------------------------------------------------------
+// 1. CRÉATION / VÉRIFICATION DES TABLES
+// ------------------------------------------------------------
+
+/**
+ * Créer la table des communes si elle n'existe pas
+ */
+async function createCommunesTable() {
+    try {
+        await run(`
+            CREATE TABLE IF NOT EXISTS communes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                code TEXT,
+                office_number TEXT,
+                province TEXT,
+                city TEXT,
+                address TEXT,
+                phone TEXT,
+                email TEXT,
+                responsable TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        await run('CREATE INDEX IF NOT EXISTS idx_communes_active ON communes(is_active)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_communes_province ON communes(province)').catch(() => {});
+
+        // Ajouter les colonnes manquantes si la table existait déjà
+        const columns = await query("PRAGMA table_info(communes)").catch(() => []);
+        const cols = columns.map(c => c.name);
+
+        const requiredCols = [
+            { name: 'code', type: 'TEXT' },
+            { name: 'office_number', type: 'TEXT' },
+            { name: 'province', type: 'TEXT' },
+            { name: 'city', type: 'TEXT' },
+            { name: 'address', type: 'TEXT' },
+            { name: 'phone', type: 'TEXT' },
+            { name: 'email', type: 'TEXT' },
+            { name: 'responsable', type: 'TEXT' },
+            { name: 'is_active', type: 'INTEGER DEFAULT 1' }
+        ];
+
+        for (const col of requiredCols) {
+            if (!cols.includes(col.name)) {
+                await run(`ALTER TABLE communes ADD COLUMN ${col.name} ${col.type}`).catch(() => {});
+            }
+        }
+
+        console.log('✅ Table communes prête');
+    } catch (error) {
+        console.error('❌ Erreur createCommunesTable:', error);
+    }
+}
+
+/**
+ * Créer la table tax_payments avec la structure exacte
+ */
+async function createTaxPaymentsTable() {
+    try {
+        await run(`
+            CREATE TABLE IF NOT EXISTS tax_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                payer_id INTEGER NOT NULL,
+                receipt_number TEXT UNIQUE NOT NULL,
+                commune_id INTEGER NOT NULL,
+                taxpayer_name TEXT NOT NULL,
+                taxpayer_phone TEXT(8) NOT NULL,
+                taxpayer_address TEXT,
+                business_number TEXT,
+                property_address TEXT,
+                tax_type TEXT NOT NULL,
+                tax_period TEXT,
+                amount INTEGER NOT NULL,
+                fee INTEGER DEFAULT 0,
+                total_amount INTEGER NOT NULL,
+                payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                payment_status TEXT DEFAULT 'paid',
+                cashpays_transaction_ref TEXT,
+                notes TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (payer_id) REFERENCES users(id),
+                FOREIGN KEY (commune_id) REFERENCES users(id)
+            )
+        `);
+
+        await run('CREATE INDEX IF NOT EXISTS idx_tax_payments_user ON tax_payments(user_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_tax_payments_payer ON tax_payments(payer_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_tax_payments_commune ON tax_payments(commune_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_tax_payments_receipt ON tax_payments(receipt_number)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_tax_payments_date ON tax_payments(payment_date)').catch(() => {});
+
+        console.log('✅ Table tax_payments prête');
+    } catch (error) {
+        console.error('❌ Erreur createTaxPaymentsTable:', error);
+    }
+}
+
+// ------------------------------------------------------------
+// 2. ROUTES COMMUNES
+// ------------------------------------------------------------
+
+/**
+ * GET /api/communes
+ * Liste des communes (accessible aux utilisateurs connectés)
+ * Retourne un TABLEAU direct pour compatibilité frontend
+ */
+app.get('/api/communes', authenticateToken, async (req, res) => {
+    try {
+        const columns = await query("PRAGMA table_info(communes)").catch(() => []);
+        const cols = columns.map(c => c.name);
+
+        if (cols.length === 0) {
+            return res.json([]);
+        }
+
+        const codeField = cols.includes('code') ? 'code' :
+                         cols.includes('office_number') ? 'office_number' : 'NULL';
+        const provinceField = cols.includes('province') ? 'province' : 'NULL';
+        const cityField = cols.includes('city') ? 'city' : 'NULL';
+        const activeFilter = cols.includes('is_active') ? 'WHERE is_active = 1' : '';
+
+        const communes = await query(`
+            SELECT 
+                id, 
+                name,
+                ${codeField} as code,
+                ${codeField} as office_number,
+                ${provinceField} as province,
+                ${cityField} as city,
+                address,
+                phone
+            FROM communes
+            ${activeFilter}
+            ORDER BY name ASC
+        `).catch(() => []);
+
+        console.log(`📋 ${communes?.length || 0} communes retournées`);
+
+        // ✅ Retourner un TABLEAU direct
+        res.json(communes || []);
+
+    } catch (error) {
+        console.error('❌ Erreur /api/communes:', error);
+        res.json([]);
+    }
+});
+
+/**
+ * GET /api/tax/offices
+ * Alias pour /api/communes (compatibilité)
+ */
+app.get('/api/tax/offices', authenticateToken, async (req, res) => {
+    try {
+        const communes = await query(`
+            SELECT 
+                id, name,
+                COALESCE(code, office_number, 'COM-' || id) as code,
+                COALESCE(office_number, code, 'COM-' || id) as office_number,
+                province, city, address, phone
+            FROM communes
+            WHERE is_active = 1 OR is_active IS NULL
+            ORDER BY name ASC
+        `).catch(() => []);
+
+        res.json({
+            success: true,
+            offices: communes || [],
+            count: communes?.length || 0
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, offices: [] });
+    }
+});
+
+/**
+ * GET /api/tax/provinces
+ * Liste des provinces
+ */
+app.get('/api/tax/provinces', async (req, res) => {
+    try {
+        const provinces = await query(`
+            SELECT DISTINCT province 
+            FROM communes 
+            WHERE province IS NOT NULL AND province != ''
+            ORDER BY province ASC
+        `).catch(() => []);
+
+        res.json({
+            success: true,
+            provinces: (provinces || []).map(p => p.province)
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, provinces: [] });
+    }
+});
+
+// ------------------------------------------------------------
+// 3. ROUTE PAIEMENT DE TAXE
+// ------------------------------------------------------------
+
+/**
+ * POST /api/tax/pay
+ * Effectuer un paiement de taxe
+ * Accepte commune_id OU office_id
+ */
+app.post('/api/tax/pay', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('\n========== PAIEMENT TAXE ==========');
+    console.log('📦 Body reçu:', JSON.stringify(req.body, null, 2));
+
+    // ✅ EXTRAIRE commune_id (accepte plusieurs noms)
+    const commune_id = req.body.commune_id
+                    || req.body.office_id
+                    || req.body.communeId
+                    || req.body.officeId;
+
+    const taxpayer_name = (req.body.taxpayer_name || '').toString().trim();
+    const taxpayer_phone = (req.body.taxpayer_phone || '').toString().trim().slice(0, 8);
+    const taxpayer_address = (req.body.taxpayer_address || '').toString().trim();
+    const business_number = (req.body.business_number || '').toString().trim();
+    const property_address = (req.body.property_address || '').toString().trim();
+    const tax_type = (req.body.tax_type || '').toString().trim();
+    const tax_period = (req.body.tax_period || '').toString().trim();
+    const notes = (req.body.notes || '').toString().trim();
+    const amount = parseInt(req.body.amount) || 0;
+
+    console.log('✅ Commune ID:', commune_id, '| type:', typeof commune_id);
+    console.log('✅ Montant:', amount);
+    console.log('👤 User:', userId);
+
+    // ✅ VALIDATION
+    const errors = [];
+    if (!commune_id) errors.push('Commune non sélectionnée');
+    if (!tax_type) errors.push('Type de taxe requis');
+    if (amount < 100) errors.push(`Montant minimum: 100 FCFA (reçu: ${amount})`);
+    if (!taxpayer_name) errors.push('Nom du contribuable requis');
+    if (!taxpayer_phone) errors.push('Téléphone requis');
+
+    if (errors.length > 0) {
+        console.log('❌ Validation échouée:', errors);
+        return res.status(400).json({
+            success: false,
+            error: errors.join(' | '),
+            errors,
+            received: req.body
+        });
+    }
+
+    try {
+        // ✅ CHERCHER LA COMMUNE
+        let office = await get('SELECT * FROM communes WHERE id = ?', [commune_id]);
+
+        if (!office && req.body.commune_name) {
+            office = await get('SELECT * FROM communes WHERE name = ?', [req.body.commune_name]);
+        }
+
+        if (!office) {
+            console.log('⚠️ Commune non trouvée pour ID:', commune_id);
+            office = {
+                id: commune_id,
+                name: req.body.commune_name || 'Commune',
+                code: null,
+                province: null,
+                city: null
+            };
+        }
+
+        console.log('✅ Commune:', office.name);
+
+        // ✅ CALCULS
+        const fee = Math.floor(amount * 0.01);
+        const totalAmount = amount + fee;
+
+        // ✅ WALLET
+        let wallet = await get('SELECT * FROM wallets WHERE user_id = ?', [userId]);
+
+        if (!wallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [userId]);
+            wallet = { balance: 0 };
+            console.log('✅ Wallet créé automatiquement');
+        }
+
+        console.log('💰 Solde:', wallet.balance, '| Requis:', totalAmount);
+
+        if (wallet.balance < totalAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Requis: ${totalAmount.toLocaleString()} FCFA, Disponible: ${wallet.balance.toLocaleString()} FCFA`,
+                required: totalAmount,
+                available: wallet.balance
+            });
+        }
+
+        // ✅ GÉNÉRER REÇU UNIQUE
+        const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+        const cashpaysRef = `CP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+        // ✅ TRANSACTION ATOMIQUE
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // Débiter le wallet
+            await run(`
+                UPDATE wallets 
+                SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [totalAmount, userId]);
+
+            // ✅ INSÉRER LE PAIEMENT avec les BONNES COLONNES
+            const result = await run(`
+                INSERT INTO tax_payments (
+                    user_id,
+                    payer_id,
+                    receipt_number,
+                    commune_id,
+                    taxpayer_name,
+                    taxpayer_phone,
+                    taxpayer_address,
+                    business_number,
+                    property_address,
+                    tax_type,
+                    tax_period,
+                    amount,
+                    fee,
+                    total_amount,
+                    payment_status,
+                    cashpays_transaction_ref,
+                    notes,
+                    payment_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, CURRENT_TIMESTAMP)
+            `, [
+                userId,
+                userId,
+                receiptNumber,
+                commune_id,
+                taxpayer_name,
+                taxpayer_phone,
+                taxpayer_address,
+                business_number,
+                property_address,
+                tax_type,
+                tax_period,
+                amount,
+                fee,
+                totalAmount,
+                cashpaysRef,
+                notes
+            ]);
+
+            // ✅ Notification (best-effort)
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💰 Paiement effectué', ?, 'success', CURRENT_TIMESTAMP)
+            `, [
+                userId,
+                `Paiement de ${totalAmount.toLocaleString()} FCFA pour ${tax_type}. Reçu N° ${receiptNumber}`
+            ]).catch(() => {});
+
+            await run('COMMIT');
+
+            console.log('✅ PAIEMENT RÉUSSI:', receiptNumber);
+
+            // ✅ RÉPONSE
+            res.json({
+                success: true,
+                message: 'Paiement effectué avec succès',
+                receipt: {
+                    id: result.lastID,
+                    receipt_number: receiptNumber,
+                    commune_id: commune_id,
+                    office_name: office.name,
+                    commune_name: office.name,
+                    office_code: office.code || null,
+                    office_province: office.province || null,
+                    office_city: office.city || null,
+                    tax_type,
+                    tax_period,
+                    amount,
+                    fee,
+                    total_amount: totalAmount,
+                    taxpayer_name,
+                    taxpayer_phone,
+                    taxpayer_address,
+                    business_number,
+                    property_address,
+                    payment_date: new Date().toISOString(),
+                    payment_status: 'paid',
+                    cashpays_transaction_ref: cashpaysRef,
+                    notes
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            console.error('❌ Erreur SQL (rollback):', dbError);
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur paiement taxe:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ------------------------------------------------------------
+// 4. ROUTES HISTORIQUE
+// ------------------------------------------------------------
+
+/**
+ * GET /api/tax/payments
+ * Historique des paiements de l'utilisateur connecté
+ */
+app.get('/api/tax/payments', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log(`📋 GET /api/tax/payments - user: ${userId}`);
+
+    try {
+        // ✅ Vérifier que la table existe
+        const tpCols = await query("PRAGMA table_info(tax_payments)").catch(() => []);
+        const tpNames = tpCols.map(c => c.name);
+
+        if (tpNames.length === 0) {
+            console.log('⚠️ Table tax_payments inexistante');
+            return res.json({
+                success: true,
+                payments: [],
+                count: 0
+            });
+        }
+
+        // ✅ Détecter les colonnes dynamiquement
+        const userField = tpNames.includes('payer_id') ? 'tp.payer_id' : 'tp.user_id';
+        const communeField = tpNames.includes('commune_id') ? 'tp.commune_id' : 'tp.office_id';
+
+        // ✅ Vérifier les colonnes de communes
+        const cCols = await query("PRAGMA table_info(communes)").catch(() => []);
+        const cNames = cCols.map(c => c.name);
+
+        const codeField = cNames.includes('code') ? 'c.code' : 'NULL';
+        const provinceField = cNames.includes('province') ? 'c.province' : 'NULL';
+        const cityField = cNames.includes('city') ? 'c.city' : 'NULL';
+
+        const payments = await query(`
+            SELECT 
+                tp.*,
+                c.name as office_name,
+                c.name as commune_name,
+                ${codeField} as office_code,
+                ${provinceField} as office_province,
+                ${cityField} as office_city
+            FROM tax_payments tp
+            LEFT JOIN communes c ON ${communeField} = c.id
+            WHERE ${userField} = ?
+            ORDER BY tp.payment_date DESC
+            LIMIT 100
+        `, [userId]).catch((err) => {
+            console.error('❌ Erreur SQL payments:', err);
+            return [];
+        });
+
+        console.log(`✅ ${payments?.length || 0} paiements retournés`);
+
+        res.json({
+            success: true,
+            payments: payments || [],
+            count: payments?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur /api/tax/payments:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            payments: []
+        });
+    }
+});
+
+/**
+ * GET /api/tax/receipt/:receiptNumber
+ * Récupérer un reçu spécifique
+ */
+app.get('/api/tax/receipt/:receiptNumber', authenticateToken, async (req, res) => {
+    const { receiptNumber } = req.params;
+    const userId = req.user.userId;
+
+    try {
+        const tpCols = await query("PRAGMA table_info(tax_payments)").catch(() => []);
+        const tpNames = tpCols.map(c => c.name);
+
+        const userField = tpNames.includes('payer_id') ? 'tp.payer_id' : 'tp.user_id';
+        const communeField = tpNames.includes('commune_id') ? 'tp.commune_id' : 'tp.office_id';
+
+        const cCols = await query("PRAGMA table_info(communes)").catch(() => []);
+        const cNames = cCols.map(c => c.name);
+
+        const codeField = cNames.includes('code') ? 'c.code' : 'NULL';
+        const provinceField = cNames.includes('province') ? 'c.province' : 'NULL';
+        const cityField = cNames.includes('city') ? 'c.city' : 'NULL';
+        const addressField = cNames.includes('address') ? 'c.address' : 'NULL';
+        const phoneField = cNames.includes('phone') ? 'c.phone' : 'NULL';
+        const emailField = cNames.includes('email') ? 'c.email' : 'NULL';
+
+        const payment = await get(`
+            SELECT 
+                tp.*,
+                c.name as office_name,
+                c.name as commune_name,
+                ${codeField} as office_code,
+                ${provinceField} as office_province,
+                ${cityField} as office_city,
+                ${addressField} as office_address,
+                ${phoneField} as office_phone,
+                ${emailField} as office_email
+            FROM tax_payments tp
+            LEFT JOIN communes c ON ${communeField} = c.id
+            WHERE tp.receipt_number = ? AND ${userField} = ?
+        `, [receiptNumber, userId]);
+
+        if (!payment) {
+            return res.status(404).json({
+                success: false,
+                error: 'Reçu non trouvé'
+            });
+        }
+
+        res.json({
+            success: true,
+            receipt: payment
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur récupération reçu:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ------------------------------------------------------------
+// 5. ROUTES ADMIN
+// ------------------------------------------------------------
+
+/**
+ * GET /api/admin/communes
+ * Liste des communes pour l'admin
+ */
+app.get('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const columns = await query("PRAGMA table_info(communes)").catch(() => []);
+        const cols = columns.map(c => c.name);
+
+        const codeField = cols.includes('code') ? 'c.code' : 'NULL';
+        const provinceField = cols.includes('province') ? 'c.province' : 'NULL';
+        const cityField = cols.includes('city') ? 'c.city' : 'NULL';
+
+        const communes = await query(`
+            SELECT 
+                c.id,
+                c.name,
+                c.name as commune_name,
+                ${codeField} as code,
+                ${provinceField} as province,
+                ${cityField} as city,
+                c.address,
+                c.address as commune_address,
+                c.phone,
+                c.email,
+                c.responsable,
+                c.is_active,
+                c.created_at
+            FROM communes c
+            WHERE c.is_active = 1 OR c.is_active IS NULL
+            ORDER BY c.name ASC
+        `).catch(() => []);
+
+        console.log(`📋 ${communes?.length || 0} communes retournées (admin)`);
+
+        res.json({
+            success: true,
+            data: communes || [],
+            communes: communes || []
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur admin communes:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: []
+        });
+    }
+});
+
+/**
+ * POST /api/admin/communes
+ * Créer une commune + compte utilisateur + wallet
+ */
+app.post('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    console.log('\n========== CRÉATION COMMUNE ==========');
+    console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+
+    const name = req.body.name || req.body.commune_name || req.body.communeName;
+    const phone = req.body.phone;
+    const fullname = req.body.fullname || name;
+    const address = req.body.commune_address || req.body.address || '';
+    const email = req.body.email || '';
+    const password = req.body.password;
+    const code = req.body.code || null;
+    const office_number = req.body.office_number || null;
+    const province = req.body.province || null;
+    const city = req.body.city || null;
+
+    const errors = [];
+    if (!name) errors.push('Nom requis');
+    if (!phone) errors.push('Téléphone requis');
+    if (!password) errors.push('Mot de passe requis');
+    if (phone && !/^\d{8}$/.test(phone)) errors.push('Téléphone doit avoir 8 chiffres');
+
+    if (errors.length > 0) {
+        return res.status(400).json({
+            success: false,
+            error: errors.join(', '),
+            errors
+        });
+    }
+
+    try {
+        const existing = await get('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (existing) {
+            return res.status(400).json({
+                success: false,
+                error: 'Ce numéro est déjà utilisé'
+            });
+        }
+
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedKey = await bcrypt.hash(privateKey, 10);
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            const userResult = await run(`
+                INSERT INTO users (
+                    phone, fullname, password_hash, private_key_6,
+                    role, is_active, is_verified, created_at
+                ) VALUES (?, ?, ?, ?, 'commune', 1, 1, CURRENT_TIMESTAMP)
+            `, [phone, fullname, hashedPassword, hashedKey]);
+
+            const userId = userResult.lastID;
+
+            // Wallet
+            const existingWallet = await get('SELECT id FROM wallets WHERE user_id = ?', [userId]);
+            if (!existingWallet) {
+                await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [userId]);
+            }
+
+            // Commune
+            const communeResult = await run(`
+                INSERT INTO communes (
+                    name, code, office_number, province, city,
+                    address, phone, email, responsable, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            `, [name, code, office_number, province, city, address, phone, email, fullname]);
+
+            await run('COMMIT');
+
+            console.log('✅ Commune créée:', communeResult.lastID);
+
+            res.status(201).json({
+                success: true,
+                message: 'Commune créée',
+                data: {
+                    id: communeResult.lastID,
+                    name, phone, fullname, address, email
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur création commune:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * PUT /api/admin/communes/:id
+ */
+app.put('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const name = req.body.name || req.body.commune_name;
+    const address = req.body.commune_address || req.body.address;
+    const email = req.body.email;
+    const fullname = req.body.fullname;
+
+    try {
+        await run(`
+            UPDATE communes 
+            SET name = COALESCE(?, name),
+                address = COALESCE(?, address),
+                email = COALESCE(?, email),
+                responsable = COALESCE(?, responsable),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [name, address, email, fullname, id]);
+
+        res.json({ success: true, message: 'Commune modifiée' });
+    } catch (error) {
+        console.error('❌ Erreur modification:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * DELETE /api/admin/communes/:id
+ */
+app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        await run('UPDATE communes SET is_active = 0 WHERE id = ?', [id]);
+        res.json({ success: true, message: 'Commune supprimée' });
+    } catch (error) {
+        console.error('❌ Erreur suppression:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/admin/tax/payments
+ */
+app.get('/api/admin/tax/payments', authenticateToken, requireAdmin, async (req, res) => {
+    const { status, limit = 100, offset = 0 } = req.query;
+
+    try {
+        const tpCols = await query("PRAGMA table_info(tax_payments)").catch(() => []);
+        const tpNames = tpCols.map(c => c.name);
+
+        const userField = tpNames.includes('payer_id') ? 'tp.payer_id' : 'tp.user_id';
+        const communeField = tpNames.includes('commune_id') ? 'tp.commune_id' : 'tp.office_id';
+
+        let sql = `
+            SELECT 
+                tp.*,
+                c.name as office_name,
+                u.fullname as user_name,
+                u.phone as user_phone
+            FROM tax_payments tp
+            LEFT JOIN communes c ON ${communeField} = c.id
+            LEFT JOIN users u ON ${userField} = u.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (status) {
+            sql += ' AND tp.payment_status = ?';
+            params.push(status);
+        }
+
+        sql += ' ORDER BY tp.payment_date DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+
+        const payments = await query(sql, params).catch(() => []);
+
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_payments,
+                SUM(total_amount) as total_amount,
+                SUM(fee) as total_fees,
+                SUM(amount) as total_taxes
+            FROM tax_payments
+            WHERE payment_status = 'paid'
+        `).catch(() => ({}));
+
+        res.json({
+            success: true,
+            payments: payments || [],
+            stats: stats || {}
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur admin paiements:', error);
+        res.status(500).json({ success: false, error: error.message, payments: [] });
+    }
+});
+
+/**
+ * GET /api/admin/tax/stats
+ */
+app.get('/api/admin/tax/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_payments,
+                SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END) as paid,
+                SUM(CASE WHEN payment_status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN payment_status = 'paid' THEN amount ELSE 0 END) as total_taxes,
+                SUM(CASE WHEN payment_status = 'paid' THEN fee ELSE 0 END) as total_fees,
+                SUM(CASE WHEN payment_status = 'paid' THEN total_amount ELSE 0 END) as total_collected
+            FROM tax_payments
+        `).catch(() => ({}));
+
+        const byTaxType = await query(`
+            SELECT tax_type, COUNT(*) as count, SUM(amount) as total
+            FROM tax_payments
+            WHERE payment_status = 'paid'
+            GROUP BY tax_type
+            ORDER BY total DESC
+        `).catch(() => []);
+
+        const byCommune = await query(`
+            SELECT 
+                c.name as commune_name,
+                c.province,
+                COUNT(*) as count,
+                SUM(tp.amount) as total
+            FROM tax_payments tp
+            LEFT JOIN communes c ON tp.commune_id = c.id
+            WHERE tp.payment_status = 'paid'
+            GROUP BY tp.commune_id
+            ORDER BY total DESC
+            LIMIT 10
+        `).catch(() => []);
+
+        res.json({
+            success: true,
+            stats: stats || {},
+            byTaxType: byTaxType || [],
+            byCommune: byCommune || []
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur stats:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ------------------------------------------------------------
+// 6. ROUTE DE DEBUG
+// ------------------------------------------------------------
+
+/**
+ * GET /api/debug/schema-tax
+ * Debug : afficher la structure des tables tax
+ */
+app.get('/api/debug/schema-tax', async (req, res) => {
+    try {
+        const communesCols = await query("PRAGMA table_info(communes)").catch(() => []);
+        const taxPaymentsCols = await query("PRAGMA table_info(tax_payments)").catch(() => []);
+
+        const communesCount = await get('SELECT COUNT(*) as total FROM communes').catch(() => ({ total: 0 }));
+        const paymentsCount = await get('SELECT COUNT(*) as total FROM tax_payments').catch(() => ({ total: 0 }));
+
+        res.json({
+            communes: {
+                exists: communesCols.length > 0,
+                columns: communesCols.map(c => c.name),
+                rowCount: communesCount?.total || 0
+            },
+            tax_payments: {
+                exists: taxPaymentsCols.length > 0,
+                columns: taxPaymentsCols.map(c => c.name),
+                rowCount: paymentsCount?.total || 0
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// FIN DU BLOC TAXES
+// ============================================================
+
 // Récupérer l'historique KYC de l'utilisateur
 app.get('/api/kyc/history', authenticateToken, async (req, res) => {
   try {
@@ -16185,41 +15953,6 @@ app.get('/api/company/stats/monthly', authenticateToken, async (req, res) => {
 //  PDF IMPORT ENDPOINT
 //=============================================
 
-// GET - Récupérer les communes (agents)
-app.get('/api/communes', authenticateToken, async (req, res) => {
-  try {
-    const communes = await query(`
-            SELECT u.id, u.phone, u.fullname as name, u.commune_address as address
-            FROM users u
-            WHERE u.role = 'commune' AND u.is_active = 1
-            ORDER BY u.fullname
-        `);
-    res.json(communes || []);
-  } catch (error) {
-    res.json([]);
-  }
-});
-
-// GET - Solde du wallet
-app.get('/api/wallet/balance', authenticateToken, async (req, res) => {
-  try {
-    const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [req.user.userId]);
-    res.json({ balance: wallet?.balance || 0 });
-  } catch (error) {
-    res.json({ balance: 0 });
-  }
-});
-
-
-
-
-//=============================================
-//
-//  FIN DES ENDPOINTS
-// ============================================
-// ROUTES POUR LES SERVICES D'IMPÔTS (COMMUNES)
-// ============================================
-
 // 1. Créer la table des services d'impôts
 async function createTaxOfficesTable() {
   try {
@@ -16248,7 +15981,7 @@ async function createTaxOfficesTable() {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 receipt_number TEXT UNIQUE NOT NULL,
                 payer_id INTEGER NOT NULL,
-                office_id INTEGER NOT NULL,
+                commune_id INTEGER NOT NULL,
                 office_name TEXT NOT NULL,
                 taxpayer_name TEXT NOT NULL,
                 taxpayer_phone TEXT NOT NULL,
@@ -16265,7 +15998,7 @@ async function createTaxOfficesTable() {
                 transaction_ref TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (payer_id) REFERENCES users(id),
-                FOREIGN KEY (office_id) REFERENCES tax_offices(id)
+                FOREIGN KEY (commune_id) REFERENCES tax_offices(id)
             )
         `);
 
@@ -16376,255 +16109,6 @@ app.get('/api/tax-offices', async (req, res) => {
     ]);
   }
 });
-
-// 3. POST - Paiement d'une taxe
-app.post('/api/tax/pay', authenticateToken, async (req, res) => {
-  const {
-    office_id,
-    taxpayer_name,
-    taxpayer_phone,
-    taxpayer_email,
-    taxpayer_address,
-    business_number,
-    property_address,
-    tax_type,
-    tax_period,
-    amount,
-    notes
-  } = req.body;
-
-  console.log('💰 Paiement taxe reçu:', { office_id, taxpayer_name, amount, tax_type });
-
-  try {
-    // Récupérer le service d'impôts
-    const office = await get(`
-            SELECT toff.*, u.id as agent_user_id, u.phone as agent_phone, u.fullname as agent_name
-            FROM tax_offices toff
-            LEFT JOIN users u ON toff.user_id = u.id
-            WHERE toff.id = ? AND toff.is_active = 1
-        `, [office_id]);
-
-    if (!office) {
-      return res.status(404).json({ error: 'Service d\'impôts non trouvé' });
-    }
-
-    // Récupérer l'utilisateur payeur
-    const payer = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
-
-    // Vérifier le solde
-    const payerWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [payer.id]);
-
-    const fee = Math.floor(amount * 0.01);
-    const totalAmount = amount + fee;
-
-    if (!payerWallet || payerWallet.balance < totalAmount) {
-      return res.status(400).json({ error: 'Solde insuffisant' });
-    }
-
-    // Générer le reçu
-    const receipt_number = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    const transactionRef = `TXN-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-    await run('BEGIN TRANSACTION');
-
-    try {
-      // 1. Débiter le payeur
-      await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, payer.id]);
-
-      // 2. Créditer le service d'impôts
-      if (office.agent_user_id) {
-        await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, office.agent_user_id]);
-      }
-
-      // 3. Créditer les frais au wallet admin
-      const adminWallet = await get(`
-                SELECT w.id FROM wallets w 
-                JOIN users u ON w.user_id = u.id 
-                WHERE u.role = 'admin' LIMIT 1
-            `);
-      if (adminWallet) {
-        await run('UPDATE wallets SET balance = balance + ? WHERE id = ?', [fee, adminWallet.id]);
-      }
-
-      // 4. Enregistrer la transaction principale
-      await run(`
-                INSERT INTO transactions 
-                (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description)
-                VALUES (?, ?, ?, ?, ?, ?, 'tax_payment', 'completed', ?)
-            `, [transactionRef, payer.phone, office.agent_phone, amount, fee, amount, `Paiement ${tax_type} - ${receipt_number}`]);
-
-      // 5. Enregistrer le paiement de taxe
-      await run(`
-                INSERT INTO tax_payments (
-                    receipt_number, payer_id, office_id, office_name, taxpayer_name,
-                    taxpayer_phone, taxpayer_email, taxpayer_address, business_number,
-                    property_address, tax_type, tax_period, amount, fee, total_amount,
-                    transaction_ref
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [
-        receipt_number, payer.id, office.id, office.name, taxpayer_name,
-        taxpayer_phone, taxpayer_email || '', taxpayer_address || '', business_number || '',
-        property_address || '', tax_type, tax_period || '', amount, fee, totalAmount, transactionRef
-      ]);
-
-      await run('COMMIT');
-
-    } catch (err) {
-      await run('ROLLBACK');
-      throw err;
-    }
-
-    // Notification pour le payeur
-    await run(`
-            INSERT INTO notifications (user_id, title, message, type, created_at)
-            VALUES (?, '✅ Paiement effectué', 
-                    'Vous avez payé ${amount.toLocaleString()} FCFA pour ${tax_type}', 
-                    'tax_payment', CURRENT_TIMESTAMP)
-        `, [payer.id]);
-
-    // Notification pour le service d'impôts
-    if (office.agent_user_id) {
-      await run(`
-                INSERT INTO notifications (user_id, title, message, type, metadata, created_at)
-                VALUES (?, '💰 Paiement de taxe reçu', 
-                        '${payer.fullname} a payé ${amount.toLocaleString()} FCFA pour ${tax_type}', 
-                        'tax_received', '${JSON.stringify({ payer: payer.fullname, amount, receipt: receipt_number })}', 
-                        CURRENT_TIMESTAMP)
-            `, [office.agent_user_id]);
-
-      // Envoyer via WebSocket
-      if (io) {
-        io.to(`user_${office.agent_user_id}`).emit('tax-payment', {
-          receipt: receipt_number,
-          taxpayer_name: taxpayer_name,
-          amount: amount,
-          tax_type: tax_type,
-          office: office.name,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      receipt: {
-        receipt_number: receipt_number,
-        office_name: office.name,
-        tax_type: tax_type,
-        taxpayer_name: taxpayer_name,
-        taxpayer_phone: taxpayer_phone,
-        taxpayer_email: taxpayer_email,
-        taxpayer_address: taxpayer_address,
-        business_number: business_number,
-        property_address: property_address,
-        tax_period: tax_period || new Date().getFullYear().toString(),
-        amount: amount,
-        fee: fee,
-        total_amount: totalAmount,
-        payment_date: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    await run('ROLLBACK');
-    console.error('❌ Erreur paiement taxe:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 4. GET - Historique des paiements de taxes de l'utilisateur
-app.get('/api/tax/payments', authenticateToken, async (req, res) => {
-  const { limit = 50, offset = 0 } = req.query;
-
-  try {
-    const payments = await query(`
-            SELECT * FROM tax_payments 
-            WHERE payer_id = ?
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        `, [req.user.userId, parseInt(limit), parseInt(offset)]);
-
-    const total = await get('SELECT COUNT(*) as total FROM tax_payments WHERE payer_id = ?', [req.user.userId]);
-
-    res.json({
-      success: true,
-      payments: payments || [],
-      total: total?.total || 0
-    });
-
-  } catch (error) {
-    console.error('Erreur historique:', error);
-    res.json([]);
-  }
-});
-
-// 5. GET - Récupérer un reçu spécifique
-app.get('/api/tax/receipt/:receipt_number', authenticateToken, async (req, res) => {
-  const { receipt_number } = req.params;
-
-  try {
-    const receipt = await get(`
-            SELECT tp.*, toff.name as office_name, toff.address as office_address
-            FROM tax_payments tp
-            LEFT JOIN tax_offices toff ON tp.office_id = toff.id
-            WHERE tp.receipt_number = ? AND tp.payer_id = ?
-        `, [receipt_number, req.user.userId]);
-
-    if (!receipt) {
-      return res.status(404).json({ error: 'Reçu non trouvé' });
-    }
-
-    res.json(receipt);
-
-  } catch (error) {
-    console.error('Erreur reçu:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 6. GET - Paiements reçus par un service d'impôts (pour l'agent)
-app.get('/api/tax-office/payments', authenticateToken, async (req, res) => {
-  try {
-    const office = await get(`
-            SELECT id, name FROM tax_offices WHERE user_id = ?
-        `, [req.user.userId]);
-
-    if (!office) {
-      return res.json({ payments: [], total_amount: 0, total_count: 0 });
-    }
-
-    const payments = await query(`
-            SELECT tp.*, u.fullname as payer_name, u.phone as payer_phone
-            FROM tax_payments tp
-            JOIN users u ON tp.payer_id = u.id
-            WHERE tp.office_id = ?
-            ORDER BY tp.created_at DESC
-            LIMIT 100
-        `, [office.id]);
-
-    const total = await get('SELECT SUM(amount) as total_amount, COUNT(*) as count FROM tax_payments WHERE office_id = ?', [office.id]);
-
-    res.json({
-      payments: payments || [],
-      total_amount: total?.total_amount || 0,
-      total_count: total?.count || 0
-    });
-
-  } catch (error) {
-    console.error('Erreur:', error);
-    res.json({ payments: [], total_amount: 0, total_count: 0 });
-  }
-});
-
-
-//=============================================
-//
-//
-//=============================================
-
-// ============================================
-// ROUTES POUR LES ENTREPRISES (AGENTS) - COMPTE UTILISATEUR
-// ============================================
 
 // GET - Récupérer les informations de l'entreprise connectée (agent)
 app.get('/api/company/info', authenticateToken, async (req, res) => {
@@ -16823,7 +16307,7 @@ app.get('/api/company/payments', authenticateToken, async (req, res) => {
                     COALESCE(SUM(CASE WHEN DATE(created_at) = ? THEN amount ELSE 0 END), 0) as today_amount,
                     COALESCE(SUM(CASE WHEN DATE(created_at) >= ? THEN amount ELSE 0 END), 0) as this_month_amount
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
             `, [today, firstDayOfMonth, companyId]);
 
       payments = await query(`
@@ -16847,7 +16331,7 @@ app.get('/api/company/payments', authenticateToken, async (req, res) => {
                     u.phone as payer_phone
                 FROM tax_payments tp
                 LEFT JOIN users u ON tp.payer_id = u.id
-                WHERE tp.office_id = ? AND tp.status = 'completed'
+                WHERE tp.commune_id = ? AND tp.status = 'completed'
                 ORDER BY tp.created_at DESC
                 LIMIT ? OFFSET ?
             `, [companyId, parseInt(limit), parseInt(offset)]);
@@ -16992,7 +16476,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COALESCE(SUM(amount), 0) as total_amount,
                     COALESCE(AVG(amount), 0) as average_amount
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
             `, [companyId]);
 
       monthlyStats = await query(`
@@ -17001,7 +16485,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COUNT(*) as count,
                     COALESCE(SUM(amount), 0) as total
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
                 GROUP BY strftime('%Y-%m', created_at)
                 ORDER BY month DESC
                 LIMIT 12
@@ -21048,72 +20532,6 @@ app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (re
   }
 });
 
-// Récupérer la liste des communes pour les paiements
-app.get('/api/communes', authenticateToken, async (req, res) => {
-  try {
-    const communes = await query(`
-            SELECT 
-                id, 
-                phone, 
-                commune_name as name, 
-                commune_address as address,
-                email
-            FROM users 
-            WHERE role = 'commune' AND is_active = 1
-            ORDER BY commune_name
-        `);
-
-    res.json(communes || []);
-
-  } catch (error) {
-    console.error('❌ Erreur:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Récupérer les statistiques d'une commune
-app.get('/api/commune/stats', authenticateToken, async (req, res) => {
-  // Vérifier que l'utilisateur est une commune
-  const user = await get('SELECT role FROM users WHERE id = ?', [req.user.userId]);
-  if (user.role !== 'commune') {
-    return res.status(403).json({ error: 'Accès réservé aux communes' });
-  }
-
-  try {
-    // Récupérer le solde du wallet
-    const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [req.user.userId]);
-
-    // Récupérer les paiements reçus
-    const payments = await query(`
-            SELECT 
-                COUNT(*) as total_count,
-                SUM(amount) as total_amount,
-                SUM(fee) as total_fees,
-                DATE(created_at) as payment_date
-            FROM tax_payments
-            WHERE commune_id = ?
-            GROUP BY DATE(created_at)
-            ORDER BY payment_date DESC
-            LIMIT 30
-        `, [req.user.userId]);
-
-    res.json({
-      balance: wallet?.balance || 0,
-      total_payments: payments.reduce((sum, p) => sum + p.total_count, 0),
-      total_amount: payments.reduce((sum, p) => sum + (p.total_amount || 0), 0),
-      recent_payments: payments.slice(0, 10)
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur stats:', error);
-    res.json({ balance: 0, total_payments: 0, total_amount: 0 });
-  }
-});
-
-// ============================================
-// ROUTES POUR LES ENTREPRISES (AGENTS) - PAIEMENTS REÇUS
-// ============================================
-
 // GET - Paiements reçus par l'entreprise
 app.get('/api/company/payments', authenticateToken, async (req, res) => {
   const { limit = 100, offset = 0 } = req.query;
@@ -21216,7 +20634,7 @@ app.get('/api/company/payments', authenticateToken, async (req, res) => {
                     COALESCE(SUM(CASE WHEN DATE(created_at) = ? THEN amount ELSE 0 END), 0) as today_amount,
                     COALESCE(SUM(CASE WHEN DATE(created_at) >= ? THEN amount ELSE 0 END), 0) as this_month_amount
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
             `, [today, firstDayOfMonth, companyId]);
 
       payments = await query(`
@@ -21240,7 +20658,7 @@ app.get('/api/company/payments', authenticateToken, async (req, res) => {
                     u.phone as payer_phone
                 FROM tax_payments tp
                 LEFT JOIN users u ON tp.payer_id = u.id
-                WHERE tp.office_id = ? AND tp.status = 'completed'
+                WHERE tp.commune_id = ? AND tp.status = 'completed'
                 ORDER BY tp.created_at DESC
                 LIMIT ? OFFSET ?
             `, [companyId, parseInt(limit), parseInt(offset)]);
@@ -21389,7 +20807,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COALESCE(SUM(amount), 0) as total_amount,
                     COALESCE(AVG(amount), 0) as average_amount
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
             `, [companyId]);
 
       monthlyStats = await query(`
@@ -21398,7 +20816,7 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
                     COUNT(*) as count,
                     COALESCE(SUM(amount), 0) as total
                 FROM tax_payments
-                WHERE office_id = ? AND status = 'completed'
+                WHERE commune_id = ? AND status = 'completed'
                 GROUP BY strftime('%Y-%m', created_at)
                 ORDER BY month DESC
                 LIMIT 12
@@ -21425,199 +20843,6 @@ app.get('/api/company/stats', authenticateToken, async (req, res) => {
 // Appeler la création des tables au démarrage
 // createTaxOfficesTable();
 
-
-
-// Paiement d'une taxe vers une commune
-app.post('/api/tax/pay', authenticateToken, async (req, res) => {
-  const {
-    commune_id,
-    taxpayer_name,
-    taxpayer_phone,
-    taxpayer_address,
-    business_number,
-    property_address,
-    tax_type,
-    tax_period,
-    amount,
-    notes
-  } = req.body;
-
-  console.log('=== PAIEMENT TAXE ===');
-  console.log('Commune ID:', commune_id);
-  console.log('Montant:', amount);
-  console.log('User:', req.user.userId);
-
-  try {
-    // Validation
-    if (!commune_id) {
-      return res.status(400).json({ error: 'Veuillez sélectionner une commune' });
-    }
-    if (!taxpayer_name) {
-      return res.status(400).json({ error: 'Nom du contribuable requis' });
-    }
-    if (!taxpayer_phone) {
-      return res.status(400).json({ error: 'Téléphone requis' });
-    }
-    if (!amount || amount < 100) {
-      return res.status(400).json({ error: 'Montant minimum 100 FCFA' });
-    }
-
-    // Récupérer l'utilisateur payeur
-    const payer = await get('SELECT id, phone, fullname FROM users WHERE id = ?', [req.user.userId]);
-    if (!payer) {
-      return res.status(404).json({ error: 'Utilisateur non trouvé' });
-    }
-
-    // Récupérer la commune (destinataire)
-    const commune = await get('SELECT id, phone, commune_name, fullname FROM users WHERE id = ? AND role = "commune"', [commune_id]);
-    if (!commune) {
-      return res.status(404).json({ error: 'Commune non trouvée' });
-    }
-
-    // Calculer les frais (1% pour la plateforme)
-    const fee = Math.floor(amount * 0.01);
-    const totalAmount = amount + fee;
-
-    // Vérifier le solde du payeur
-    const payerWallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [payer.id]);
-    if (!payerWallet || payerWallet.balance < totalAmount) {
-      return res.status(400).json({ error: 'Solde insuffisant' });
-    }
-
-    // Générer le reçu
-    const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-    // Effectuer les transferts
-    await run('BEGIN TRANSACTION');
-
-    try {
-      // Débiter le payeur
-      await run('UPDATE wallets SET balance = balance - ? WHERE user_id = ?', [totalAmount, payer.id]);
-
-      // Créditer la commune (montant sans frais)
-      await run('UPDATE wallets SET balance = balance + ? WHERE user_id = ?', [amount, commune.id]);
-
-      // Créditer le wallet principal des frais
-      const mainWallet = await get('SELECT id FROM main_wallet LIMIT 1');
-      if (mainWallet) {
-        await run('UPDATE main_wallet SET balance = balance + ?, total_revenue = total_revenue + ?', [fee, fee]);
-      }
-
-      // Enregistrer la transaction
-      const transactionRef = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      await run(
-        `INSERT INTO transactions (reference, sender_phone, receiver_phone, amount, fee, net_amount, type, status, description)
-                 VALUES (?, ?, ?, ?, ?, ?, 'tax_payment', 'completed', ?)`,
-        [transactionRef, payer.phone, commune.phone, amount, fee, amount, `Paiement de taxe - ${receiptNumber}`]
-      );
-
-      // Créer la table tax_payments si elle n'existe pas
-      await run(`CREATE TABLE IF NOT EXISTS tax_payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                receipt_number TEXT UNIQUE,
-                payer_id INTEGER,
-                commune_id INTEGER,
-                taxpayer_name TEXT,
-                taxpayer_phone TEXT,
-                taxpayer_address TEXT,
-                business_number TEXT,
-                property_address TEXT,
-                tax_type TEXT,
-                tax_period TEXT,
-                amount INTEGER,
-                fee INTEGER,
-                total_amount INTEGER,
-                payment_status TEXT DEFAULT 'paid',
-                AlkherPay_transaction_ref TEXT,
-                notes TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (payer_id) REFERENCES users(id),
-                FOREIGN KEY (commune_id) REFERENCES users(id)
-            )`);
-
-      // Enregistrer le paiement
-      await run(
-        `INSERT INTO tax_payments (
-                    receipt_number, payer_id, commune_id, taxpayer_name, taxpayer_phone,
-                    taxpayer_address, business_number, property_address, tax_type,
-                    tax_period, amount, fee, total_amount, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          receiptNumber, payer.id, commune.id, taxpayer_name, taxpayer_phone,
-          taxpayer_address || '', business_number || '', property_address || '',
-          tax_type, tax_period || new Date().getFullYear().toString(),
-          amount, fee, totalAmount, notes || ''
-        ]
-      );
-
-      await run('COMMIT');
-
-    } catch (err) {
-      await run('ROLLBACK');
-      throw err;
-    }
-
-    // Notification pour le payeur
-    await run(
-      `INSERT INTO notifications (user_id, title, message, type, link, created_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-      [payer.id, '✅ Paiement de taxe effectué',
-      `Vous avez payé ${amount.toLocaleString()} FCFA pour ${tax_type} à ${commune.commune_name}. Reçu: ${receiptNumber}`,
-        'tax_payment', `/tax-payment?receipt=${receiptNumber}`]
-    );
-
-    // Notification pour la commune
-    await run(
-      `INSERT INTO notifications (user_id, title, message, type, link, created_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-      [commune.id, '💰 Nouveau paiement de taxe reçu',
-      `${payer.fullname} (${payer.phone}) a payé ${amount.toLocaleString()} FCFA pour ${tax_type}`,
-        'tax_received', `/commune/payments`]
-    );
-
-    console.log('✅ Paiement enregistré:', receiptNumber);
-
-    res.json({
-      success: true,
-      receipt: {
-        receipt_number: receiptNumber,
-        taxpayer_name,
-        taxpayer_phone,
-        tax_type,
-        amount,
-        fee,
-        total_amount: totalAmount,
-        commune_name: commune.commune_name,
-        commune_phone: commune.phone,
-        payment_date: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Erreur paiement taxe:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Historique des paiements de taxes de l'utilisateur
-app.get('/api/tax/payments', authenticateToken, async (req, res) => {
-  try {
-    const payments = await query(`
-            SELECT tp.*, u.commune_name, u.phone as commune_phone
-            FROM tax_payments tp
-            LEFT JOIN users u ON tp.commune_id = u.id
-            WHERE tp.payer_id = ?
-            ORDER BY tp.created_at DESC
-            LIMIT 50
-        `, [req.user.userId]);
-
-    res.json(payments || []);
-
-  } catch (error) {
-    console.error('❌ Erreur historique:', error);
-    res.json([]);
-  }
-});
 
 // Récupérer un reçu spécifique
 app.get('/api/tax/receipt/:receipt_number', authenticateToken, async (req, res) => {
@@ -21966,7 +21191,7 @@ app.get('/api/investment/my-investments', authenticateToken, async (req, res) =>
 });
 
 // ============================================
-// POST - INVESTIR DANS UNE ENTREPRISE (SANS KYC)
+// POST - Investir dans une entreprise (avec wallet propriétaire)
 // ============================================
 
 app.post('/api/investment/invest', authenticateToken, async (req, res) => {
@@ -21974,14 +21199,13 @@ app.post('/api/investment/invest', authenticateToken, async (req, res) => {
     const { company_id, amount, shares } = req.body;
 
     console.log(`📝 Investissement: user ${userId}, company ${company_id}, amount ${amount}`);
+    
+    let transactionActive = false;
 
     try {
         await createInvestmentTables();
 
-        // ✅ SUPPRIMER LA VÉRIFICATION KYC
-        // Plus de vérification KYC - tout le monde peut investir
-
-        // Vérifier les données
+        // 1. Vérifier les données
         if (!company_id || !amount || amount <= 0) {
             return res.status(400).json({
                 success: false,
@@ -21989,10 +21213,16 @@ app.post('/api/investment/invest', authenticateToken, async (req, res) => {
             });
         }
 
-        // Vérifier que l'entreprise existe
+        // 2. Vérifier que l'entreprise existe et est active
         const company = await get(`
-            SELECT * FROM investment_companies 
-            WHERE id = ? AND is_active = 1
+            SELECT 
+                c.*,
+                u.id as owner_id,
+                u.fullname as owner_name,
+                u.phone as owner_phone
+            FROM investment_companies c
+            LEFT JOIN users u ON c.created_by = u.id
+            WHERE c.id = ? AND c.is_active = 1
         `, [company_id]);
 
         if (!company) {
@@ -22002,7 +21232,7 @@ app.post('/api/investment/invest', authenticateToken, async (req, res) => {
             });
         }
 
-        // Vérifier que l'utilisateur n'investit pas dans sa propre entreprise
+        // 3. Vérifier que l'utilisateur n'investit pas dans sa propre entreprise
         if (company.created_by === userId) {
             return res.status(400).json({
                 success: false,
@@ -22010,24 +21240,94 @@ app.post('/api/investment/invest', authenticateToken, async (req, res) => {
             });
         }
 
-        // Vérifier le solde de l'utilisateur
-        const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [userId]);
+        // 4. Vérifier le solde de l'investisseur
+        const investorWallet = await get(
+            'SELECT id, balance FROM wallets WHERE user_id = ?',
+            [userId]
+        );
 
-        if (!wallet || wallet.balance < amount) {
-            return res.status(400).json({
+        if (!investorWallet) {
+            return res.status(404).json({
                 success: false,
-                error: 'Solde insuffisant'
+                error: 'Wallet investisseur non trouvé'
             });
         }
-
-        // Démarrer la transaction
-        await run('BEGIN TRANSACTION');
 
         const sharesCount = shares || Math.floor(amount / (company.sharePrice || 1000));
         const sharePrice = company.sharePrice || 1000;
         const totalAmount = sharesCount * sharePrice;
 
-        // Enregistrer l'investissement
+        if (investorWallet.balance < totalAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Vous avez ${investorWallet.balance} FCFA, besoin de ${totalAmount} FCFA`
+            });
+        }
+
+        // 5. Vérifier le wallet du propriétaire de l'entreprise
+        const ownerWallet = await get(
+            'SELECT id, balance FROM wallets WHERE user_id = ?',
+            [company.owner_id]
+        );
+
+        if (!ownerWallet) {
+            // Créer un wallet pour le propriétaire s'il n'en a pas
+            await run(
+                'INSERT INTO wallets (user_id, balance) VALUES (?, 0)',
+                [company.owner_id]
+            );
+            
+            // Recharger le wallet
+            const newOwnerWallet = await get(
+                'SELECT id, balance FROM wallets WHERE user_id = ?',
+                [company.owner_id]
+            );
+            
+            if (!newOwnerWallet) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'Erreur lors de la création du wallet propriétaire'
+                });
+            }
+            
+            // Utiliser le nouveau wallet
+            ownerWallet.id = newOwnerWallet.id;
+            ownerWallet.balance = newOwnerWallet.balance;
+        }
+
+        // 6. Générer une référence unique
+        const reference = `INV${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+        // 7. Démarrer la transaction
+        console.log('🔄 Début de la transaction...');
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+
+        // 8. Débiter l'investisseur
+        await run(`
+            UPDATE wallets 
+            SET balance = balance - ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [totalAmount, userId]);
+
+        // 9. ✅ Créditer le propriétaire de l'entreprise
+        await run(`
+            UPDATE wallets 
+            SET balance = balance + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [totalAmount, company.owner_id]);
+
+        // 10. Mettre à jour le montant collecté de l'entreprise
+        await run(`
+            UPDATE investment_companies 
+            SET collectedAmount = COALESCE(collectedAmount, 0) + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [totalAmount, company_id]);
+
+        // 11. Enregistrer l'investissement
         const result = await run(`
             INSERT INTO investments (
                 user_id,
@@ -22038,58 +21338,128 @@ app.post('/api/investment/invest', authenticateToken, async (req, res) => {
                 share_price,
                 total_amount,
                 status,
+                reference,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `, [userId, userId, company_id, totalAmount, sharesCount, sharePrice, totalAmount]);
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `, [
+            userId, 
+            userId, 
+            company_id, 
+            totalAmount, 
+            sharesCount, 
+            sharePrice, 
+            totalAmount,
+            reference
+        ]);
 
-        // Débiter le wallet
+        // 12. Ajouter à l'historique
         await run(`
-            UPDATE wallets 
-            SET balance = balance - ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        `, [totalAmount, userId]);
+            INSERT INTO investment_history (
+                investment_id,
+                investor_id,
+                company_id,
+                action,
+                status_from,
+                status_to,
+                amount,
+                description,
+                created_by,
+                created_at
+            ) VALUES (?, ?, ?, 'invest', NULL, 'active', ?, 'Investissement effectué', ?, CURRENT_TIMESTAMP)
+        `, [
+            result.lastID,
+            userId,
+            company_id,
+            totalAmount,
+            userId
+        ]);
 
-        // Mettre à jour le montant collecté
-        await run(`
-            UPDATE investment_companies 
-            SET collectedAmount = COALESCE(collectedAmount, 0) + ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        `, [totalAmount, company_id]);
-
+        // 13. Valider la transaction
         await run('COMMIT');
+        transactionActive = false;
+        console.log('✅ Transaction validée');
 
-        console.log(`✅ Investissement enregistré avec ID: ${result.lastID}`);
+        // 14. Récupérer les nouveaux soldes
+        const newInvestorBalance = await get(
+            'SELECT balance FROM wallets WHERE user_id = ?',
+            [userId]
+        );
+        
+        const newOwnerBalance = await get(
+            'SELECT balance FROM wallets WHERE user_id = ?',
+            [company.owner_id]
+        );
 
-        // Notification à l'utilisateur
-        await run(`
-            INSERT INTO notifications (user_id, title, message, type, created_at)
-            VALUES (?, '💰 Investissement réussi', 
-                    'Vous avez investi ' || ? || ' FCFA dans "' || ? || '"',
-                    'success', CURRENT_TIMESTAMP)
-        `, [userId, totalAmount.toLocaleString(), company.name]);
+        // 15. Notifications
+        // Notification à l'investisseur
+        await sendNotification(
+            userId,
+            '💰 Investissement réussi',
+            `Vous avez investi ${totalAmount.toLocaleString()} FCFA dans "${company.name}" (${sharesCount} actions)`,
+            'success',
+            'investment',
+            {
+                amount: totalAmount,
+                shares: sharesCount,
+                company: company.name,
+                company_id: company_id,
+                reference: reference,
+                new_balance: newInvestorBalance?.balance || 0
+            }
+        );
 
+        // ✅ Notification au propriétaire de l'entreprise
+        await sendNotification(
+            company.owner_id,
+            '📈 Nouvel investissement reçu',
+            `Vous avez reçu ${totalAmount.toLocaleString()} FCFA de ${req.user.fullname || 'un investisseur'} pour votre entreprise "${company.name}"`,
+            'success',
+            'investment',
+            {
+                amount: totalAmount,
+                shares: sharesCount,
+                investor_name: req.user.fullname || 'Investisseur',
+                investor_id: userId,
+                company: company.name,
+                company_id: company_id,
+                reference: reference,
+                new_balance: newOwnerBalance?.balance || 0
+            }
+        );
+
+        // 16. Réponse
         res.json({
             success: true,
             message: 'Investissement réussi',
             data: {
                 id: result.lastID,
+                reference: reference,
                 amount: totalAmount,
                 shares: sharesCount,
                 share_price: sharePrice,
                 company_id: company_id,
-                company_name: company.name
+                company_name: company.name,
+                owner_name: company.owner_name,
+                investor_balance: newInvestorBalance?.balance || 0,
+                owner_balance: newOwnerBalance?.balance || 0
             }
         });
 
     } catch (error) {
-        await run('ROLLBACK');
+        // Annuler en cas d'erreur
+        if (transactionActive) {
+            try {
+                await run('ROLLBACK');
+                console.log('✅ Rollback effectué');
+            } catch (rollbackError) {
+                console.error('❌ Erreur rollback:', rollbackError);
+            }
+        }
         console.error('❌ Erreur investissement:', error);
         res.status(500).json({
             success: false,
-            error: error.message,
+            error: error.message || 'Erreur lors de l\'investissement',
             code: 'INVEST_ERROR'
         });
     }
@@ -22735,6 +22105,452 @@ app.get('/api/investment/companies/:id', authenticateToken, async (req, res) => 
 
 //=========================================
 // ============================================
+// GET - DÉTAILS DES INVESTISSEURS D'UNE ENTREPRISE
+// ============================================
+
+app.get('/api/investment/investors', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { company_id } = req.query;
+    
+    console.log(`📋 Récupération investisseurs - User: ${userId}, Company: ${company_id}`);
+    
+    try {
+        await createInvestmentTables();
+        
+        // Vérifier que l'utilisateur est le propriétaire de l'entreprise
+        let company;
+        if (company_id) {
+            company = await get(`
+                SELECT * FROM investment_companies 
+                WHERE id = ? AND created_by = ? AND is_active = 1
+            `, [company_id, userId]);
+        } else {
+            company = await get(`
+                SELECT * FROM investment_companies 
+                WHERE created_by = ? AND is_active = 1
+                ORDER BY id DESC LIMIT 1
+            `, [userId]);
+        }
+        
+        if (!company) {
+            return res.status(403).json({
+                success: false,
+                error: 'Vous n\'êtes pas autorisé à voir ces investisseurs',
+                data: []
+            });
+        }
+        
+        // Récupérer tous les investisseurs de l'entreprise
+        const investors = await query(`
+            SELECT 
+                i.id,
+                i.user_id,
+                i.investor_id,
+                i.company_id,
+                i.amount,
+                i.shares,
+                i.share_price,
+                i.total_amount,
+                i.status,
+                i.created_at,
+                u.fullname as investor_name,
+                u.phone as investor_phone,
+                u.email as investor_email,
+                u.kyc_level,
+                u.is_verified
+            FROM investments i
+            LEFT JOIN users u ON i.user_id = u.id
+            WHERE i.company_id = ?
+            ORDER BY i.created_at DESC
+        `, [company.id]);
+        
+        console.log(`✅ ${investors?.length || 0} investisseurs trouvés`);
+        
+        res.json({
+            success: true,
+            data: investors || [],
+            total: investors?.length || 0,
+            company: {
+                id: company.id,
+                name: company.name
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur récupération investisseurs:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: []
+        });
+    }
+});
+
+// ============================================
+// GET - DÉTAILS D'UN INVESTISSEUR SPÉCIFIQUE
+// ============================================
+
+app.get('/api/investment/investors/:id', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { id } = req.params;
+    
+    console.log(`📋 Récupération détails investisseur ${id}`);
+    
+    try {
+        // Récupérer l'investissement avec les infos de l'entreprise
+        const investment = await get(`
+            SELECT 
+                i.*,
+                c.name as company_name,
+                c.created_by as company_owner,
+                u.fullname as investor_name,
+                u.phone as investor_phone,
+                u.email as investor_email
+            FROM investments i
+            LEFT JOIN investment_companies c ON i.company_id = c.id
+            LEFT JOIN users u ON i.user_id = u.id
+            WHERE i.id = ?
+        `, [id]);
+        
+        if (!investment) {
+            return res.status(404).json({
+                success: false,
+                error: 'Investissement non trouvé'
+            });
+        }
+        
+        // Vérifier les droits d'accès
+        if (investment.company_owner !== userId && investment.user_id !== userId) {
+            return res.status(403).json({
+                success: false,
+                error: 'Accès non autorisé'
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: investment
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ============================================
+// GET - HISTORIQUE DES ACTIVITÉS DE L'ENTREPRISE
+// ============================================
+
+app.get('/api/investment/history', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { company_id, limit = 50, offset = 0 } = req.query;
+    
+    console.log(`📜 Récupération historique - User: ${userId}, Company: ${company_id}`);
+    
+    try {
+        await createInvestmentTables();
+        
+        // Vérifier que l'utilisateur est le propriétaire de l'entreprise
+        let company;
+        if (company_id) {
+            company = await get(`
+                SELECT * FROM investment_companies 
+                WHERE id = ? AND created_by = ? AND is_active = 1
+            `, [company_id, userId]);
+        } else {
+            company = await get(`
+                SELECT * FROM investment_companies 
+                WHERE created_by = ? AND is_active = 1
+                ORDER BY id DESC LIMIT 1
+            `, [userId]);
+        }
+        
+        if (!company) {
+            return res.json({
+                success: true,
+                data: [],
+                message: 'Aucune entreprise trouvée'
+            });
+        }
+        
+        // Récupérer l'historique depuis investment_history
+        const history = await query(`
+            SELECT 
+                ih.id,
+                ih.investment_id,
+                ih.investor_id,
+                ih.company_id,
+                ih.action,
+                ih.status_from,
+                ih.status_to,
+                ih.amount,
+                ih.description,
+                ih.created_by,
+                ih.created_at,
+                u.fullname as created_by_name,
+                inv.fullname as investor_name
+            FROM investment_history ih
+            LEFT JOIN users u ON ih.created_by = u.id
+            LEFT JOIN users inv ON ih.investor_id = inv.id
+            WHERE ih.company_id = ?
+            ORDER BY ih.created_at DESC
+            LIMIT ? OFFSET ?
+        `, [company.id, parseInt(limit), parseInt(offset)]);
+        
+        // Récupérer aussi les investissements comme historique
+        const investments = await query(`
+            SELECT 
+                i.id,
+                i.id as investment_id,
+                i.user_id as investor_id,
+                i.company_id,
+                'investment' as action,
+                NULL as status_from,
+                'active' as status_to,
+                i.amount,
+                'Investissement effectué' as description,
+                i.user_id as created_by,
+                i.created_at,
+                u.fullname as created_by_name,
+                u.fullname as investor_name
+            FROM investments i
+            LEFT JOIN users u ON i.user_id = u.id
+            WHERE i.company_id = ?
+            ORDER BY i.created_at DESC
+            LIMIT 20
+        `, [company.id]);
+        
+        // Fusionner les deux listes
+        const allHistory = [
+            ...(history || []),
+            ...(investments || [])
+        ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        
+        // Formatter pour l'affichage
+        const formattedHistory = allHistory.map(item => ({
+            id: item.id,
+            type: item.action === 'investment' ? 'investissement' : item.action,
+            action: getActionLabel(item.action),
+            description: item.description || getActionDescription(item),
+            amount: item.amount,
+            investor_name: item.investor_name,
+            created_by_name: item.created_by_name,
+            status_from: item.status_from,
+            status_to: item.status_to,
+            created_at: item.created_at,
+            icon: getActionIcon(item.action),
+            color: getActionColor(item.action)
+        }));
+        
+        console.log(`✅ ${formattedHistory.length} activités trouvées`);
+        
+        res.json({
+            success: true,
+            data: formattedHistory,
+            total: formattedHistory.length,
+            company: {
+                id: company.id,
+                name: company.name
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur récupération historique:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: []
+        });
+    }
+});
+
+// ============================================
+// FONCTIONS UTILITAIRES POUR L'HISTORIQUE
+// ============================================
+
+function getActionLabel(action) {
+    const labels = {
+        'investment': 'Investissement',
+        'create': 'Création',
+        'update': 'Modification',
+        'delete': 'Suppression',
+        'verify': 'Vérification',
+        'reject': 'Rejet',
+        'notify': 'Notification',
+        'invest': 'Investissement',
+        'withdraw': 'Retrait',
+        'dividend': 'Dividende',
+        'status_change': 'Changement de statut'
+    };
+    return labels[action] || action;
+}
+
+function getActionDescription(item) {
+    switch(item.action) {
+        case 'investment':
+        case 'invest':
+            return `${item.investor_name || 'Un investisseur'} a investi ${item.amount?.toLocaleString() || 0} FCFA`;
+        case 'create':
+            return 'Entreprise créée';
+        case 'update':
+            return 'Informations mises à jour';
+        case 'delete':
+            return 'Entreprise supprimée';
+        case 'verify':
+            return 'Entreprise vérifiée';
+        case 'reject':
+            return 'Demande rejetée';
+        case 'notify':
+            return 'Notification envoyée aux investisseurs';
+        default:
+            return item.description || 'Activité';
+    }
+}
+
+function getActionIcon(action) {
+    const icons = {
+        'investment': '💰',
+        'invest': '💰',
+        'create': '🏢',
+        'update': '✏️',
+        'delete': '🗑️',
+        'verify': '✅',
+        'reject': '❌',
+        'notify': '📢',
+        'withdraw': '💸',
+        'dividend': '📈',
+        'status_change': '🔄'
+    };
+    return icons[action] || '📋';
+}
+
+function getActionColor(action) {
+    const colors = {
+        'investment': 'blue',
+        'invest': 'blue',
+        'create': 'green',
+        'update': 'yellow',
+        'delete': 'red',
+        'verify': 'green',
+        'reject': 'red',
+        'notify': 'purple',
+        'withdraw': 'orange',
+        'dividend': 'green',
+        'status_change': 'gray'
+    };
+    return colors[action] || 'gray';
+}
+
+// ============================================
+// GET - STATISTIQUES DE L'ENTREPRISE
+// ============================================
+
+app.get('/api/investment/company-stats', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        await createInvestmentTables();
+        
+        const company = await get(`
+            SELECT * FROM investment_companies 
+            WHERE created_by = ? AND is_active = 1
+            ORDER BY id DESC LIMIT 1
+        `, [userId]);
+        
+        if (!company) {
+            return res.json({
+                success: true,
+                data: null,
+                message: 'Aucune entreprise trouvée'
+            });
+        }
+        
+        // Statistiques des investissements
+        const investmentStats = await get(`
+            SELECT 
+                COUNT(*) as total_investments,
+                COUNT(DISTINCT user_id) as total_investors,
+                COALESCE(SUM(amount), 0) as total_amount,
+                COALESCE(SUM(shares), 0) as total_shares,
+                COALESCE(AVG(amount), 0) as average_investment,
+                COALESCE(MAX(amount), 0) as max_investment,
+                COALESCE(MIN(amount), 0) as min_investment
+            FROM investments 
+            WHERE company_id = ? AND status = 'active'
+        `, [company.id]);
+        
+        // Investissements par jour (7 derniers jours)
+        const dailyStats = await query(`
+            SELECT 
+                DATE(created_at) as date,
+                COUNT(*) as count,
+                COALESCE(SUM(amount), 0) as amount
+            FROM investments 
+            WHERE company_id = ? 
+                AND status = 'active'
+                AND created_at >= DATE('now', '-7 days')
+            GROUP BY DATE(created_at)
+            ORDER BY date ASC
+        `, [company.id]);
+        
+        // Répartition par montant
+        const distribution = await query(`
+            SELECT 
+                CASE 
+                    WHEN amount < 10000 THEN '0-10K'
+                    WHEN amount < 50000 THEN '10K-50K'
+                    WHEN amount < 100000 THEN '50K-100K'
+                    WHEN amount < 500000 THEN '100K-500K'
+                    ELSE '500K+'
+                END as range,
+                COUNT(*) as count,
+                COALESCE(SUM(amount), 0) as total
+            FROM investments 
+            WHERE company_id = ? AND status = 'active'
+            GROUP BY range
+        `, [company.id]);
+        
+        res.json({
+            success: true,
+            data: {
+                company: {
+                    id: company.id,
+                    name: company.name,
+                    funding_goal: company.fundingGoal,
+                    collected_amount: company.collectedAmount || 0,
+                    share_price: company.sharePrice
+                },
+                stats: {
+                    total_investments: investmentStats?.total_investments || 0,
+                    total_investors: investmentStats?.total_investors || 0,
+                    total_amount: investmentStats?.total_amount || 0,
+                    total_shares: investmentStats?.total_shares || 0,
+                    average_investment: Math.round(investmentStats?.average_investment || 0),
+                    max_investment: investmentStats?.max_investment || 0,
+                    min_investment: investmentStats?.min_investment || 0,
+                    funding_progress: company.fundingGoal > 0 
+                        ? ((company.collectedAmount || 0) / company.fundingGoal) * 100 
+                        : 0
+                },
+                daily_stats: dailyStats || [],
+                distribution: distribution || []
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur statistiques entreprise:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: null
+        });
+    }
+});
+// ============================================
 // ROUTES RAPPORTS D'INVESTISSEMENT
 // ============================================
 
@@ -22979,7 +22795,4501 @@ app.get('/api/investment/global-stats', authenticateToken, requireAdmin, async (
     res.status(500).json({ error: error.message });
   }
 });
-// Appeler cette fonction au démarrage
+// ============================================
+// SYSTÈME D'ÉPARGNE - BACKEND COMPLET
+// ============================================
+
+// ============================================
+// 1. CRÉATION DES TABLES
+// ============================================
+async function createSavingsTables() {
+    try {
+        console.log('📝 Vérification des tables d\'épargne...');
+        
+        // Table savings
+        await run(`
+            CREATE TABLE IF NOT EXISTS savings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL DEFAULT 'simple',
+                name TEXT NOT NULL,
+                target_amount INTEGER DEFAULT 0,
+                current_amount INTEGER DEFAULT 0,
+                interest_rate REAL DEFAULT 0,
+                start_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                end_date DATETIME,
+                status TEXT DEFAULT 'active',
+                is_locked INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Table savings_transactions
+        await run(`
+            CREATE TABLE IF NOT EXISTS savings_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                savings_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                fee INTEGER DEFAULT 0,
+                net_amount INTEGER DEFAULT 0,
+                balance_before INTEGER DEFAULT 0,
+                balance_after INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'completed',
+                reference TEXT,
+                description TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (savings_id) REFERENCES savings(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Table savings_withdrawal_requests
+        await run(`
+            CREATE TABLE IF NOT EXISTS savings_withdrawal_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                savings_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                fee INTEGER DEFAULT 0,
+                net_amount INTEGER DEFAULT 0,
+                reason TEXT,
+                status TEXT DEFAULT 'pending',
+                admin_id INTEGER,
+                admin_comment TEXT,
+                requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                processed_at DATETIME,
+                FOREIGN KEY (savings_id) REFERENCES savings(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+        `);
+        
+        // Index
+        await run('CREATE INDEX IF NOT EXISTS idx_savings_user_id ON savings(user_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_savings_status ON savings(status)');
+        await run('CREATE INDEX IF NOT EXISTS idx_savings_type ON savings(type)');
+        await run('CREATE INDEX IF NOT EXISTS idx_savings_tx_savings_id ON savings_transactions(savings_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_savings_tx_user_id ON savings_transactions(user_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_savings_withdrawal_user ON savings_withdrawal_requests(user_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_savings_withdrawal_status ON savings_withdrawal_requests(status)');
+        
+        console.log('✅ Tables d\'épargne prêtes');
+    } catch (error) {
+        console.error('❌ Erreur création tables épargne:', error);
+    }
+}
+
+// ============================================
+// 2. GET - Liste des épargnes de l'utilisateur
+// ============================================
+app.get('/api/savings', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    console.log(`📋 Récupération épargnes pour user ${userId}`);
+    
+    try {
+        await createSavingsTables();
+        
+        const savings = await query(`
+            SELECT 
+                s.*,
+                (SELECT COUNT(*) FROM savings_transactions WHERE savings_id = s.id) as transactions_count
+            FROM savings s
+            WHERE s.user_id = ?
+            ORDER BY s.created_at DESC
+        `, [userId]);
+        
+        // Statistiques
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_savings,
+                COALESCE(SUM(current_amount), 0) as total_amount,
+                COALESCE(SUM(CASE WHEN type = 'simple' THEN current_amount ELSE 0 END), 0) as simple_amount,
+                COALESCE(SUM(CASE WHEN type = 'term' THEN current_amount ELSE 0 END), 0) as term_amount,
+                COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) as active_count
+            FROM savings
+            WHERE user_id = ?
+        `, [userId]);
+        
+        res.json({
+            success: true,
+            data: savings || [],
+            stats: {
+                total_savings: stats?.total_savings || 0,
+                total_amount: stats?.total_amount || 0,
+                simple_amount: stats?.simple_amount || 0,
+                term_amount: stats?.term_amount || 0,
+                active_count: stats?.active_count || 0
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// 3. GET - Détails d'une épargne
+// ============================================
+app.get('/api/savings/:id', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { id } = req.params;
+    
+    try {
+        const savings = await get(`
+            SELECT * FROM savings WHERE id = ? AND user_id = ?
+        `, [id, userId]);
+        
+        if (!savings) {
+            return res.status(404).json({ success: false, error: 'Épargne non trouvée' });
+        }
+        
+        const transactions = await query(`
+            SELECT * FROM savings_transactions
+            WHERE savings_id = ?
+            ORDER BY created_at DESC
+            LIMIT 50
+        `, [id]);
+        
+        const pendingWithdrawals = await query(`
+            SELECT * FROM savings_withdrawal_requests
+            WHERE savings_id = ? AND status = 'pending'
+            ORDER BY requested_at DESC
+        `, [id]);
+        
+        res.json({
+            success: true,
+            data: {
+                ...savings,
+                transactions: transactions || [],
+                pending_withdrawals: pendingWithdrawals || [],
+                progress: savings.target_amount > 0 
+                    ? (savings.current_amount / savings.target_amount) * 100 
+                    : 0
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// 4. GET - Transactions d'épargne de l'utilisateur
+// ============================================
+app.get('/api/savings/transactions', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { limit = 100, offset = 0, savings_id } = req.query;
+    
+    console.log(`📜 Récupération transactions épargne pour user ${userId}`);
+    
+    try {
+        await createSavingsTables();
+        
+        let sql = `
+            SELECT 
+                st.id,
+                st.savings_id,
+                st.user_id,
+                st.type,
+                st.amount,
+                st.fee,
+                st.net_amount,
+                st.balance_before,
+                st.balance_after,
+                st.status,
+                st.reference,
+                st.description,
+                st.created_at,
+                s.name as savings_name,
+                s.type as savings_type
+            FROM savings_transactions st
+            LEFT JOIN savings s ON st.savings_id = s.id
+            WHERE st.user_id = ?
+        `;
+        const params = [userId];
+        
+        if (savings_id) {
+            sql += ' AND st.savings_id = ?';
+            params.push(savings_id);
+        }
+        
+        sql += ' ORDER BY st.created_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const transactions = await query(sql, params);
+        
+        console.log(`✅ ${transactions?.length || 0} transactions trouvées`);
+        
+        res.json({
+            success: true,
+            data: transactions || [],
+            total: transactions?.length || 0
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.json({ success: true, data: [], error: error.message });
+    }
+});
+
+// ============================================
+// 5. GET - Demandes de retrait de l'utilisateur
+// ============================================
+app.get('/api/savings/withdrawal-requests', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { status, limit = 50, offset = 0 } = req.query;
+    
+    console.log(`📜 Récupération demandes retrait pour user ${userId}`);
+    
+    try {
+        await createSavingsTables();
+        
+        let sql = `
+            SELECT 
+                wr.id,
+                wr.savings_id,
+                wr.user_id,
+                wr.amount,
+                wr.fee,
+                wr.net_amount,
+                wr.reason,
+                wr.status,
+                wr.admin_id,
+                wr.admin_comment,
+                wr.requested_at,
+                wr.processed_at,
+                s.name as savings_name,
+                s.type as savings_type,
+                s.current_amount as savings_balance,
+                a.fullname as admin_name
+            FROM savings_withdrawal_requests wr
+            LEFT JOIN savings s ON wr.savings_id = s.id
+            LEFT JOIN users a ON wr.admin_id = a.id
+            WHERE wr.user_id = ?
+        `;
+        const params = [userId];
+        
+        if (status && status !== 'all') {
+            sql += ' AND wr.status = ?';
+            params.push(status);
+        }
+        
+        sql += ' ORDER BY wr.requested_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const requests = await query(sql, params);
+        
+        console.log(`✅ ${requests?.length || 0} demandes trouvées`);
+        
+        res.json({
+            success: true,
+            data: requests || [],
+            total: requests?.length || 0
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.json({ success: true, data: [], error: error.message });
+    }
+});
+
+// ============================================
+// 6. POST - Créer une épargne
+// ============================================
+app.post('/api/savings', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { type, name, target_amount, end_date, initial_deposit } = req.body;
+    
+    console.log(`💰 Création épargne: ${type} pour user ${userId}`);
+    
+    let transactionActive = false;
+    
+    try {
+        await createSavingsTables();
+        
+        // Validation
+        if (!type || !['simple', 'term'].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Type d\'épargne invalide (simple ou term)'
+            });
+        }
+        
+        if (!name || name.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                error: 'Le nom de l\'épargne est requis'
+            });
+        }
+        
+        const targetAmount = parseInt(target_amount) || 0;
+        const initialAmount = parseInt(initial_deposit) || 0;
+        
+        // Pour épargne à terme
+        if (type === 'term') {
+            if (targetAmount < 1000) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Le montant objectif minimum est de 1 000 FCFA'
+                });
+            }
+            if (!end_date) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'La date d\'échéance est requise pour une épargne à terme'
+                });
+            }
+            
+            const endDate = new Date(end_date);
+            if (endDate <= new Date()) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'La date d\'échéance doit être dans le futur'
+                });
+            }
+        }
+        
+        // Vérifier le solde si dépôt initial
+        if (initialAmount > 0) {
+            const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [userId]);
+            if (!wallet || wallet.balance < initialAmount) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Solde insuffisant pour le dépôt initial'
+                });
+            }
+        }
+        
+        // Démarrer la transaction
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+        
+        // Créer l'épargne
+        const result = await run(`
+            INSERT INTO savings (
+                user_id, type, name, target_amount, current_amount,
+                end_date, status, is_locked, start_date, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 0, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `, [
+            userId,
+            type,
+            name.trim(),
+            targetAmount,
+            type === 'term' ? end_date : null,
+            type === 'term' ? 1 : 0
+        ]);
+        
+        const savingsId = result.lastID;
+        
+        // Dépôt initial
+        if (initialAmount > 0) {
+            const reference = `SAV${Date.now()}${Math.floor(Math.random() * 1000)}`;
+            
+            // Récupérer wallet admin
+            const adminWallet = await get(`
+                SELECT w.id, w.user_id 
+                FROM wallets w
+                JOIN users u ON w.user_id = u.id
+                WHERE u.role = 'admin' AND u.phone = '62787307'
+                LIMIT 1
+            `);
+            
+            // Débiter wallet utilisateur
+            await run(`
+                UPDATE wallets 
+                SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            `, [initialAmount, userId]);
+            
+            // Créditer wallet admin
+            if (adminWallet) {
+                await run(`
+                    UPDATE wallets 
+                    SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                `, [initialAmount, adminWallet.id]);
+            }
+            
+            // Mettre à jour l'épargne
+            await run(`
+                UPDATE savings 
+                SET current_amount = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [initialAmount, savingsId]);
+            
+            // Transaction
+            await run(`
+                INSERT INTO savings_transactions (
+                    savings_id, user_id, type, amount, fee, net_amount,
+                    balance_before, balance_after, status, reference, description, created_at
+                ) VALUES (?, ?, 'deposit', ?, 0, ?, 0, ?, 'completed', ?, 'Dépôt initial', CURRENT_TIMESTAMP)
+            `, [savingsId, userId, initialAmount, initialAmount, initialAmount, reference]);
+            
+            // Notification
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💰 Épargne créée', 
+                        'Votre épargne "' || ? || '" a été créée avec ' || ? || ' FCFA',
+                        'success', CURRENT_TIMESTAMP)
+            `, [userId, name, initialAmount.toLocaleString()]);
+        }
+        
+        await run('COMMIT');
+        transactionActive = false;
+        
+        res.json({
+            success: true,
+            message: 'Épargne créée avec succès',
+            data: {
+                id: savingsId,
+                name: name,
+                type: type,
+                target_amount: targetAmount,
+                current_amount: initialAmount,
+                end_date: end_date
+            }
+        });
+        
+    } catch (error) {
+        if (transactionActive) {
+            try { await run('ROLLBACK'); } catch (e) {}
+        }
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// 7. POST - Déposer dans une épargne
+// ============================================
+app.post('/api/savings/:id/deposit', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { id } = req.params;
+    const { amount } = req.body;
+    
+    let transactionActive = false;
+    
+    try {
+        const amountNum = parseInt(amount);
+        if (!amountNum || amountNum < 100) {
+            return res.status(400).json({
+                success: false,
+                error: 'Montant minimum 100 FCFA'
+            });
+        }
+        
+        const savings = await get(`
+            SELECT * FROM savings WHERE id = ? AND user_id = ?
+        `, [id, userId]);
+        
+        if (!savings) {
+            return res.status(404).json({ success: false, error: 'Épargne non trouvée' });
+        }
+        
+        if (savings.status !== 'active') {
+            return res.status(400).json({ success: false, error: 'Cette épargne n\'est plus active' });
+        }
+        
+        const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [userId]);
+        if (!wallet || wallet.balance < amountNum) {
+            return res.status(400).json({ success: false, error: 'Solde insuffisant' });
+        }
+        
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+        
+        const reference = `SAV${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        const balanceBefore = savings.current_amount;
+        const balanceAfter = balanceBefore + amountNum;
+        
+        const adminWallet = await get(`
+            SELECT w.id FROM wallets w
+            JOIN users u ON w.user_id = u.id
+            WHERE u.role = 'admin' AND u.phone = '62787307'
+            LIMIT 1
+        `);
+        
+        // Débiter
+        await run(`
+            UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [amountNum, userId]);
+        
+        // Créditer admin
+        if (adminWallet) {
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [amountNum, adminWallet.id]);
+        }
+        
+        // Mettre à jour épargne
+        await run(`
+            UPDATE savings SET current_amount = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [balanceAfter, id]);
+        
+        // Transaction
+        await run(`
+            INSERT INTO savings_transactions (
+                savings_id, user_id, type, amount, fee, net_amount,
+                balance_before, balance_after, status, reference, description, created_at
+            ) VALUES (?, ?, 'deposit', ?, 0, ?, ?, ?, 'completed', ?, 'Dépôt épargne', CURRENT_TIMESTAMP)
+        `, [id, userId, amountNum, amountNum, balanceBefore, balanceAfter, reference]);
+        
+        // Objectif atteint
+        if (savings.type === 'term' && balanceAfter >= savings.target_amount) {
+            await run(`
+                UPDATE savings SET status = 'completed', is_locked = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [id]);
+            
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '🎉 Objectif atteint !', 
+                        'Félicitations ! Épargne "' || ? || '" objectif atteint: ' || ? || ' FCFA',
+                        'success', CURRENT_TIMESTAMP)
+            `, [userId, savings.name, savings.target_amount.toLocaleString()]);
+        }
+        
+        await run('COMMIT');
+        transactionActive = false;
+        
+        res.json({
+            success: true,
+            message: 'Dépôt effectué avec succès',
+            data: { reference, amount: amountNum, new_balance: balanceAfter }
+        });
+        
+    } catch (error) {
+        if (transactionActive) { try { await run('ROLLBACK'); } catch (e) {} }
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// 8. POST - Demander un retrait
+// ============================================
+app.post('/api/savings/:id/withdraw-request', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { id } = req.params;
+    const { amount, reason } = req.body;
+    
+    try {
+        const amountNum = parseInt(amount);
+        if (!amountNum || amountNum < 100) {
+            return res.status(400).json({ success: false, error: 'Montant minimum 100 FCFA' });
+        }
+        
+        const savings = await get(`
+            SELECT * FROM savings WHERE id = ? AND user_id = ?
+        `, [id, userId]);
+        
+        if (!savings) {
+            return res.status(404).json({ success: false, error: 'Épargne non trouvée' });
+        }
+        
+        if (savings.current_amount < amountNum) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Disponible: ${savings.current_amount.toLocaleString()} FCFA`
+            });
+        }
+        
+        // Vérification épargne à terme
+        if (savings.type === 'term') {
+            const today = new Date();
+            const endDate = savings.end_date ? new Date(savings.end_date) : null;
+            const targetReached = savings.target_amount > 0 && savings.current_amount >= savings.target_amount;
+            
+            if (endDate && today < endDate && !targetReached) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Épargne à terme: retrait possible après le ${endDate.toLocaleDateString('fr-FR')} ou après avoir atteint l'objectif`
+                });
+            }
+        }
+        
+        // Vérifier demande existante
+        const existingRequest = await get(`
+            SELECT id FROM savings_withdrawal_requests 
+            WHERE savings_id = ? AND status = 'pending'
+        `, [id]);
+        
+        if (existingRequest) {
+            return res.status(400).json({
+                success: false,
+                error: 'Vous avez déjà une demande de retrait en attente'
+            });
+        }
+        
+        // Frais 0.1%
+        const fee = Math.max(1, Math.round(amountNum * 0.001));
+        const netAmount = amountNum - fee;
+        
+        const result = await run(`
+            INSERT INTO savings_withdrawal_requests (
+                savings_id, user_id, amount, fee, net_amount, reason,
+                status, requested_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+        `, [id, userId, amountNum, fee, netAmount, reason || '']);
+        
+        // Notifications
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '📤 Demande de retrait envoyée', 
+                    'Retrait de ' || ? || ' FCFA (frais: ' || ? || ', net: ' || ? || ') en attente',
+                    'info', CURRENT_TIMESTAMP)
+        `, [userId, amountNum.toLocaleString(), fee.toLocaleString(), netAmount.toLocaleString()]);
+        
+        const admins = await query(`SELECT id FROM users WHERE role IN ('admin', 'super_admin')`);
+        for (const admin of admins) {
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '🔔 Nouvelle demande de retrait', 
+                        'Retrait épargne: ' || ? || ' FCFA de user #' || ?,
+                        'warning', CURRENT_TIMESTAMP)
+            `, [admin.id, amountNum.toLocaleString(), userId]);
+        }
+        
+        res.json({
+            success: true,
+            message: 'Demande envoyée. En attente de validation.',
+            data: {
+                request_id: result.lastID,
+                amount: amountNum,
+                fee: fee,
+                net_amount: netAmount,
+                status: 'pending'
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// 9. GET - Toutes les épargnes (Admin)
+// ============================================
+app.get('/api/admin/savings', authenticateToken, requireAdmin, async (req, res) => {
+    const { status, type, search, limit = 100, offset = 0 } = req.query;
+    
+    try {
+        await createSavingsTables();
+        
+        let sql = `
+            SELECT 
+                s.*,
+                u.fullname as user_name,
+                u.phone as user_phone,
+                u.email as user_email,
+                (SELECT COUNT(*) FROM savings_transactions WHERE savings_id = s.id) as transactions_count,
+                (SELECT COUNT(*) FROM savings_withdrawal_requests WHERE savings_id = s.id AND status = 'pending') as pending_withdrawals
+            FROM savings s
+            LEFT JOIN users u ON s.user_id = u.id
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        if (status && status !== 'all') {
+            sql += ' AND s.status = ?';
+            params.push(status);
+        }
+        
+        if (type && type !== 'all') {
+            sql += ' AND s.type = ?';
+            params.push(type);
+        }
+        
+        if (search) {
+            sql += ' AND (s.name LIKE ? OR u.fullname LIKE ? OR u.phone LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+        }
+        
+        sql += ' ORDER BY s.created_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const savings = await query(sql, params);
+        
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_savings,
+                COUNT(DISTINCT user_id) as total_users,
+                COALESCE(SUM(current_amount), 0) as total_amount,
+                COALESCE(SUM(CASE WHEN type = 'simple' THEN current_amount ELSE 0 END), 0) as simple_amount,
+                COALESCE(SUM(CASE WHEN type = 'term' THEN current_amount ELSE 0 END), 0) as term_amount,
+                COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) as active_count,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed_count
+            FROM savings
+        `);
+        
+        const pendingWithdrawals = await get(`
+            SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+            FROM savings_withdrawal_requests WHERE status = 'pending'
+        `);
+        
+        res.json({
+            success: true,
+            data: savings || [],
+            stats: {
+                total_savings: stats?.total_savings || 0,
+                total_users: stats?.total_users || 0,
+                total_amount: stats?.total_amount || 0,
+                simple_amount: stats?.simple_amount || 0,
+                term_amount: stats?.term_amount || 0,
+                active_count: stats?.active_count || 0,
+                completed_count: stats?.completed_count || 0,
+                pending_count: pendingWithdrawals?.count || 0,
+                pending_amount: pendingWithdrawals?.total || 0
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// 10. GET - Demandes de retrait (Admin)
+// ============================================
+app.get('/api/admin/savings/withdrawal-requests', authenticateToken, requireAdmin, async (req, res) => {
+    const { status = 'all', limit = 100, offset = 0 } = req.query;
+    
+    console.log(`📋 Demandes retrait admin - status: ${status}`);
+    
+    try {
+        await createSavingsTables();
+        
+        const tableCheck = await get(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='savings_withdrawal_requests'
+        `);
+        
+        if (!tableCheck) {
+            return res.json({ success: true, data: [] });
+        }
+        
+        let sql = `
+            SELECT 
+                r.id,
+                r.savings_id,
+                r.user_id,
+                r.amount,
+                r.fee,
+                r.net_amount,
+                r.reason,
+                r.status,
+                r.admin_id,
+                r.admin_comment,
+                r.requested_at,
+                r.processed_at,
+                u.fullname as user_name,
+                u.phone as user_phone,
+                u.email as user_email,
+                s.name as savings_name,
+                s.type as savings_type,
+                s.current_amount as savings_balance,
+                a.fullname as admin_name
+            FROM savings_withdrawal_requests r
+            LEFT JOIN users u ON r.user_id = u.id
+            LEFT JOIN savings s ON r.savings_id = s.id
+            LEFT JOIN users a ON r.admin_id = a.id
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        if (status && status !== 'all') {
+            sql += ' AND r.status = ?';
+            params.push(status);
+        }
+        
+        sql += ' ORDER BY r.requested_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const requests = await query(sql, params);
+        
+        console.log(`✅ ${requests?.length || 0} demandes trouvées`);
+        
+        res.json({ success: true, data: requests || [] });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.json({ success: true, data: [], error: error.message });
+    }
+});
+
+// ============================================
+// 11. POST - Traiter une demande de retrait (Admin)
+// ============================================
+app.post('/api/admin/savings/withdrawal-requests/:id/process', authenticateToken, requireAdmin, async (req, res) => {
+    const adminId = req.user.userId;
+    const { id } = req.params;
+    const { action, comment } = req.body;
+    
+    let transactionActive = false;
+    
+    try {
+        const request = await get(`
+            SELECT r.*, s.name as savings_name, s.type as savings_type, s.current_amount as savings_balance
+            FROM savings_withdrawal_requests r
+            JOIN savings s ON r.savings_id = s.id
+            WHERE r.id = ?
+        `, [id]);
+        
+        if (!request) {
+            return res.status(404).json({ success: false, error: 'Demande non trouvée' });
+        }
+        
+        if (request.status !== 'pending') {
+            return res.status(400).json({ success: false, error: `Demande déjà ${request.status}` });
+        }
+        
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+        
+        if (action === 'approve') {
+            if (request.savings_balance < request.amount) {
+                await run('ROLLBACK');
+                return res.status(400).json({ success: false, error: 'Solde insuffisant' });
+            }
+            
+            // Wallet admin principal
+            const adminWallet = await get(`
+                SELECT w.id, w.user_id FROM wallets w
+                JOIN users u ON w.user_id = u.id
+                WHERE u.role = 'admin' AND u.phone = '62787307'
+                LIMIT 1
+            `);
+            
+            if (!adminWallet) {
+                await run('ROLLBACK');
+                return res.status(500).json({ success: false, error: 'Wallet admin introuvable' });
+            }
+            
+            // 1. Débiter admin
+            await run(`
+                UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [request.amount, adminWallet.id]);
+            
+            // 2. Créditer utilisateur (net)
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            `, [request.net_amount, request.user_id]);
+            
+            // 3. Frais → main_wallet
+            const mainWallet = await get('SELECT id FROM main_wallet LIMIT 1');
+            if (mainWallet) {
+                await run(`
+                    UPDATE main_wallet 
+                    SET balance = balance + ?, total_revenue = total_revenue + ?, last_updated = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                `, [request.fee, request.fee, mainWallet.id]);
+            }
+            
+            // 4. Déduire de l'épargne
+            const newBalance = request.savings_balance - request.amount;
+            await run(`
+                UPDATE savings SET current_amount = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [newBalance, request.savings_id]);
+            
+            // 5. Transaction
+            const reference = `WTH${Date.now()}${Math.floor(Math.random() * 1000)}`;
+            await run(`
+                INSERT INTO savings_transactions (
+                    savings_id, user_id, type, amount, fee, net_amount,
+                    balance_before, balance_after, status, reference, description, created_at
+                ) VALUES (?, ?, 'withdrawal', ?, ?, ?, ?, ?, 'completed', ?, 'Retrait épargne (approuvé)', CURRENT_TIMESTAMP)
+            `, [
+                request.savings_id, request.user_id, request.amount, request.fee,
+                request.net_amount, request.savings_balance, newBalance, reference
+            ]);
+            
+            // 6. Mettre à jour la demande
+            await run(`
+                UPDATE savings_withdrawal_requests 
+                SET status = 'approved', admin_id = ?, admin_comment = ?, processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [adminId, comment || '', id]);
+            
+            // 7. Notifier
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '✅ Retrait approuvé', 
+                        'Retrait de ' || ? || ' FCFA approuvé. Net reçu: ' || ? || ' FCFA',
+                        'success', CURRENT_TIMESTAMP)
+            `, [request.user_id, request.amount.toLocaleString(), request.net_amount.toLocaleString()]);
+            
+            await run('COMMIT');
+            transactionActive = false;
+            
+            res.json({
+                success: true,
+                message: 'Demande approuvée',
+                data: { reference, amount: request.amount, fee: request.fee, net_amount: request.net_amount }
+            });
+            
+        } else if (action === 'reject') {
+            await run(`
+                UPDATE savings_withdrawal_requests 
+                SET status = 'rejected', admin_id = ?, admin_comment = ?, processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [adminId, comment || 'Non conforme', id]);
+            
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '❌ Retrait rejeté', 
+                        'Demande de retrait de ' || ? || ' FCFA rejetée. Raison: ' || ?,
+                        'error', CURRENT_TIMESTAMP)
+            `, [request.user_id, request.amount.toLocaleString(), comment || 'Non conforme']);
+            
+            await run('COMMIT');
+            transactionActive = false;
+            
+            res.json({ success: true, message: 'Demande rejetée', data: { status: 'rejected' } });
+        } else {
+            await run('ROLLBACK');
+            return res.status(400).json({ success: false, error: 'Action invalide' });
+        }
+        
+    } catch (error) {
+        if (transactionActive) { try { await run('ROLLBACK'); } catch (e) {} }
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// 12. GET - Statistiques épargne (Admin)
+// ============================================
+app.get('/api/admin/savings/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await createSavingsTables();
+        
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_savings,
+                COUNT(DISTINCT user_id) as total_users,
+                COALESCE(SUM(current_amount), 0) as total_amount,
+                COALESCE(SUM(CASE WHEN type = 'simple' THEN current_amount ELSE 0 END), 0) as simple_amount,
+                COALESCE(SUM(CASE WHEN type = 'term' THEN current_amount ELSE 0 END), 0) as term_amount,
+                COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) as active_count,
+                COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) as completed_count
+            FROM savings
+        `);
+        
+        const withdrawals = await get(`
+            SELECT 
+                COUNT(*) as total_requests,
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending_count,
+                COALESCE(SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END), 0) as approved_count,
+                COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) as rejected_count,
+                COALESCE(SUM(CASE WHEN status = 'approved' THEN fee ELSE 0 END), 0) as total_fees
+            FROM savings_withdrawal_requests
+        `);
+        
+        res.json({
+            success: true,
+            stats: { ...stats, ...withdrawals }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// ============================================
+// SYSTÈME DE CHAT - BACKEND COMPLET
+// ============================================
+
+// 1. CRÉATION DES TABLES
+async function createChatTables() {
+    try {
+        console.log('📝 Vérification des tables de chat...');
+        
+        // Table des messages
+        await run(`
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL,
+                receiver_id INTEGER NOT NULL,
+                message TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0,
+                is_deleted INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                read_at DATETIME,
+                FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Table des contacts récents
+        await run(`
+            CREATE TABLE IF NOT EXISTS chat_contacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                contact_id INTEGER NOT NULL,
+                last_message_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                is_favorite INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (contact_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(user_id, contact_id)
+            )
+        `);
+        
+        // Index
+        await run('CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_chat_receiver ON chat_messages(receiver_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at)');
+        await run('CREATE INDEX IF NOT EXISTS idx_chat_contacts_user ON chat_contacts(user_id)');
+        
+        console.log('✅ Tables de chat prêtes');
+    } catch (error) {
+        console.error('❌ Erreur création tables chat:', error);
+    }
+}
+
+// 2. GET - Liste des conversations
+app.get('/api/chat/conversations', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        await createChatTables();
+        
+        // Récupérer toutes les conversations uniques
+        const conversations = await query(`
+            SELECT 
+                CASE 
+                    WHEN m.sender_id = ? THEN m.receiver_id
+                    ELSE m.sender_id
+                END as contact_id,
+                u.fullname as contact_name,
+                u.phone as contact_phone,
+                m.message as last_message,
+                m.sender_id as last_message_sender_id,
+                m.created_at as last_message_at,
+                (SELECT COUNT(*) FROM chat_messages 
+                 WHERE receiver_id = ? 
+                 AND sender_id = CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
+                 AND is_read = 0) as unread_count
+            FROM chat_messages m
+            JOIN users u ON u.id = CASE 
+                WHEN m.sender_id = ? THEN m.receiver_id
+                ELSE m.sender_id
+            END
+            WHERE (m.sender_id = ? OR m.receiver_id = ?)
+            AND m.is_deleted = 0
+            AND m.id IN (
+                SELECT MAX(id) FROM chat_messages 
+                WHERE (sender_id = ? OR receiver_id = ?)
+                AND is_deleted = 0
+                GROUP BY CASE 
+                    WHEN sender_id = ? THEN receiver_id
+                    ELSE sender_id
+                END
+            )
+            ORDER BY m.created_at DESC
+        `, [userId, userId, userId, userId, userId, userId, userId, userId, userId]);
+        
+        res.json({ success: true, data: conversations || [] });
+        
+    } catch (error) {
+        console.error('❌ Erreur conversations:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 3. GET - Contacts récents
+app.get('/api/chat/recent-contacts', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        await createChatTables();
+        
+        const contacts = await query(`
+            SELECT 
+                c.contact_id as id,
+                u.fullname as name,
+                u.phone,
+                c.last_message_at,
+                c.is_favorite
+            FROM chat_contacts c
+            JOIN users u ON c.contact_id = u.id
+            WHERE c.user_id = ?
+            ORDER BY c.is_favorite DESC, c.last_message_at DESC
+            LIMIT 20
+        `, [userId]);
+        
+        res.json({ success: true, data: contacts || [] });
+        
+    } catch (error) {
+        console.error('❌ Erreur contacts:', error);
+        res.json({ success: true, data: [] });
+    }
+});
+
+// 4. GET - Messages d'une conversation
+app.get('/api/chat/messages/:contactId', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { contactId } = req.params;
+    const { limit = 100 } = req.query;
+    
+    try {
+        await createChatTables();
+        
+        const messages = await query(`
+            SELECT 
+                m.id,
+                m.sender_id,
+                m.receiver_id,
+                m.message,
+                m.is_read,
+                m.created_at,
+                m.read_at
+            FROM chat_messages m
+            WHERE ((m.sender_id = ? AND m.receiver_id = ?) 
+                OR (m.sender_id = ? AND m.receiver_id = ?))
+            AND m.is_deleted = 0
+            ORDER BY m.created_at ASC
+            LIMIT ?
+        `, [userId, contactId, contactId, userId, parseInt(limit)]);
+        
+        // Marquer comme lus
+        await run(`
+            UPDATE chat_messages 
+            SET is_read = 1, read_at = CURRENT_TIMESTAMP
+            WHERE receiver_id = ? AND sender_id = ? AND is_read = 0
+        `, [userId, contactId]);
+        
+        res.json({ success: true, data: messages || [] });
+        
+    } catch (error) {
+        console.error('❌ Erreur messages:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 5. POST - Envoyer un message
+app.post('/api/chat/send', authenticateToken, async (req, res) => {
+    const senderId = req.user.userId;
+    const { receiver_id, message } = req.body;
+    
+    try {
+        if (!receiver_id || !message) {
+            return res.status(400).json({ success: false, error: 'Données manquantes' });
+        }
+        
+        // Vérifier que le destinataire existe
+        const receiver = await get('SELECT id, fullname, phone FROM users WHERE id = ?', [receiver_id]);
+        if (!receiver) {
+            return res.status(404).json({ success: false, error: 'Destinataire non trouvé' });
+        }
+        
+        if (senderId === receiver_id) {
+            return res.status(400).json({ success: false, error: 'Vous ne pouvez pas vous envoyer un message' });
+        }
+        
+        // Insérer le message
+        const result = await run(`
+            INSERT INTO chat_messages (sender_id, receiver_id, message, created_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        `, [senderId, receiver_id, message.trim()]);
+        
+        const messageId = result.lastID;
+        
+        // Mettre à jour les contacts
+        await run(`
+            INSERT INTO chat_contacts (user_id, contact_id, last_message_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, contact_id) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP
+        `, [senderId, receiver_id]);
+        
+        await run(`
+            INSERT INTO chat_contacts (user_id, contact_id, last_message_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, contact_id) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP
+        `, [receiver_id, senderId]);
+        
+        // Créer une notification
+        const sender = await get('SELECT fullname FROM users WHERE id = ?', [senderId]);
+        
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '💬 Nouveau message', 
+                    'Nouveau message de ' || ? || ': ' || ?,
+                    'info', CURRENT_TIMESTAMP)
+        `, [receiver_id, sender?.fullname || 'Quelqu\'un', message.substring(0, 50)]);
+        
+        // Envoyer via WebSocket
+        const messageData = {
+            id: messageId,
+            sender_id: senderId,
+            receiver_id: receiver_id,
+            message: message,
+            sender_name: sender?.fullname,
+            created_at: new Date().toISOString()
+        };
+        
+        if (global.io) {
+            global.io.to(`user_${receiver_id}`).emit('new_message', messageData);
+        }
+        
+        res.json({
+            success: true,
+            message: 'Message envoyé',
+            data: messageData
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur envoi:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 6. POST - Vérifier si un utilisateur existe par téléphone
+app.post('/api/chat/check-user', authenticateToken, async (req, res) => {
+    const { phone } = req.body;
+    
+    try {
+        if (!phone) {
+            return res.status(400).json({ success: false, error: 'Numéro requis' });
+        }
+        
+        const user = await get(`
+            SELECT id, fullname, phone 
+            FROM users 
+            WHERE phone = ? AND id != ?
+        `, [phone, req.user.userId]);
+        
+        if (user) {
+            res.json({ success: true, exists: true, user });
+        } else {
+            res.json({ success: true, exists: false });
+        }
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 7. POST - Envoyer un message par numéro de téléphone
+app.post('/api/chat/send-by-phone', authenticateToken, async (req, res) => {
+    const senderId = req.user.userId;
+    const { phone, message } = req.body;
+    
+    try {
+        if (!phone || !message) {
+            return res.status(400).json({ success: false, error: 'Données manquantes' });
+        }
+        
+        // Trouver l'utilisateur par téléphone
+        const receiver = await get(`
+            SELECT id, fullname, phone 
+            FROM users 
+            WHERE phone = ? AND id != ?
+        `, [phone, senderId]);
+        
+        if (!receiver) {
+            return res.status(404).json({
+                success: false,
+                error: 'Utilisateur non trouvé sur AlkherPay',
+                not_found: true
+            });
+        }
+        
+        // Insérer le message
+        const result = await run(`
+            INSERT INTO chat_messages (sender_id, receiver_id, message, created_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        `, [senderId, receiver.id, message.trim()]);
+        
+        // Mettre à jour les contacts
+        await run(`
+            INSERT INTO chat_contacts (user_id, contact_id, last_message_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, contact_id) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP
+        `, [senderId, receiver.id]);
+        
+        await run(`
+            INSERT INTO chat_contacts (user_id, contact_id, last_message_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, contact_id) DO UPDATE SET last_message_at = CURRENT_TIMESTAMP
+        `, [receiver.id, senderId]);
+        
+        // Notification
+        const sender = await get('SELECT fullname FROM users WHERE id = ?', [senderId]);
+        
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '💬 Nouveau message', 
+                    'Nouveau message de ' || ?,
+                    'info', CURRENT_TIMESTAMP)
+        `, [receiver.id, sender?.fullname || 'Quelqu\'un']);
+        
+        // WebSocket
+        if (global.io) {
+            global.io.to(`user_${receiver.id}`).emit('new_message', {
+                id: result.lastID,
+                sender_id: senderId,
+                receiver_id: receiver.id,
+                message: message,
+                sender_name: sender?.fullname,
+                created_at: new Date().toISOString()
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Message envoyé',
+            contact: {
+                id: receiver.id,
+                name: receiver.fullname,
+                phone: receiver.phone
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 8. DELETE - Supprimer une conversation
+app.delete('/api/chat/conversation/:contactId', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { contactId } = req.params;
+    
+    try {
+        // Marquer tous les messages comme supprimés pour cet utilisateur
+        await run(`
+            UPDATE chat_messages 
+            SET is_deleted = 1
+            WHERE ((sender_id = ? AND receiver_id = ?) 
+                OR (sender_id = ? AND receiver_id = ?))
+        `, [userId, contactId, contactId, userId]);
+        
+        // Supprimer le contact
+        await run(`
+            DELETE FROM chat_contacts 
+            WHERE user_id = ? AND contact_id = ?
+        `, [userId, contactId]);
+        
+        res.json({ success: true, message: 'Conversation supprimée' });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 9. GET - Nombre de messages non lus
+app.get('/api/chat/unread-count', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        const result = await get(`
+            SELECT COUNT(*) as count 
+            FROM chat_messages 
+            WHERE receiver_id = ? AND is_read = 0 AND is_deleted = 0
+        `, [userId]);
+        
+        res.json({ success: true, count: result?.count || 0 });
+        
+    } catch (error) {
+        res.json({ success: true, count: 0 });
+    }
+});
+
+// ============================================
+// SOCKET.IO - GESTION DES APPELS VOCAUX
+// ============================================
+
+io.on('connection', (socket) => {
+    console.log('🔌 Nouveau client connecté:', socket.id);
+    
+    // Authentification
+    socket.on('authenticate', async (data) => {
+        const { userId } = data;
+        socket.userId = userId;
+        socket.join(`user_${userId}`);
+        console.log(`✅ User ${userId} authentifié sur socket`);
+    });
+    
+    // Démarrer un appel
+    socket.on('start_call', (data) => {
+        console.log('📞 Appel démarré:', data);
+        
+        // Envoyer au destinataire
+        io.to(`user_${data.receiver_id}`).emit('incoming_call', {
+            call_id: `call-${Date.now()}`,
+            caller_id: data.caller_id,
+            caller_name: data.caller_name,
+            caller_phone: data.caller_phone,
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    // Accepter un appel
+    socket.on('accept_call', (data) => {
+        console.log('✅ Appel accepté:', data);
+        
+        // Notifier l'appelant
+        io.to(`user_${data.caller_id}`).emit('call_accepted', {
+            call_id: data.call_id,
+            accepted_by: data.receiver_id
+        });
+    });
+    
+    // Rejeter un appel
+    socket.on('reject_call', (data) => {
+        console.log('❌ Appel rejeté:', data);
+        
+        // Notifier l'appelant
+        io.to(`user_${data.caller_id}`).emit('call_rejected', {
+            call_id: data.call_id,
+            rejected_by: data.receiver_id
+        });
+    });
+    
+    // Annuler un appel
+    socket.on('cancel_call', (data) => {
+        console.log('📴 Appel annulé:', data);
+        
+        // Notifier le destinataire
+        io.to(`user_${data.receiver_id}`).emit('call_cancelled', {
+            call_id: data.call_id
+        });
+    });
+    
+    // Terminer un appel
+    socket.on('end_call', (data) => {
+        console.log('📴 Appel terminé:', data);
+        
+        // Notifier l'autre partie
+        const otherUserId = data.caller_id === socket.userId ? data.receiver_id : data.caller_id;
+        io.to(`user_${otherUserId}`).emit('call_ended', {
+            call_id: data.call_id
+        });
+    });
+    
+    // Déconnexion
+    socket.on('disconnect', () => {
+        console.log('🔌 Client déconnecté:', socket.id);
+    });
+});
+// ============================================
+// SIGNALISATION WEBRTC POUR APPELS VOCAUX
+// ============================================
+
+// Stocker les utilisateurs en ligne
+const onlineUsers = new Map(); // userId -> socketId
+
+// Stocker les appels en cours
+const activeCalls = new Map(); // callId -> { caller, receiver, status }
+
+io.on('connection', (socket) => {
+    console.log('🔌 Nouveau client connecté:', socket.id);
+
+    // ✅ Utilisateur authentifié
+    socket.on('authenticate', (userId) => {
+        onlineUsers.set(userId, socket.id);
+        socket.userId = userId;
+        console.log(`✅ User ${userId} authentifié sur socket ${socket.id}`);
+        
+        // Notifier les autres que l'utilisateur est en ligne
+        socket.broadcast.emit('user_online', { userId });
+    });
+
+    // ============================================
+    // APPEL VOCAL - INITIATION
+    // ============================================
+    socket.on('call_user', (data) => {
+        const { callerId, callerName, receiverId, callType = 'audio' } = data;
+        
+        console.log(`📞 Appel de ${callerName} (${callerId}) vers ${receiverId}`);
+        
+        const receiverSocketId = onlineUsers.get(receiverId);
+        
+        if (!receiverSocketId) {
+            // Destinataire hors ligne
+            socket.emit('call_failed', {
+                reason: 'Utilisateur hors ligne',
+                receiverId
+            });
+            return;
+        }
+        
+        // Générer un ID d'appel unique
+        const callId = `call_${Date.now()}_${callerId}_${receiverId}`;
+        
+        // Enregistrer l'appel
+        activeCalls.set(callId, {
+            callerId,
+            callerName,
+            receiverId,
+            status: 'ringing',
+            startedAt: new Date().toISOString()
+        });
+        
+        // Envoyer l'appel au destinataire
+        io.to(receiverSocketId).emit('incoming_call', {
+            callId,
+            callerId,
+            callerName,
+            callType,
+            timestamp: new Date().toISOString()
+        });
+        
+        // Confirmer à l'appelant
+        socket.emit('call_initiated', { callId });
+    });
+
+    // ============================================
+    // APPEL VOCAL - ACCEPTATION
+    // ============================================
+    socket.on('accept_call', (data) => {
+        const { callId, callerId } = data;
+        
+        console.log(`✅ Appel accepté: ${callId}`);
+        
+        const call = activeCalls.get(callId);
+        if (call) {
+            call.status = 'accepted';
+            call.acceptedAt = new Date().toISOString();
+        }
+        
+        const callerSocketId = onlineUsers.get(callerId);
+        if (callerSocketId) {
+            io.to(callerSocketId).emit('call_accepted', {
+                callId,
+                receiverId: socket.userId
+            });
+        }
+    });
+
+    // ============================================
+    // APPEL VOCAL - REJET
+    // ============================================
+    socket.on('reject_call', (data) => {
+        const { callId, callerId, reason = 'rejected' } = data;
+        
+        console.log(`❌ Appel rejeté: ${callId} - Raison: ${reason}`);
+        
+        activeCalls.delete(callId);
+        
+        const callerSocketId = onlineUsers.get(callerId);
+        if (callerSocketId) {
+            io.to(callerSocketId).emit('call_rejected', {
+                callId,
+                reason
+            });
+        }
+    });
+
+    // ============================================
+    // APPEL VOCAL - RACCROCHAGE
+    // ============================================
+    socket.on('end_call', (data) => {
+        const { callId, otherUserId } = data;
+        
+        console.log(`📴 Appel terminé: ${callId}`);
+        
+        activeCalls.delete(callId);
+        
+        const otherSocketId = onlineUsers.get(otherUserId);
+        if (otherSocketId) {
+            io.to(otherSocketId).emit('call_ended', {
+                callId,
+                reason: 'ended'
+            });
+        }
+    });
+
+    // ============================================
+    // WEBRTC - ÉCHANGE DE SIGNALISATION
+    // ============================================
+    
+    // Envoyer une offre SDP
+    socket.on('webrtc_offer', (data) => {
+        const { callId, receiverId, offer } = data;
+        const receiverSocketId = onlineUsers.get(receiverId);
+        
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('webrtc_offer', {
+                callId,
+                offer,
+                senderId: socket.userId
+            });
+        }
+    });
+    
+    // Envoyer une réponse SDP
+    socket.on('webrtc_answer', (data) => {
+        const { callId, callerId, answer } = data;
+        const callerSocketId = onlineUsers.get(callerId);
+        
+        if (callerSocketId) {
+            io.to(callerSocketId).emit('webrtc_answer', {
+                callId,
+                answer,
+                senderId: socket.userId
+            });
+        }
+    });
+    
+    // Échanger les candidats ICE
+    socket.on('webrtc_ice_candidate', (data) => {
+        const { callId, receiverId, candidate } = data;
+        const receiverSocketId = onlineUsers.get(receiverId);
+        
+        if (receiverSocketId) {
+            io.to(receiverSocketId).emit('webrtc_ice_candidate', {
+                callId,
+                candidate,
+                senderId: socket.userId
+            });
+        }
+    });
+
+    // ============================================
+    // DÉCONNEXION
+    // ============================================
+    socket.on('disconnect', () => {
+        console.log('❌ Client déconnecté:', socket.id);
+        
+        if (socket.userId) {
+            onlineUsers.delete(socket.userId);
+            socket.broadcast.emit('user_offline', { userId: socket.userId });
+        }
+    });
+});
+// ============================================
+// GET - Vérifier si un utilisateur existe par téléphone
+// ============================================
+app.post('/api/chat/check-user', authenticateToken, async (req, res) => {
+    const { phone } = req.body;
+    
+    try {
+        const user = await get(`
+            SELECT id, fullname, phone FROM users 
+            WHERE phone = ? AND is_active = 1
+        `, [phone]);
+        
+        if (user) {
+            res.json({
+                success: true,
+                exists: true,
+                user: {
+                    id: user.id,
+                    name: user.fullname,
+                    phone: user.phone
+                }
+            });
+        } else {
+            res.json({
+                success: true,
+                exists: false
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// ============================================
+// ENDPOINTS POUR LES APPELS VOCAUX
+// ============================================
+
+// GET - Historique des appels
+app.get('/api/chat/call-history', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        // Créer la table si nécessaire
+        await run(`
+            CREATE TABLE IF NOT EXISTS call_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                caller_id INTEGER NOT NULL,
+                receiver_id INTEGER NOT NULL,
+                call_type TEXT DEFAULT 'outgoing',
+                status TEXT DEFAULT 'completed',
+                duration INTEGER DEFAULT 0,
+                started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                ended_at DATETIME,
+                FOREIGN KEY (caller_id) REFERENCES users(id),
+                FOREIGN KEY (receiver_id) REFERENCES users(id)
+            )
+        `);
+        
+        const calls = await query(`
+            SELECT 
+                ch.*,
+                CASE 
+                    WHEN ch.caller_id = ? THEN u2.fullname 
+                    ELSE u1.fullname 
+                END as contact_name,
+                CASE 
+                    WHEN ch.caller_id = ? THEN u2.phone 
+                    ELSE u1.phone 
+                END as contact_phone,
+                CASE 
+                    WHEN ch.caller_id = ? THEN 'outgoing' 
+                    ELSE 'incoming' 
+                END as direction
+            FROM call_history ch
+            LEFT JOIN users u1 ON ch.caller_id = u1.id
+            LEFT JOIN users u2 ON ch.receiver_id = u2.id
+            WHERE ch.caller_id = ? OR ch.receiver_id = ?
+            ORDER BY ch.started_at DESC
+            LIMIT 50
+        `, [userId, userId, userId, userId, userId]);
+        
+        res.json({ success: true, data: calls || [] });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.json({ success: true, data: [] });
+    }
+});
+
+// POST - Sauvegarder un appel
+app.post('/api/chat/call-history', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { receiver_id, duration, status } = req.body;
+    
+    try {
+        await run(`
+            INSERT INTO call_history (
+                caller_id, receiver_id, call_type, status, duration, 
+                started_at, ended_at
+            ) VALUES (?, ?, 'outgoing', ?, ?, datetime('now', '-' || ? || ' seconds'), CURRENT_TIMESTAMP)
+        `, [userId, receiver_id, status || 'completed', duration || 0, duration || 0]);
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// SYSTÈME DE PRÊT - BACKEND COMPLET
+// ============================================
+
+async function createLoanTables() {
+    try {
+        console.log('📝 Création des tables de prêt...');
+        
+        // Table des demandes de prêt
+        await run(`
+            CREATE TABLE IF NOT EXISTS loan_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                duration_months INTEGER NOT NULL,
+                interest_rate REAL NOT NULL,
+                total_amount INTEGER NOT NULL,
+                monthly_payment INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                fullname TEXT,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                occupation TEXT,
+                monthly_income INTEGER,
+                status TEXT DEFAULT 'pending',
+                admin_id INTEGER,
+                admin_comment TEXT,
+                rejection_reason TEXT,
+                requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                processed_at DATETIME,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+        `);
+        
+        // Table des prêts actifs
+        await run(`
+            CREATE TABLE IF NOT EXISTS loans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                loan_request_id INTEGER,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                duration_months INTEGER NOT NULL,
+                interest_rate REAL NOT NULL,
+                total_amount INTEGER NOT NULL,
+                monthly_payment INTEGER NOT NULL,
+                amount_paid INTEGER DEFAULT 0,
+                remaining_amount INTEGER NOT NULL,
+                status TEXT DEFAULT 'active',
+                start_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                end_date DATETIME,
+                contract_number TEXT UNIQUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Table des remboursements
+        await run(`
+            CREATE TABLE IF NOT EXISTS loan_repayments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                loan_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                payment_type TEXT DEFAULT 'monthly',
+                reference TEXT UNIQUE,
+                status TEXT DEFAULT 'completed',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+        
+        // Index
+        await run('CREATE INDEX IF NOT EXISTS idx_loan_requests_user ON loan_requests(user_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_loan_requests_status ON loan_requests(status)');
+        await run('CREATE INDEX IF NOT EXISTS idx_loans_user ON loans(user_id)');
+        await run('CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(status)');
+        await run('CREATE INDEX IF NOT EXISTS idx_repayments_loan ON loan_repayments(loan_id)');
+        
+        console.log('✅ Tables de prêt prêtes');
+    } catch (error) {
+        console.error('❌ Erreur création tables prêt:', error);
+    }
+}
+
+// ============================================
+// CALCUL DU TAUX ET DES MENSUALITÉS
+// ============================================
+function calculateLoanDetails(amount, durationMonths) {
+    // Taux annuel : 5% / an
+    const annualRate = 5;
+    
+    // Taux total sur la durée
+    const totalRate = (annualRate / 12) * durationMonths;
+    
+    // Intérêts
+    const interestAmount = Math.round(amount * (totalRate / 100));
+    
+    // Montant total à rembourser
+    const totalAmount = amount + interestAmount;
+    
+    // Mensualité
+    const monthlyPayment = Math.round(totalAmount / durationMonths);
+    
+    return {
+        interestRate: annualRate,
+        totalRate: parseFloat(totalRate.toFixed(2)),
+        interestAmount,
+        totalAmount,
+        monthlyPayment
+    };
+}
+// ============================================
+// POST - Demander un prêt
+// ============================================
+app.post('/api/loans/request', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const {
+        amount,
+        duration_months,
+        reason,
+        fullname,
+        phone,
+        email,
+        address,
+        occupation,
+        monthly_income
+    } = req.body;
+    
+    console.log(`💰 Demande de prêt: ${amount} FCFA pour user ${userId}`);
+    
+    try {
+        await createLoanTables();
+        
+        // 1. Vérifier KYC niveau 1 minimum
+        const user = await get(`
+            SELECT id, fullname, phone, email, is_verified, kyc_level 
+            FROM users WHERE id = ?
+        `, [userId]);
+        
+        if (!user) {
+            return res.status(404).json({ success: false, error: 'Utilisateur non trouvé' });
+        }
+        
+        if (user.is_verified !== 0 || user.kyc_level < 1) {
+            return res.status(403).json({
+                success: false,
+                error: 'Vous devez être vérifié KYC (niveau 1 minimum) pour demander un prêt',
+                code: 'KYC_REQUIRED',
+                kyc_level: user.kyc_level || 0
+            });
+        }
+        
+        // 2. Vérifier qu'il n'y a pas de demande en attente
+        const existingRequest = await get(`
+            SELECT id FROM loan_requests 
+            WHERE user_id = ? AND status = 'pending'
+        `, [userId]);
+        
+        if (existingRequest) {
+            return res.status(400).json({
+                success: false,
+                error: 'Vous avez déjà une demande de prêt en attente'
+            });
+        }
+        
+        // 3. Vérifier qu'il n'y a pas de prêt actif
+        const activeLoan = await get(`
+            SELECT id FROM loans 
+            WHERE user_id = ? AND status = 'active'
+        `, [userId]);
+        
+        if (activeLoan) {
+            return res.status(400).json({
+                success: false,
+                error: 'Vous avez déjà un prêt actif en cours de remboursement'
+            });
+        }
+        
+        // 4. Validation
+        const amountNum = parseInt(amount);
+        const durationNum = parseInt(duration_months);
+        
+        if (!amountNum || amountNum < 5000) {
+            return res.status(400).json({ success: false, error: 'Montant minimum: 5 000 FCFA' });
+        }
+        
+        if (amountNum > 5000000) {
+            return res.status(400).json({ success: false, error: 'Montant maximum: 5 000 000 FCFA' });
+        }
+        
+        if (!durationNum || durationNum < 1 || durationNum > 24) {
+            return res.status(400).json({ success: false, error: 'Durée: 1 à 24 mois' });
+        }
+        
+        if (!reason || reason.trim() === '') {
+            return res.status(400).json({ success: false, error: 'La raison du prêt est requise' });
+        }
+        
+        // 5. Calculer les détails
+        const details = calculateLoanDetails(amountNum, durationNum);
+        
+        // 6. Créer la demande
+        const result = await run(`
+            INSERT INTO loan_requests (
+                user_id, amount, duration_months, interest_rate,
+                total_amount, monthly_payment, reason,
+                fullname, phone, email, address, occupation, monthly_income,
+                status, requested_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+        `, [
+            userId, amountNum, durationNum, details.interestRate,
+            details.totalAmount, details.monthlyPayment, reason.trim(),
+            fullname || user.fullname, phone || user.phone, email || user.email,
+            address || '', occupation || '', parseInt(monthly_income) || 0
+        ]);
+        
+        const requestId = result.lastID;
+        
+        // 7. Notifier les admins
+        const admins = await query(`SELECT id FROM users WHERE role IN ('admin', 'super_admin')`);
+        for (const admin of admins) {
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '🏦 Nouvelle demande de prêt', 
+                        'Demande de ' || ? || ' FCFA sur ' || ? || ' mois par ' || ?,
+                        'info', CURRENT_TIMESTAMP)
+            `, [admin.id, amountNum.toLocaleString(), durationNum, user.fullname]);
+        }
+        
+        // 8. Notification utilisateur
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '📤 Demande de prêt envoyée', 
+                    'Votre demande de ' || ? || ' FCFA sur ' || ? || ' mois est en attente',
+                    'info', CURRENT_TIMESTAMP)
+        `, [userId, amountNum.toLocaleString(), durationNum]);
+        
+        console.log(`✅ Demande créée ID: ${requestId}`);
+        
+        res.json({
+            success: true,
+            message: 'Demande de prêt soumise avec succès',
+            data: {
+                request_id: requestId,
+                amount: amountNum,
+                duration_months: durationNum,
+                interest_rate: details.interestRate,
+                interest_amount: details.interestAmount,
+                total_amount: details.totalAmount,
+                monthly_payment: details.monthlyPayment,
+                status: 'pending'
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
+// ============================================
+// GET - Mes demandes de prêt
+// ============================================
+app.get('/api/loans/my-requests', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        await createLoanTables();
+        
+        const requests = await query(`
+            SELECT 
+                lr.*,
+                a.fullname as admin_name
+            FROM loan_requests lr
+            LEFT JOIN users a ON lr.admin_id = a.id
+            WHERE lr.user_id = ?
+            ORDER BY lr.requested_at DESC
+        `, [userId]);
+        
+        res.json({ success: true, data: requests || [] });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// GET - Mes prêts actifs
+// ============================================
+app.get('/api/loans/my-loans', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        await createLoanTables();
+        
+        const loans = await query(`
+            SELECT * FROM loans
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+        `, [userId]);
+        
+        // Statistiques
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_loans,
+                COALESCE(SUM(amount), 0) as total_borrowed,
+                COALESCE(SUM(remaining_amount), 0) as total_remaining,
+                COALESCE(SUM(amount_paid), 0) as total_paid
+            FROM loans
+            WHERE user_id = ?
+        `, [userId]);
+        
+        res.json({
+            success: true,
+            data: loans || [],
+            stats: {
+                total_loans: stats?.total_loans || 0,
+                total_borrowed: stats?.total_borrowed || 0,
+                total_remaining: stats?.total_remaining || 0,
+                total_paid: stats?.total_paid || 0
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// GET - Détails d'un prêt
+// ============================================
+app.get('/api/loans/:id', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { id } = req.params;
+    const isAdmin = ['admin', 'super_admin'].includes(req.user.role);
+    
+    try {
+        const loan = await get(`
+            SELECT l.*, u.fullname as user_name, u.phone as user_phone
+            FROM loans l
+            LEFT JOIN users u ON l.user_id = u.id
+            WHERE l.id = ? ${isAdmin ? '' : 'AND l.user_id = ?'}
+        `, isAdmin ? [id] : [id, userId]);
+        
+        if (!loan) {
+            return res.status(404).json({ success: false, error: 'Prêt non trouvé' });
+        }
+        
+        const repayments = await query(`
+            SELECT * FROM loan_repayments
+            WHERE loan_id = ?
+            ORDER BY created_at DESC
+        `, [id]);
+        
+        res.json({
+            success: true,
+            data: {
+                ...loan,
+                repayments: repayments || [],
+                progress: loan.total_amount > 0 
+                    ? (loan.amount_paid / loan.total_amount) * 100 
+                    : 0
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// POST - Rembourser un prêt
+// ============================================
+app.post('/api/loans/:id/repay', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { id } = req.params;
+    const { amount } = req.body;
+    
+    let transactionActive = false;
+    
+    try {
+        const amountNum = parseInt(amount);
+        if (!amountNum || amountNum < 100) {
+            return res.status(400).json({ success: false, error: 'Montant minimum 100 FCFA' });
+        }
+        
+        const loan = await get(`
+            SELECT * FROM loans WHERE id = ? AND user_id = ? AND status = 'active'
+        `, [id, userId]);
+        
+        if (!loan) {
+            return res.status(404).json({ success: false, error: 'Prêt actif non trouvé' });
+        }
+        
+        if (amountNum > loan.remaining_amount) {
+            return res.status(400).json({
+                success: false,
+                error: `Montant maximum: ${loan.remaining_amount.toLocaleString()} FCFA`
+            });
+        }
+        
+        const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [userId]);
+        if (!wallet || wallet.balance < amountNum) {
+            return res.status(400).json({ success: false, error: 'Solde insuffisant' });
+        }
+        
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+        
+        const reference = `REP${Date.now()}${Math.floor(Math.random() * 1000)}`;
+        const newPaid = loan.amount_paid + amountNum;
+        const newRemaining = loan.remaining_amount - amountNum;
+        const isCompleted = newRemaining <= 0;
+        
+        // Débiter le wallet
+        await run(`
+            UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [amountNum, userId]);
+        
+        // Créditer l'admin
+        const adminWallet = await get(`
+            SELECT w.id FROM wallets w
+            JOIN users u ON w.user_id = u.id
+            WHERE u.role = 'admin' AND u.phone = '62787307'
+            LIMIT 1
+        `);
+        
+        if (adminWallet) {
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [amountNum, adminWallet.id]);
+        }
+        
+        // Mettre à jour le prêt
+        await run(`
+            UPDATE loans 
+            SET amount_paid = ?, 
+                remaining_amount = ?,
+                status = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [newPaid, newRemaining, isCompleted ? 'completed' : 'active', id]);
+        
+        // Enregistrer le remboursement
+        await run(`
+            INSERT INTO loan_repayments (
+                loan_id, user_id, amount, payment_type, reference, status, created_at
+            ) VALUES (?, ?, ?, 'monthly', ?, 'completed', CURRENT_TIMESTAMP)
+        `, [id, userId, amountNum, reference]);
+        
+        await run('COMMIT');
+        transactionActive = false;
+        
+        // Notification
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '💰 Remboursement effectué', 
+                    'Remboursement de ' || ? || ' FCFA. Reste: ' || ? || ' FCFA',
+                    'success', CURRENT_TIMESTAMP)
+        `, [userId, amountNum.toLocaleString(), newRemaining.toLocaleString()]);
+        
+        res.json({
+            success: true,
+            message: 'Remboursement effectué',
+            data: {
+                reference,
+                amount: amountNum,
+                amount_paid: newPaid,
+                remaining_amount: newRemaining,
+                status: isCompleted ? 'completed' : 'active'
+            }
+        });
+        
+    } catch (error) {
+        if (transactionActive) { try { await run('ROLLBACK'); } catch (e) {} }
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// GET - Calculer les détails d'un prêt (simulation)
+// ============================================
+app.post('/api/loans/calculate', authenticateToken, async (req, res) => {
+    const { amount, duration_months } = req.body;
+    
+    try {
+        const amountNum = parseInt(amount);
+        const durationNum = parseInt(duration_months);
+        
+        if (!amountNum || !durationNum) {
+            return res.status(400).json({ success: false, error: 'Montant et durée requis' });
+        }
+        
+        const details = calculateLoanDetails(amountNum, durationNum);
+        
+        res.json({
+            success: true,
+            data: {
+                amount: amountNum,
+                duration_months: durationNum,
+                ...details
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// ============================================
+// GET - Toutes les demandes de prêt (Admin)
+// ============================================
+app.get('/api/admin/loans/requests', authenticateToken, requireAdmin, async (req, res) => {
+    const { status = 'all', limit = 100, offset = 0 } = req.query;
+    
+    try {
+        await createLoanTables();
+        
+        let sql = `
+            SELECT 
+                lr.*,
+                u.fullname as user_name,
+                u.phone as user_phone,
+                u.email as user_email,
+                u.kyc_level,
+                a.fullname as admin_name
+            FROM loan_requests lr
+            LEFT JOIN users u ON lr.user_id = u.id
+            LEFT JOIN users a ON lr.admin_id = a.id
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        if (status && status !== 'all') {
+            sql += ' AND lr.status = ?';
+            params.push(status);
+        }
+        
+        sql += ' ORDER BY lr.requested_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const requests = await query(sql, params);
+        
+        res.json({ success: true, data: requests || [] });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// GET - Tous les prêts actifs (Admin)
+// ============================================
+app.get('/api/admin/loans', authenticateToken, requireAdmin, async (req, res) => {
+    const { status = 'all', limit = 100, offset = 0 } = req.query;
+    
+    try {
+        await createLoanTables();
+        
+        let sql = `
+            SELECT 
+                l.*,
+                u.fullname as user_name,
+                u.phone as user_phone,
+                u.email as user_email
+            FROM loans l
+            LEFT JOIN users u ON l.user_id = u.id
+            WHERE 1=1
+        `;
+        const params = [];
+        
+        if (status && status !== 'all') {
+            sql += ' AND l.status = ?';
+            params.push(status);
+        }
+        
+        sql += ' ORDER BY l.created_at DESC LIMIT ? OFFSET ?';
+        params.push(parseInt(limit), parseInt(offset));
+        
+        const loans = await query(sql, params);
+        
+        // Statistiques
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total_loans,
+                COALESCE(SUM(amount), 0) as total_disbursed,
+                COALESCE(SUM(remaining_amount), 0) as total_remaining,
+                COALESCE(SUM(amount_paid), 0) as total_repaid,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count
+            FROM loans
+        `);
+        
+        const pendingRequests = await get(`
+            SELECT COUNT(*) as count FROM loan_requests WHERE status = 'pending'
+        `);
+        
+        res.json({
+            success: true,
+            data: loans || [],
+            stats: {
+                total_loans: stats?.total_loans || 0,
+                total_disbursed: stats?.total_disbursed || 0,
+                total_remaining: stats?.total_remaining || 0,
+                total_repaid: stats?.total_repaid || 0,
+                active_count: stats?.active_count || 0,
+                completed_count: stats?.completed_count || 0,
+                pending_count: pendingRequests?.count || 0
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// POST - Traiter une demande de prêt (Admin)
+// ============================================
+app.post('/api/admin/loans/requests/:id/process', authenticateToken, requireAdmin, async (req, res) => {
+    const adminId = req.user.userId;
+    const { id } = req.params;
+    const { action, comment } = req.body; // 'approve' ou 'reject'
+    
+    let transactionActive = false;
+    
+    try {
+        const request = await get(`
+            SELECT lr.*, u.fullname, u.phone 
+            FROM loan_requests lr
+            LEFT JOIN users u ON lr.user_id = u.id
+            WHERE lr.id = ?
+        `, [id]);
+        
+        if (!request) {
+            return res.status(404).json({ success: false, error: 'Demande non trouvée' });
+        }
+        
+        if (request.status !== 'pending') {
+            return res.status(400).json({ success: false, error: `Demande déjà ${request.status}` });
+        }
+        
+        await run('BEGIN TRANSACTION');
+        transactionActive = true;
+        
+        if (action === 'approve') {
+            // 1. Générer le numéro de contrat
+            const contractNumber = `LOAN-${Date.now()}-${request.user_id}`;
+            
+            // 2. Calculer la date de fin
+            const endDate = new Date();
+            endDate.setMonth(endDate.getMonth() + request.duration_months);
+            
+            // 3. Créer le prêt
+            const loanResult = await run(`
+                INSERT INTO loans (
+                    loan_request_id, user_id, amount, duration_months,
+                    interest_rate, total_amount, monthly_payment,
+                    remaining_amount, status, start_date, end_date,
+                    contract_number, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `, [
+                request.id, request.user_id, request.amount, request.duration_months,
+                request.interest_rate, request.total_amount, request.monthly_payment,
+                request.total_amount, endDate.toISOString(), contractNumber
+            ]);
+            
+            const loanId = loanResult.lastID;
+            
+            // 4. Créditer le wallet de l'utilisateur
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            `, [request.amount, request.user_id]);
+            
+            // 5. Débiter le wallet admin (source des fonds)
+            const adminWallet = await get(`
+                SELECT w.id FROM wallets w
+                JOIN users u ON w.user_id = u.id
+                WHERE u.role = 'admin' AND u.phone = '62787307'
+                LIMIT 1
+            `);
+            
+            if (adminWallet) {
+                await run(`
+                    UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                `, [request.amount, adminWallet.id]);
+            }
+            
+            // 6. Mettre à jour la demande
+            await run(`
+                UPDATE loan_requests 
+                SET status = 'approved', admin_id = ?, admin_comment = ?, processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [adminId, comment || 'Approuvé', id]);
+            
+            // 7. Transaction
+            await run(`
+                INSERT INTO transactions (
+                    reference, sender_phone, receiver_phone, amount, fee,
+                    net_amount, type, status, description, created_at, completed_at
+                ) VALUES (?, '62787307', ?, ?, 0, ?, 'deposit', 'completed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `, [contractNumber, request.phone, request.amount, request.amount,
+                `Décaissement prêt ${contractNumber}`]);
+            
+            // 8. Notification
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '✅ Prêt approuvé', 
+                        'Votre prêt de ' || ? || ' FCFA a été approuvé. Montant total: ' || ? || ' FCFA',
+                        'success', CURRENT_TIMESTAMP)
+            `, [request.user_id, request.amount.toLocaleString(), request.total_amount.toLocaleString()]);
+            
+            await run('COMMIT');
+            transactionActive = false;
+            
+            res.json({
+                success: true,
+                message: 'Prêt approuvé et décaissé',
+                data: {
+                    loan_id: loanId,
+                    contract_number: contractNumber,
+                    amount: request.amount,
+                    total_amount: request.total_amount,
+                    monthly_payment: request.monthly_payment
+                }
+            });
+            
+        } else if (action === 'reject') {
+            await run(`
+                UPDATE loan_requests 
+                SET status = 'rejected', admin_id = ?, rejection_reason = ?, processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [adminId, comment || 'Non conforme', id]);
+            
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '❌ Prêt rejeté', 
+                        'Votre demande de prêt a été rejetée. Raison: ' || ?,
+                        'error', CURRENT_TIMESTAMP)
+            `, [request.user_id, comment || 'Non conforme']);
+            
+            await run('COMMIT');
+            transactionActive = false;
+            
+            res.json({ success: true, message: 'Demande rejetée' });
+        } else {
+            await run('ROLLBACK');
+            return res.status(400).json({ success: false, error: 'Action invalide' });
+        }
+        
+    } catch (error) {
+        if (transactionActive) { try { await run('ROLLBACK'); } catch (e) {} }
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================
+// GET - Statistiques prêts (Admin)
+// ============================================
+app.get('/api/admin/loans/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await createLoanTables();
+        
+        const loanStats = await get(`
+            SELECT 
+                COUNT(*) as total_loans,
+                COALESCE(SUM(amount), 0) as total_disbursed,
+                COALESCE(SUM(remaining_amount), 0) as total_remaining,
+                COALESCE(SUM(amount_paid), 0) as total_repaid,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count
+            FROM loans
+        `);
+        
+        const requestStats = await get(`
+            SELECT 
+                COUNT(*) as total_requests,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+                SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_count,
+                SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
+            FROM loan_requests
+        `);
+        
+        res.json({
+            success: true,
+            stats: { ...loanStats, ...requestStats }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
+// ============================================================
+// SYSTÈME DE CARTES VISA NUMÉRIQUES
+// ============================================================
+
+async function createVirtualCardsTables() {
+    try {
+        // ✅ Table des cartes virtuelles
+        await run(`
+            CREATE TABLE IF NOT EXISTS virtual_cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                card_number TEXT UNIQUE NOT NULL,
+                card_holder TEXT NOT NULL,
+                expiry_month INTEGER NOT NULL,
+                expiry_year INTEGER NOT NULL,
+                cvv TEXT NOT NULL,
+                pin_hash TEXT NOT NULL,
+                balance INTEGER DEFAULT 0,
+                daily_limit INTEGER DEFAULT 500000,
+                monthly_limit INTEGER DEFAULT 5000000,
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'blocked', 'expired', 'cancelled')),
+                card_type TEXT DEFAULT 'classic' CHECK(card_type IN ('classic', 'premium', 'gold')),
+                requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                approved_at DATETIME,
+                approved_by INTEGER,
+                rejection_reason TEXT,
+                expires_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (approved_by) REFERENCES users(id)
+            )
+        `);
+
+        // ✅ Table des transactions par carte
+        await run(`
+            CREATE TABLE IF NOT EXISTS card_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                card_id INTEGER NOT NULL,
+                card_number TEXT NOT NULL,
+                card_holder_id INTEGER NOT NULL,
+                merchant_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                fee INTEGER DEFAULT 0,
+                total_amount INTEGER NOT NULL,
+                transaction_type TEXT DEFAULT 'payment' CHECK(transaction_type IN ('payment', 'refund', 'withdrawal')),
+                description TEXT,
+                status TEXT DEFAULT 'completed' CHECK(status IN ('pending', 'completed', 'failed', 'refunded')),
+                receipt_number TEXT UNIQUE NOT NULL,
+                ip_address TEXT,
+                reference TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (card_id) REFERENCES virtual_cards(id),
+                FOREIGN KEY (card_holder_id) REFERENCES users(id),
+                FOREIGN KEY (merchant_id) REFERENCES users(id)
+            )
+        `);
+
+        // ✅ Table des demandes de carte (historique)
+        await run(`
+            CREATE TABLE IF NOT EXISTS card_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                card_type TEXT DEFAULT 'classic',
+                reason TEXT,
+                status TEXT DEFAULT 'pending',
+                admin_id INTEGER,
+                admin_note TEXT,
+                processed_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (admin_id) REFERENCES users(id)
+            )
+        `);
+
+        // Index
+        await run('CREATE INDEX IF NOT EXISTS idx_vcards_user ON virtual_cards(user_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_vcards_status ON virtual_cards(status)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_vcards_number ON virtual_cards(card_number)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_ctrans_card ON card_transactions(card_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_ctrans_holder ON card_transactions(card_holder_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_ctrans_merchant ON card_transactions(merchant_id)').catch(() => {});
+
+        console.log('✅ Tables cartes virtuelles prêtes');
+    } catch (error) {
+        console.error('❌ Erreur createVirtualCardsTables:', error);
+    }
+}
+
+/**
+ * Générer un numéro de carte Visa valide (algorithme de Luhn)
+ */
+function generateCardNumber() {
+    // Préfixe Visa : 4
+    let number = '4';
+    
+    // Générer 14 chiffres aléatoires
+    for (let i = 0; i < 14; i++) {
+        number += Math.floor(Math.random() * 10);
+    }
+    
+    // Calculer le checksum Luhn
+    const checkDigit = calculateLuhnCheckDigit(number);
+    number += checkDigit;
+    
+    // Formater : 4XXX XXXX XXXX XXXX
+    return number.match(/.{1,4}/g).join(' ');
+}
+
+function calculateLuhnCheckDigit(number) {
+    let sum = 0;
+    let alternate = true;
+    
+    for (let i = number.length - 1; i >= 0; i--) {
+        let digit = parseInt(number[i]);
+        
+        if (alternate) {
+            digit *= 2;
+            if (digit > 9) digit -= 9;
+        }
+        
+        sum += digit;
+        alternate = !alternate;
+    }
+    
+    return (10 - (sum % 10)) % 10;
+}
+
+/**
+ * Générer un PIN à 4 chiffres
+ */
+function generatePIN() {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+/**
+ * Générer un CVV à 3 chiffres
+ */
+function generateCVV() {
+    return Math.floor(100 + Math.random() * 900).toString();
+}
+
+/**
+ * Générer un numéro de reçu unique
+ */
+function generateReceiptNumber() {
+    return `CARD-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+}
+
+// ============================================================
+// ROUTES CARTES VIRTUELLES - UTILISATEUR
+// ============================================================
+// ============================================================
+// SYSTÈME DE CARTES VIRTUELLES
+// ============================================================
+
+// ------------------------------------------------------------
+// 1. FONCTIONS UTILITAIRES
+// ------------------------------------------------------------
+
+function generateCardNumber() {
+    let number = '4';
+    for (let i = 0; i < 14; i++) {
+        number += Math.floor(Math.random() * 10);
+    }
+    // Luhn check digit
+    let sum = 0;
+    let alternate = true;
+    for (let i = number.length - 1; i >= 0; i--) {
+        let digit = parseInt(number[i]);
+        if (alternate) {
+            digit *= 2;
+            if (digit > 9) digit -= 9;
+        }
+        sum += digit;
+        alternate = !alternate;
+    }
+    number += (10 - (sum % 10)) % 10;
+    return number.match(/.{1,4}/g).join(' ');
+}
+
+function generatePIN() {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+function generateCVV() {
+    return Math.floor(100 + Math.random() * 900).toString();
+}
+
+function generateCardReceipt() {
+    return `CARD-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+}
+
+// ------------------------------------------------------------
+// 2. CRÉATION DE LA TABLE
+// ------------------------------------------------------------
+
+async function createVirtualCardsTable() {
+    try {
+        await run(`
+            CREATE TABLE IF NOT EXISTS virtual_cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                card_number TEXT UNIQUE,
+                card_holder TEXT,
+                expiry_month INTEGER,
+                expiry_year INTEGER,
+                cvv TEXT,
+                pin_hash TEXT,
+                balance INTEGER DEFAULT 0,
+                daily_limit INTEGER DEFAULT 500000,
+                monthly_limit INTEGER DEFAULT 5000000,
+                status TEXT DEFAULT 'pending',
+                card_type TEXT DEFAULT 'classic',
+                requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                approved_at DATETIME,
+                approved_by INTEGER,
+                rejection_reason TEXT,
+                expires_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        await run('CREATE INDEX IF NOT EXISTS idx_vcards_user ON virtual_cards(user_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_vcards_status ON virtual_cards(status)').catch(() => {});
+
+        console.log('✅ Table virtual_cards prête');
+    } catch (error) {
+        console.error('❌ Erreur createVirtualCardsTable:', error);
+    }
+}
+
+// ============================================================
+// TÉLÉCHARGEMENT PDF DE LA CARTE VIRTUELLE
+// ============================================================
+
+app.get('/api/cards/download-pdf', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('📄 PDF demandé par user:', userId);
+
+    try {
+        const card = await get(`
+            SELECT id, card_number, card_holder, expiry_month, expiry_year, cvv,
+                   balance, status, card_type, daily_limit, monthly_limit
+            FROM virtual_cards 
+            WHERE user_id = ? AND status = 'active'
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [userId]);
+
+        if (!card) {
+            return res.status(404).send('<h2>Carte non trouvée</h2>');
+        }
+
+        const holder = card.card_holder || 'CARDHOLDER';
+        const expiry = `${String(card.expiry_month).padStart(2, '0')}/${String(card.expiry_year).slice(-2)}`;
+
+        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const paymentUrl = `${baseUrl}/card-payment?card=${encodeURIComponent(card.card_number)}`;
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(paymentUrl)}&color=7c3aed&bgcolor=ffffff`;
+
+        // Convertir QR en base64
+        let qrBase64 = qrUrl;
+        try {
+            const axiosLib = require('axios');
+            const qrResponse = await axiosLib.get(qrUrl, { responseType: 'arraybuffer' });
+            const base64 = Buffer.from(qrResponse.data).toString('base64');
+            qrBase64 = `data:image/png;base64,${base64}`;
+        } catch (e) {
+            console.warn('⚠️ QR base64 échoué');
+        }
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Carte Virtuelle - ${holder}</title>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f0f0; padding: 30px; display: flex; flex-direction: column; align-items: center; gap: 25px; }
+        .page-title { text-align: center; }
+        .page-title h1 { color: #7c3aed; font-size: 22px; margin-bottom: 4px; }
+        .page-title p { color: #666; font-size: 13px; }
+        .face-label { text-align: center; font-size: 10px; color: #7c3aed; font-weight: bold; letter-spacing: 2px; margin-bottom: 8px; text-transform: uppercase; }
+        .card-container { width: 400px; height: 252px; border-radius: 18px; position: relative; overflow: hidden; box-shadow: 0 10px 40px rgba(124,58,237,0.3); color: white; padding: 22px; display: flex; flex-direction: column; justify-content: space-between; }
+        .recto { background: linear-gradient(135deg, #7c3aed 0%, #4c1d95 50%, #1e1b4b 100%) !important; }
+        .verso { background: linear-gradient(135deg, #1e1b4b 0%, #4c1d95 50%, #7c3aed 100%) !important; }
+        .watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-25deg); font-size: 110px; font-weight: bold; opacity: 0.05; pointer-events: none; color: #fff !important; }
+        .card-header { display: flex; justify-content: space-between; position: relative; z-index: 1; }
+        .card-brand { font-size: 22px; font-weight: bold; }
+        .card-type { font-size: 11px; opacity: 0.7; letter-spacing: 1px; }
+        .visa-logo { font-size: 24px; font-weight: bold; font-style: italic; }
+        .card-number { font-family: 'Courier New', monospace; font-size: 22px; letter-spacing: 2px; margin: 12px 0; position: relative; z-index: 1; }
+        .card-details { display: flex; justify-content: space-between; align-items: flex-end; position: relative; z-index: 1; }
+        .card-label { font-size: 9px; opacity: 0.6; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+        .card-value { font-size: 14px; font-weight: 600; }
+        .chip { width: 44px; height: 32px; background: linear-gradient(135deg, #fbbf24, #f59e0b) !important; border-radius: 6px; margin: 4px 0; position: relative; z-index: 1; }
+        .magnetic-strip { background: #000 !important; height: 40px; margin: -22px -22px 15px -22px; }
+        .verso-content { display: flex; justify-content: space-between; align-items: center; gap: 15px; position: relative; z-index: 1; flex: 1; }
+        .qr-section { background: #fff !important; padding: 8px; border-radius: 10px; text-align: center; }
+        .qr-section img { width: 110px; height: 110px; display: block; margin: 0 auto; }
+        .qr-label { font-size: 8px; color: #7c3aed !important; font-weight: bold; margin-top: 4px; text-transform: uppercase; }
+        .info-section { flex: 1; }
+        .cvv-label { font-size: 10px; opacity: 0.7; margin-bottom: 3px; text-transform: uppercase; }
+        .cvv-box { background: #fff !important; color: #000 !important; padding: 6px 18px; border-radius: 6px; font-family: 'Courier New', monospace; font-size: 18px; font-weight: bold; letter-spacing: 3px; display: inline-block; margin-bottom: 8px; }
+        .signature-strip { background: linear-gradient(to right, #f0f0f0, #fff) !important; height: 26px; border-radius: 4px; margin-bottom: 8px; }
+        .info-recto { font-size: 9px; line-height: 1.4; opacity: 0.85; }
+        .print-help { max-width: 500px; background: #fef3c7 !important; padding: 15px; border-radius: 12px; border: 2px dashed #f59e0b; margin-top: 20px; }
+        .print-help p { font-size: 13px; color: #92400e !important; font-weight: bold; margin-bottom: 8px; }
+        .print-help ol { font-size: 12px; color: #78350f !important; line-height: 1.6; padding-left: 20px; }
+        .action-bar { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: white; padding: 15px 25px; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); display: flex; gap: 10px; z-index: 999; }
+        .btn-print { background: linear-gradient(135deg, #7c3aed, #4c1d95); color: white; border: none; padding: 12px 30px; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer; }
+        .btn-close { background: #e5e7eb; color: #374151; border: none; padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer; }
+        @media print { body { background: white !important; padding: 0; gap: 20px; } .no-print { display: none !important; } .card-container { page-break-inside: avoid; } }
+    </style>
+</head>
+<body>
+    <div class="page-title">
+        <h1>💳 Ma Carte Virtuelle CashPays</h1>
+        <p>Conservez ce document en lieu sûr</p>
+    </div>
+
+    <div>
+        <div class="face-label">Recto</div>
+        <div class="card-container recto">
+            <div class="watermark">CashPays</div>
+            <div class="card-header">
+                <div>
+                    <div class="card-type">CARTE VIRTUELLE</div>
+                    <div class="card-brand">CashPays</div>
+                </div>
+                <div class="visa-logo">VISA</div>
+            </div>
+            <div class="chip"></div>
+            <div class="card-number">${card.card_number}</div>
+            <div class="card-details">
+                <div>
+                    <div class="card-label">Titulaire</div>
+                    <div class="card-value">${holder}</div>
+                </div>
+                <div>
+                    <div class="card-label">Expire</div>
+                    <div class="card-value">${expiry}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <div class="face-label">Verso</div>
+        <div class="card-container verso">
+            <div class="watermark">CashPays</div>
+            <div class="magnetic-strip"></div>
+            <div class="verso-content">
+                <div class="qr-section">
+                    <img src="${qrBase64}" alt="QR Code" />
+                    <div class="qr-label">📱 Scanner pour payer</div>
+                </div>
+                <div class="info-section">
+                    <div class="cvv-label">CVV</div>
+                    <div class="cvv-box">${card.cvv}</div>
+                    <div class="signature-strip"></div>
+                    <div class="info-recto">
+                        <p>Cette carte est la propriété de CashPays.</p>
+                        <p>En cas de perte, contactez le support.</p>
+                        <p>📞 62 78 73 07</p>
+                        <p>✉️supportalkher@gmail.com</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="print-help no-print">
+        <p>⚙️ Pour conserver les couleurs :</p>
+        <ol>
+            <li>Cliquez sur <strong>"Plus de paramètres"</strong></li>
+            <li>Cochez <strong>"Graphiques d'arrière-plan"</strong></li>
+            <li>Cliquez sur <strong>"Enregistrer en PDF"</strong></li>
+        </ol>
+    </div>
+
+    <div class="action-bar no-print">
+        <button class="btn-print" onclick="window.print()">🖨️ Imprimer / PDF</button>
+        <button class="btn-close" onclick="window.close()">✕ Fermer</button>
+    </div>
+
+    <script>
+        window.onload = () => setTimeout(() => window.print(), 1200);
+    </script>
+</body>
+</html>`);
+
+    } catch (error) {
+        console.error('❌ Erreur PDF:', error);
+        res.status(500).send('<h2>Erreur lors de la génération du PDF</h2>');
+    }
+});
+// ------------------------------------------------------------
+// 3. ROUTES UTILISATEUR
+// ------------------------------------------------------------
+
+/**
+ * GET /api/cards/my-card
+ * Récupérer la carte de l'utilisateur
+ */
+app.get('/api/cards/my-card', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('📋 GET /api/cards/my-card - user:', userId);
+
+    try {
+        const card = await get(`
+            SELECT 
+                id, card_number, card_holder, expiry_month, expiry_year,
+                balance, status, card_type, daily_limit, monthly_limit,
+                requested_at, approved_at, expires_at, created_at
+            FROM virtual_cards 
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [userId]).catch(() => null);
+
+        if (!card) {
+            return res.json({
+                success: true,
+                card: null,
+                message: 'Aucune carte'
+            });
+        }
+
+        // Masquer le numéro
+        if (card.card_number) {
+            const parts = card.card_number.split(' ');
+            card.card_number_masked = `**** **** **** ${parts[parts.length - 1]}`;
+        }
+
+        res.json({
+            success: true,
+            card
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur my-card:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            card: null
+        });
+    }
+});
+
+/**
+ * POST /api/cards/request
+ * Demander une carte virtuelle
+ */
+app.post('/api/cards/request', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { card_type = 'classic', reason = '' } = req.body;
+
+    console.log('💳 Demande carte:', { userId, card_type });
+
+    try {
+        // Vérifier si l'utilisateur a déjà une carte
+        const existing = await get(`
+            SELECT * FROM virtual_cards 
+            WHERE user_id = ? AND status IN ('pending', 'active')
+        `, [userId]).catch(() => null);
+
+        if (existing) {
+            return res.status(400).json({
+                success: false,
+                error: existing.status === 'pending'
+                    ? 'Vous avez déjà une demande en attente'
+                    : 'Vous avez déjà une carte active'
+            });
+        }
+
+        // Créer la carte en attente
+        const result = await run(`
+            INSERT INTO virtual_cards (
+                user_id, card_number, card_holder, expiry_month, expiry_year,
+                cvv, pin_hash, status, card_type
+            ) VALUES (?, '', '', 0, 0, '', '', 'pending', ?)
+        `, [userId, card_type]);
+
+        console.log('✅ Demande créée:', result.lastID);
+
+        res.json({
+            success: true,
+            message: 'Demande envoyée. En attente de validation.',
+            card_id: result.lastID
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur demande:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/cards/my-transactions
+ */
+app.get('/api/cards/my-transactions', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const transactions = await query(`
+            SELECT 
+                ct.*,
+                u1.fullname as holder_name,
+                u2.fullname as merchant_name
+            FROM card_transactions ct
+            LEFT JOIN users u1 ON ct.card_holder_id = u1.id
+            LEFT JOIN users u2 ON ct.merchant_id = u2.id
+            WHERE ct.card_holder_id = ? OR ct.merchant_id = ?
+            ORDER BY ct.created_at DESC
+            LIMIT 100
+        `, [userId, userId]).catch(() => []);
+
+        res.json({
+            success: true,
+            transactions: transactions || []
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, transactions: [] });
+    }
+});
+
+// ------------------------------------------------------------
+// 4. ROUTES ADMIN CARTES
+// ------------------------------------------------------------
+
+/**
+ * GET /api/admin/cards
+ */
+app.get('/api/admin/cards', authenticateToken, requireAdmin, async (req, res) => {
+    const { status } = req.query;
+
+    try {
+        let sql = `
+            SELECT 
+                vc.*,
+                u.fullname as user_name,
+                u.phone as user_phone
+            FROM virtual_cards vc
+            LEFT JOIN users u ON vc.user_id = u.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (status && status !== 'all') {
+            sql += ' AND vc.status = ?';
+            params.push(status);
+        }
+
+        sql += ' ORDER BY vc.created_at DESC';
+
+        const cards = await query(sql, params).catch(() => []);
+
+        const safeCards = (cards || []).map(c => ({
+            ...c,
+            card_number_masked: c.card_number
+                ? `**** **** **** ${c.card_number.split(' ').pop()}`
+                : null,
+            card_number: undefined
+        }));
+
+        res.json({
+            success: true,
+            cards: safeCards,
+            count: safeCards.length
+        });
+    } catch (error) {
+        console.error('❌ Erreur admin cards:', error);
+        res.status(500).json({ success: false, error: error.message, cards: [] });
+    }
+});
+
+/**
+ * GET /api/admin/cards/stats
+ */
+app.get('/api/admin/cards/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+            FROM virtual_cards
+        `).catch(() => ({}));
+
+        res.json({
+            success: true,
+            stats: stats || {}
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, stats: {} });
+    }
+});
+app.post('/api/admin/cards/:id/approve', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const adminId = req.user.userId;
+    const { daily_limit = 500000, monthly_limit = 5000000 } = req.body;
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const card = await get('SELECT * FROM virtual_cards WHERE id = ?', [id]);
+
+        if (!card) return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        if (card.status !== 'pending') return res.status(400).json({ success: false, error: `Carte déjà ${card.status}` });
+
+        const holder = await get('SELECT fullname FROM users WHERE id = ?', [card.user_id]);
+
+        const cardNumber = generateCardNumber();
+        const cvv = generateCVV();
+        
+        // ✅ PIN temporaire (l'utilisateur devra le changer)
+        const tempPin = '0000';
+        const pinHash = await bcrypt.hash(tempPin, 10);
+
+        const now = new Date();
+        const expiryMonth = now.getMonth() + 1;
+        const expiryYear = now.getFullYear() + 3;
+
+        await run(`
+            UPDATE virtual_cards 
+            SET card_number = ?, card_holder = ?, expiry_month = ?, expiry_year = ?,
+                cvv = ?, pin_hash = ?, pin_set = 0,  -- ✅ PIN non défini
+                daily_limit = ?, monthly_limit = ?,
+                status = 'active', approved_at = CURRENT_TIMESTAMP, approved_by = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [
+            cardNumber, holder.fullname.toUpperCase(), expiryMonth, expiryYear,
+            cvv, pinHash, daily_limit, monthly_limit, adminId, id
+        ]);
+
+        console.log('✅ Carte approuvée:', cardNumber);
+
+        res.json({
+            success: true,
+            message: 'Carte approuvée. L\'utilisateur devra définir son PIN à la première utilisation.',
+            card: {
+                id: parseInt(id),
+                card_number: cardNumber,
+                card_holder: holder.fullname.toUpperCase(),
+                expiry_month: expiryMonth,
+                expiry_year: expiryYear,
+                cvv,
+                daily_limit,
+                monthly_limit,
+                pin_set: 0
+            }
+        });
+    } catch (error) {
+        console.error('❌ Erreur approbation:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/cards/set-pin
+ * Définir le PIN de sa carte (1ère utilisation ou changement)
+ */
+app.post('/api/cards/set-pin', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { card_number, new_pin, confirm_pin } = req.body;
+
+    console.log('🔐 Définition PIN:', { userId, card_last4: card_number?.slice(-4) });
+
+    if (!card_number || !new_pin || !confirm_pin) {
+        return res.status(400).json({ success: false, error: 'Tous les champs sont requis' });
+    }
+
+    // Validation du PIN
+    if (!/^\d{4}$/.test(new_pin)) {
+        return res.status(400).json({ success: false, error: 'Le PIN doit contenir exactement 4 chiffres' });
+    }
+
+    if (new_pin !== confirm_pin) {
+        return res.status(400).json({ success: false, error: 'Les deux PIN ne correspondent pas' });
+    }
+
+    // Interdire les PIN trop simples
+    const weakPins = ['0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '1234', '4321'];
+    if (weakPins.includes(new_pin)) {
+        return res.status(400).json({ success: false, error: 'PIN trop simple. Choisissez un autre.' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const cleanNumber = card_number.replace(/\s/g, '');
+
+        // Trouver la carte
+        const card = await get(`
+            SELECT * FROM virtual_cards 
+            WHERE REPLACE(card_number, ' ', '') = ? AND user_id = ?
+        `, [cleanNumber, userId]);
+
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        }
+
+        if (card.status !== 'active') {
+            return res.status(400).json({ success: false, error: `Carte ${card.status}` });
+        }
+
+        // Hasher le nouveau PIN
+        const pinHash = await bcrypt.hash(new_pin, 10);
+
+        await run(`
+            UPDATE virtual_cards 
+            SET pin_hash = ?, pin_set = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [pinHash, card.id]);
+
+        console.log('✅ PIN défini pour carte:', card.id);
+
+        // Notification
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '🔐 PIN défini', 'Votre PIN a été configuré avec succès.', 'success', CURRENT_TIMESTAMP)
+        `, [userId]).catch(() => {});
+
+        res.json({
+            success: true,
+            message: 'PIN défini avec succès'
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur set-pin:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+app.post('/api/cards/verify', authenticateToken, async (req, res) => {
+    const merchantId = req.user.userId;
+    const { card_number, pin } = req.body;
+
+    if (!card_number || !pin) {
+        return res.status(400).json({ success: false, error: 'Numéro et PIN requis' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const cleanNumber = card_number.replace(/\s/g, '');
+
+        const card = await get(`
+            SELECT vc.*, u.fullname as holder_name, u.phone as holder_phone
+            FROM virtual_cards vc
+            LEFT JOIN users u ON vc.user_id = u.id
+            WHERE REPLACE(vc.card_number, ' ', '') = ?
+        `, [cleanNumber]);
+
+        if (!card) return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        if (card.status !== 'active') return res.status(400).json({ success: false, error: `Carte ${card.status}` });
+
+        // ✅ VÉRIFIER SI LE PIN EST DÉFINI
+        if (!card.pin_set) {
+            return res.status(400).json({
+                success: false,
+                error: 'PIN non défini',
+                needs_pin_setup: true,
+                card_holder: card.holder_name,
+                card_last4: card.card_number.slice(-4),
+                message: 'Cette carte n\'a pas encore de PIN. Le titulaire doit en définir un.'
+            });
+        }
+
+        // Vérifier le PIN
+        const pinValid = await bcrypt.compare(pin, card.pin_hash);
+        if (!pinValid) {
+            return res.status(401).json({ success: false, error: 'PIN incorrect' });
+        }
+
+        // Vérifier le solde
+        const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [card.user_id]);
+
+        if (card.user_id === merchantId) {
+            return res.status(400).json({ success: false, error: 'Vous ne pouvez pas utiliser votre propre carte' });
+        }
+
+        // Limites du jour
+        const today = new Date().toISOString().split('T')[0];
+        const todayTotal = await get(`
+            SELECT COALESCE(SUM(amount), 0) as total
+            FROM card_transactions
+            WHERE card_id = ? AND DATE(created_at) = ? AND status = 'completed'
+        `, [card.id, today]);
+
+        res.json({
+            success: true,
+            card: {
+                holder_name: card.holder_name,
+                holder_phone: card.holder_phone,
+                balance: wallet?.balance || 0,
+                card_type: card.card_type,
+                expiry: `${String(card.expiry_month).padStart(2, '0')}/${card.expiry_year}`,
+                daily_limit: card.daily_limit,
+                daily_used: todayTotal?.total || 0,
+                daily_remaining: card.daily_limit - (todayTotal?.total || 0)
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur vérification:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+app.get('/api/cards/my-card', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const card = await get(`
+            SELECT 
+                id, card_number, card_holder, expiry_month, expiry_year, cvv,
+                pin_set,  -- ✅ NOUVEAU
+                balance, status, card_type, daily_limit, monthly_limit,
+                requested_at, approved_at, expires_at, created_at
+            FROM virtual_cards 
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [userId]);
+
+        if (!card) {
+            return res.json({ success: true, card: null });
+        }
+
+        if (card.card_number) {
+            const parts = card.card_number.split(' ');
+            card.card_number_masked = `**** **** **** ${parts[parts.length - 1]}`;
+        }
+
+        res.json({ success: true, card });
+
+    } catch (error) {
+        console.error('❌ Erreur my-card:', error);
+        res.status(500).json({ success: false, error: error.message, card: null });
+    }
+});
+/**
+ * POST /api/admin/cards/:id/reject
+ */
+app.post('/api/admin/cards/:id/reject', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { reason = 'Non conforme' } = req.body;
+
+    try {
+        await run(`
+            UPDATE virtual_cards 
+            SET status = 'cancelled', rejection_reason = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [reason, id]);
+
+        res.json({ success: true, message: 'Carte rejetée' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/cards/:id/block
+ */
+app.post('/api/admin/cards/:id/block', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    try {
+        await run(`UPDATE virtual_cards SET status = 'blocked' WHERE id = ?`, [id]);
+        res.json({ success: true, message: 'Carte bloquée' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/cards/:id/unblock
+ */
+app.post('/api/admin/cards/:id/unblock', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    try {
+        await run(`UPDATE virtual_cards SET status = 'active' WHERE id = ?`, [id]);
+        res.json({ success: true, message: 'Carte débloquée' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// ============================================================
+// RÉINITIALISATION DU PIN DES CARTES
+// ============================================================
+
+/**
+ * POST /api/cards/request-pin-reset
+ * L'utilisateur demande une réinitialisation de son PIN
+ */
+app.post('/api/cards/request-pin-reset', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { reason = '' } = req.body;
+
+    console.log('🔐 Demande reset PIN:', { userId, reason });
+
+    try {
+        // Vérifier que l'utilisateur a une carte active
+        const card = await get(`
+            SELECT * FROM virtual_cards 
+            WHERE user_id = ? AND status = 'active'
+        `, [userId]);
+
+        if (!card) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'Aucune carte active trouvée' 
+            });
+        }
+
+        // Vérifier s'il y a déjà une demande en attente
+        const existing = await get(`
+            SELECT * FROM card_pin_resets 
+            WHERE user_id = ? AND status = 'pending'
+        `, [userId]);
+
+        if (existing) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Vous avez déjà une demande en attente',
+                request_id: existing.id
+            });
+        }
+
+        // Créer la demande
+        const result = await run(`
+            INSERT INTO card_pin_resets (card_id, user_id, reason, status)
+            VALUES (?, ?, ?, 'pending')
+        `, [card.id, userId, reason]);
+
+        // Notifier l'admin
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            SELECT id, '🔐 Demande reset PIN', ?, 'info', CURRENT_TIMESTAMP
+            FROM users WHERE role = 'admin'
+        `, [`L'utilisateur ${userId} demande une réinitialisation de PIN carte`]).catch(() => {});
+
+        console.log('✅ Demande créée:', result.lastID);
+
+        res.json({
+            success: true,
+            message: 'Demande envoyée. En attente de validation par l\'administrateur.',
+            request_id: result.lastID
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur reset PIN:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/cards/pin-reset-status
+ * Vérifier le statut de la demande de reset PIN
+ */
+app.get('/api/cards/pin-reset-status', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const request = await get(`
+            SELECT * FROM card_pin_resets 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        `, [userId]);
+
+        res.json({
+            success: true,
+            request: request || null
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, request: null });
+    }
+});
+
+/**
+ * GET /api/admin/cards/pin-resets
+ * Liste des demandes de reset PIN (admin)
+ */
+app.get('/api/admin/cards/pin-resets', authenticateToken, requireAdmin, async (req, res) => {
+    const { status = 'pending' } = req.query;
+
+    try {
+        let sql = `
+            SELECT 
+                pr.*,
+                c.card_number,
+                c.card_holder,
+                u.fullname as user_name,
+                u.phone as user_phone,
+                a.fullname as admin_name
+            FROM card_pin_resets pr
+            LEFT JOIN virtual_cards c ON pr.card_id = c.id
+            LEFT JOIN users u ON pr.user_id = u.id
+            LEFT JOIN users a ON pr.admin_id = a.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (status !== 'all') {
+            sql += ' AND pr.status = ?';
+            params.push(status);
+        }
+
+        sql += ' ORDER BY pr.created_at DESC';
+
+        const requests = await query(sql, params).catch(() => []);
+
+        // Masquer les numéros de carte
+        const safeRequests = (requests || []).map(r => ({
+            ...r,
+            card_number_masked: r.card_number 
+                ? `**** **** **** ${r.card_number.split(' ').pop()}` 
+                : null,
+            card_number: undefined
+        }));
+
+        res.json({
+            success: true,
+            requests: safeRequests,
+            count: safeRequests.length
+        });
+    } catch (error) {
+        console.error('❌ Erreur admin pin-resets:', error);
+        res.status(500).json({ success: false, error: error.message, requests: [] });
+    }
+});
+
+/**
+ * POST /api/admin/cards/pin-resets/:id/approve
+ * Approuver une demande de reset PIN
+ */
+app.post('/api/admin/cards/pin-resets/:id/approve', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const adminId = req.user.userId;
+    const { note = 'Réinitialisation approuvée' } = req.body;
+
+    try {
+        const request = await get('SELECT * FROM card_pin_resets WHERE id = ?', [id]);
+
+        if (!request) {
+            return res.status(404).json({ success: false, error: 'Demande non trouvée' });
+        }
+
+        if (request.status !== 'pending') {
+            return res.status(400).json({ success: false, error: `Demande déjà ${request.status}` });
+        }
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // Marquer la demande comme approuvée
+            await run(`
+                UPDATE card_pin_resets 
+                SET status = 'approved', 
+                    admin_id = ?, 
+                    admin_note = ?,
+                    processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [adminId, note, id]);
+
+            // Réinitialiser le PIN de la carte (pin_set = 0)
+            await run(`
+                UPDATE virtual_cards 
+                SET pin_set = 0, 
+                    pin_hash = '',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [request.card_id]);
+
+            // Notifier l'utilisateur
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '🔐 PIN réinitialisé', ?, 'success', CURRENT_TIMESTAMP)
+            `, [
+                request.user_id,
+                'Votre PIN a été réinitialisé. Rendez-vous dans "Ma Carte" pour en définir un nouveau.'
+            ]).catch(() => {});
+
+            await run('COMMIT');
+
+            console.log('✅ Reset PIN approuvé pour card:', request.card_id);
+
+            res.json({ 
+                success: true, 
+                message: 'Demande approuvée. Le PIN peut être redéfini.' 
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur approbation reset:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/cards/pin-resets/:id/reject
+ * Rejeter une demande de reset PIN
+ */
+app.post('/api/admin/cards/pin-resets/:id/reject', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const adminId = req.user.userId;
+    const { reason = 'Non conforme' } = req.body;
+
+    try {
+        await run(`
+            UPDATE card_pin_resets 
+            SET status = 'rejected', 
+                admin_id = ?, 
+                admin_note = ?,
+                processed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [adminId, reason, id]);
+
+        const request = await get('SELECT * FROM card_pin_resets WHERE id = ?', [id]);
+
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '❌ Reset PIN rejeté', ?, 'error', CURRENT_TIMESTAMP)
+        `, [request.user_id, `Raison: ${reason}`]).catch(() => {});
+
+        res.json({ success: true, message: 'Demande rejetée' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+// ============================================================
+// FIN BLOC CARTES VIRTUELLES
+// ============================================================
+/**
+ * POST /api/cards/request
+ * Demander une carte virtuelle
+ */
+app.post('/api/cards/request', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { card_type = 'classic', reason = '' } = req.body;
+
+    console.log('💳 Demande de carte:', { userId, card_type });
+
+    try {
+        // Vérifier si l'utilisateur a déjà une carte active
+        const existingCard = await get(`
+            SELECT * FROM virtual_cards 
+            WHERE user_id = ? AND status IN ('pending', 'active')
+        `, [userId]);
+
+        if (existingCard) {
+            return res.status(400).json({
+                success: false,
+                error: existingCard.status === 'pending' 
+                    ? 'Vous avez déjà une demande en attente'
+                    : 'Vous avez déjà une carte active'
+            });
+        }
+
+        // Créer la demande
+        const result = await run(`
+            INSERT INTO card_requests (user_id, card_type, reason, status)
+            VALUES (?, ?, ?, 'pending')
+        `, [userId, card_type, reason]);
+
+        // Créer la carte en statut pending
+        const cardResult = await run(`
+            INSERT INTO virtual_cards (user_id, card_number, card_holder, expiry_month, expiry_year, cvv, pin_hash, status, card_type)
+            VALUES (?, '', '', 0, 0, '', '', 'pending', ?)
+        `, [userId, card_type]);
+
+        // Notification à l'admin (best-effort)
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            SELECT id, '💳 Nouvelle demande de carte', ?, 'info', CURRENT_TIMESTAMP
+            FROM users WHERE role = 'admin'
+        `, [`L'utilisateur ${userId} demande une carte ${card_type}`]).catch(() => {});
+
+        console.log('✅ Demande créée:', result.lastID);
+
+        res.json({
+            success: true,
+            message: 'Demande envoyée. En attente de validation par l\'administrateur.',
+            request_id: result.lastID
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur demande carte:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/cards/my-card
+ * Récupérer la carte de l'utilisateur
+ */
+app.get('/api/cards/my-card', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const card = await get(`
+            SELECT 
+                id, card_number, card_holder, expiry_month, expiry_year,
+                balance, status, card_type, daily_limit, monthly_limit,
+                requested_at, approved_at, expires_at, created_at
+            FROM virtual_cards 
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [userId]);
+
+        if (!card) {
+            return res.json({
+                success: true,
+                card: null,
+                message: 'Aucune carte'
+            });
+        }
+
+        // Masquer le numéro pour la sécurité
+        if (card.card_number) {
+            const parts = card.card_number.split(' ');
+            card.card_number_masked = `**** **** **** ${parts[parts.length - 1]}`;
+        }
+
+        res.json({
+            success: true,
+            card
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/cards/my-transactions
+ * Historique des transactions de l'utilisateur
+ */
+app.get('/api/cards/my-transactions', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const transactions = await query(`
+            SELECT 
+                ct.*,
+                u1.fullname as holder_name,
+                u2.fullname as merchant_name
+            FROM card_transactions ct
+            LEFT JOIN users u1 ON ct.card_holder_id = u1.id
+            LEFT JOIN users u2 ON ct.merchant_id = u2.id
+            WHERE ct.card_holder_id = ? OR ct.merchant_id = ?
+            ORDER BY ct.created_at DESC
+            LIMIT 100
+        `, [userId, userId]).catch(() => []);
+
+        res.json({
+            success: true,
+            transactions: transactions || []
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, transactions: [] });
+    }
+});
+
+// ============================================================
+// ROUTES PAIEMENT PAR CARTE (GUICHET)
+// ============================================================
+
+/**
+ * POST /api/cards/verify
+ * Vérifier une carte (numéro + PIN) SANS débiter
+ * Utilisé par le guichet pour vérifier le solde avant paiement
+ */
+app.post('/api/cards/verify', authenticateToken, async (req, res) => {
+    const merchantId = req.user.userId;
+    const { card_number, pin } = req.body;
+
+    console.log('🔍 Vérification carte:', { merchantId, card_number: card_number?.slice(-4) });
+
+    if (!card_number || !pin) {
+        return res.status(400).json({ success: false, error: 'Numéro de carte et PIN requis' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+
+        // Nettoyer le numéro (enlever les espaces)
+        const cleanNumber = card_number.replace(/\s/g, '');
+
+        // Trouver la carte
+        const card = await get(`
+            SELECT vc.*, u.fullname as holder_name, u.phone as holder_phone
+            FROM virtual_cards vc
+            LEFT JOIN users u ON vc.user_id = u.id
+            WHERE REPLACE(vc.card_number, ' ', '') = ?
+        `, [cleanNumber]);
+
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        }
+
+        // Vérifier le statut
+        if (card.status === 'pending') {
+            return res.status(400).json({ success: false, error: 'Carte en attente de validation' });
+        }
+        if (card.status === 'blocked') {
+            return res.status(400).json({ success: false, error: 'Carte bloquée' });
+        }
+        if (card.status !== 'active') {
+            return res.status(400).json({ success: false, error: `Carte ${card.status}` });
+        }
+
+        // Vérifier la date d'expiration
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1;
+        
+        if (card.expiry_year < currentYear || 
+            (card.expiry_year === currentYear && card.expiry_month < currentMonth)) {
+            return res.status(400).json({ success: false, error: 'Carte expirée' });
+        }
+
+        // Vérifier le PIN
+        const pinValid = await bcrypt.compare(pin, card.pin_hash);
+        if (!pinValid) {
+            return res.status(401).json({ success: false, error: 'PIN incorrect' });
+        }
+
+        // Vérifier que le titulaire a assez de solde
+        const wallet = await get('SELECT balance FROM wallets WHERE user_id = ?', [card.user_id]);
+
+        // Vérifier que le guichet n'est pas le titulaire
+        if (card.user_id === merchantId) {
+            return res.status(400).json({ success: false, error: 'Vous ne pouvez pas utiliser votre propre carte' });
+        }
+
+        // Vérifier les limites du jour
+        const today = new Date().toISOString().split('T')[0];
+        const todayTotal = await get(`
+            SELECT COALESCE(SUM(amount), 0) as total
+            FROM card_transactions
+            WHERE card_id = ? AND DATE(created_at) = ? AND status = 'completed'
+        `, [card.id, today]);
+
+        res.json({
+            success: true,
+            card: {
+                holder_name: card.holder_name,
+                holder_phone: card.holder_phone,
+                balance: wallet?.balance || 0,
+                card_type: card.card_type,
+                expiry: `${String(card.expiry_month).padStart(2, '0')}/${card.expiry_year}`,
+                daily_limit: card.daily_limit,
+                daily_used: todayTotal?.total || 0,
+                daily_remaining: card.daily_limit - (todayTotal?.total || 0)
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur vérification:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/cards/pay
+ * Effectuer un paiement par carte
+ * Le guichet (merchant) reçoit l'argent, le titulaire est débité
+ */
+app.post('/api/cards/pay', authenticateToken, async (req, res) => {
+    const merchantId = req.user.userId;
+    const { card_number, pin, amount, description = '' } = req.body;
+
+    console.log('\n💳 PAIEMENT PAR CARTE');
+    console.log('   Marchand:', merchantId);
+    console.log('   Carte:', card_number?.slice(-4));
+    console.log('   Montant:', amount);
+
+    // Validation
+    if (!card_number || !pin || !amount) {
+        return res.status(400).json({ success: false, error: 'Carte, PIN et montant requis' });
+    }
+
+    const amountNum = parseInt(amount);
+    if (amountNum < 100) {
+        return res.status(400).json({ success: false, error: 'Montant minimum: 100 FCFA' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const cleanNumber = card_number.replace(/\s/g, '');
+
+        // Récupérer la carte
+        const card = await get(`
+            SELECT vc.*, u.fullname as holder_name
+            FROM virtual_cards vc
+            LEFT JOIN users u ON vc.user_id = u.id
+            WHERE REPLACE(vc.card_number, ' ', '') = ?
+        `, [cleanNumber]);
+
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        }
+
+        // Vérifications
+        if (card.status !== 'active') {
+            return res.status(400).json({ success: false, error: `Carte ${card.status}` });
+        }
+
+        // Expiration
+        const now = new Date();
+        if (card.expiry_year < now.getFullYear() ||
+            (card.expiry_year === now.getFullYear() && card.expiry_month < now.getMonth() + 1)) {
+            return res.status(400).json({ success: false, error: 'Carte expirée' });
+        }
+
+        // PIN
+        const pinValid = await bcrypt.compare(pin, card.pin_hash);
+        if (!pinValid) {
+            return res.status(401).json({ success: false, error: 'PIN incorrect' });
+        }
+
+        // Anti-auto-paiement
+        if (card.user_id === merchantId) {
+            return res.status(400).json({ success: false, error: 'Vous ne pouvez pas payer avec votre propre carte' });
+        }
+
+        // Limite journalière
+        const today = new Date().toISOString().split('T')[0];
+        const todayTotal = await get(`
+            SELECT COALESCE(SUM(amount), 0) as total
+            FROM card_transactions
+            WHERE card_id = ? AND DATE(created_at) = ? AND status = 'completed'
+        `, [card.id, today]);
+
+        const dailyUsed = todayTotal?.total || 0;
+        if (dailyUsed + amountNum > card.daily_limit) {
+            return res.status(400).json({
+                success: false,
+                error: `Limite journalière dépassée. Utilisé: ${dailyUsed.toLocaleString()} / ${card.daily_limit.toLocaleString()} FCFA`
+            });
+        }
+
+        // Frais (1%)
+        const fee = Math.floor(amountNum * 0.01);
+        const totalAmount = amountNum + fee;
+
+        // Vérifier le solde du titulaire
+        const holderWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [card.user_id]);
+        if (!holderWallet) {
+            return res.status(404).json({ success: false, error: 'Wallet du titulaire non trouvé' });
+        }
+
+        if (holderWallet.balance < totalAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Requis: ${totalAmount.toLocaleString()} FCFA, Disponible: ${holderWallet.balance.toLocaleString()} FCFA`
+            });
+        }
+
+        // Wallet du marchand
+        let merchantWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [merchantId]);
+        if (!merchantWallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [merchantId]);
+            merchantWallet = { balance: 0 };
+        }
+
+        // Transaction atomique
+        const receiptNumber = generateReceiptNumber();
+        const reference = `CARD-${card.id}-${Date.now()}`;
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // Débiter le titulaire
+            await run(`
+                UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [totalAmount, card.user_id]);
+
+            // Créditer le marchand (montant - frais reversés à la plateforme)
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [amountNum, merchantId]);
+
+            // Enregistrer la transaction
+            const result = await run(`
+                INSERT INTO card_transactions (
+                    card_id, card_number, card_holder_id, merchant_id,
+                    amount, fee, total_amount, transaction_type,
+                    description, status, receipt_number, reference
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'payment', ?, 'completed', ?, ?)
+            `, [
+                card.id,
+                card.card_number,
+                card.user_id,
+                merchantId,
+                amountNum,
+                fee,
+                totalAmount,
+                description || `Paiement chez le guichet #${merchantId}`,
+                receiptNumber,
+                reference
+            ]);
+
+            // Notifications
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💳 Paiement effectué', ?, 'success', CURRENT_TIMESTAMP)
+            `, [
+                card.user_id,
+                `Paiement de ${totalAmount.toLocaleString()} FCFA effectué avec votre carte. Reçu: ${receiptNumber}`
+            ]).catch(() => {});
+
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💰 Paiement reçu', ?, 'success', CURRENT_TIMESTAMP)
+            `, [
+                merchantId,
+                `Vous avez reçu ${amountNum.toLocaleString()} FCFA par carte. Reçu: ${receiptNumber}`
+            ]).catch(() => {});
+
+            await run('COMMIT');
+
+            console.log('✅ Paiement par carte réussi:', receiptNumber);
+
+            res.json({
+                success: true,
+                message: 'Paiement effectué avec succès',
+                receipt: {
+                    receipt_number: receiptNumber,
+                    card_holder: card.holder_name,
+                    card_last4: card.card_number.slice(-4),
+                    amount: amountNum,
+                    fee,
+                    total_amount: totalAmount,
+                    merchant_id: merchantId,
+                    description,
+                    created_at: new Date().toISOString(),
+                    status: 'completed'
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur paiement carte:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================
+// ROUTES ADMIN - GESTION DES CARTES
+// ============================================================
+
+/**
+ * GET /api/admin/cards
+ * Liste de toutes les cartes
+ */
+app.get('/api/admin/cards', authenticateToken, requireAdmin, async (req, res) => {
+    const { status, user_id } = req.query;
+
+    try {
+        let sql = `
+            SELECT 
+                vc.id, vc.user_id, vc.card_number, vc.card_holder,
+                vc.expiry_month, vc.expiry_year,
+                vc.balance, vc.status, vc.card_type,
+                vc.daily_limit, vc.monthly_limit,
+                vc.requested_at, vc.approved_at, vc.expires_at,
+                u.fullname as user_name,
+                u.phone as user_phone,
+                w.balance as user_wallet_balance
+            FROM virtual_cards vc
+            LEFT JOIN users u ON vc.user_id = u.id
+            LEFT JOIN wallets w ON u.id = w.user_id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (status) {
+            sql += ' AND vc.status = ?';
+            params.push(status);
+        }
+        if (user_id) {
+            sql += ' AND vc.user_id = ?';
+            params.push(user_id);
+        }
+
+        sql += ' ORDER BY vc.created_at DESC';
+
+        const cards = await query(sql, params).catch(() => []);
+
+        // Masquer les numéros
+        const safeCards = (cards || []).map(c => ({
+            ...c,
+            card_number_masked: c.card_number 
+                ? `**** **** **** ${c.card_number.split(' ').pop()}` 
+                : null,
+            card_number: undefined
+        }));
+
+        res.json({
+            success: true,
+            cards: safeCards,
+            count: safeCards.length
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur admin cards:', error);
+        res.status(500).json({ success: false, error: error.message, cards: [] });
+    }
+});
+
+/**
+ * POST /api/admin/cards/:id/approve
+ * Approuver une carte
+ */
+app.post('/api/admin/cards/:id/approve', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const adminId = req.user.userId;
+    const { daily_limit = 500000, monthly_limit = 5000000 } = req.body;
+
+    console.log('✅ Approbation carte:', id);
+
+    try {
+        const bcrypt = require('bcryptjs');
+
+        // Récupérer la carte
+        const card = await get('SELECT * FROM virtual_cards WHERE id = ?', [id]);
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        }
+
+        if (card.status !== 'pending') {
+            return res.status(400).json({ success: false, error: `Carte déjà ${card.status}` });
+        }
+
+        // Récupérer le titulaire
+        const holder = await get('SELECT fullname FROM users WHERE id = ?', [card.user_id]);
+        if (!holder) {
+            return res.status(404).json({ success: false, error: 'Titulaire non trouvé' });
+        }
+
+        // Générer les données de la carte
+        const cardNumber = generateCardNumber();
+        const pin = generatePIN();
+        const cvv = generateCVV();
+        const pinHash = await bcrypt.hash(pin, 10);
+
+        // Dates d'expiration (3 ans)
+        const now = new Date();
+        const expiryMonth = now.getMonth() + 1;
+        const expiryYear = now.getFullYear() + 3;
+        const expiresAt = new Date(expiryYear, expiryMonth - 1, 1).toISOString();
+
+        // Mettre à jour la carte
+        await run(`
+            UPDATE virtual_cards 
+            SET card_number = ?,
+                card_holder = ?,
+                expiry_month = ?,
+                expiry_year = ?,
+                cvv = ?,
+                pin_hash = ?,
+                daily_limit = ?,
+                monthly_limit = ?,
+                status = 'active',
+                approved_at = CURRENT_TIMESTAMP,
+                approved_by = ?,
+                expires_at = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [
+            cardNumber,
+            holder.fullname.toUpperCase(),
+            expiryMonth,
+            expiryYear,
+            cvv,
+            pinHash,
+            daily_limit,
+            monthly_limit,
+            adminId,
+            expiresAt,
+            id
+        ]);
+
+        // Mettre à jour la demande
+        await run(`
+            UPDATE card_requests 
+            SET status = 'approved', admin_id = ?, processed_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND status = 'pending'
+        `, [adminId, card.user_id]).catch(() => {});
+
+        // Notification
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '💳 Carte approuvée', ?, 'success', CURRENT_TIMESTAMP)
+        `, [
+            card.user_id,
+            `Votre carte virtuelle a été approuvée. Consultez votre espace pour les détails.`
+        ]).catch(() => {});
+
+        console.log('✅ Carte approuvée:', cardNumber);
+
+        // ⚠️ Le PIN n'est renvoyé QU'UNE SEULE FOIS (à l'admin)
+        res.json({
+            success: true,
+            message: 'Carte approuvée avec succès',
+            card: {
+                id: parseInt(id),
+                card_number: cardNumber,
+                card_holder: holder.fullname.toUpperCase(),
+                expiry_month: expiryMonth,
+                expiry_year: expiryYear,
+                cvv,
+                pin, // ⚠️ À communiquer de manière sécurisée
+                daily_limit,
+                monthly_limit
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur approbation:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/cards/:id/reject
+ * Rejeter une carte
+ */
+app.post('/api/admin/cards/:id/reject', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const adminId = req.user.userId;
+    const { reason = 'Non conforme' } = req.body;
+
+    try {
+        const card = await get('SELECT * FROM virtual_cards WHERE id = ?', [id]);
+        if (!card) {
+            return res.status(404).json({ success: false, error: 'Carte non trouvée' });
+        }
+
+        await run(`
+            UPDATE virtual_cards 
+            SET status = 'cancelled',
+                rejection_reason = ?,
+                approved_by = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [reason, adminId, id]);
+
+        await run(`
+            UPDATE card_requests 
+            SET status = 'rejected', admin_id = ?, admin_note = ?, processed_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND status = 'pending'
+        `, [adminId, reason, card.user_id]).catch(() => {});
+
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '❌ Demande de carte rejetée', ?, 'error', CURRENT_TIMESTAMP)
+        `, [card.user_id, `Raison: ${reason}`]).catch(() => {});
+
+        res.json({ success: true, message: 'Carte rejetée' });
+
+    } catch (error) {
+        console.error('❌ Erreur rejet:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/cards/:id/block
+ * Bloquer une carte
+ */
+app.post('/api/admin/cards/:id/block', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { reason = 'Bloquée par admin' } = req.body;
+
+    try {
+        await run(`
+            UPDATE virtual_cards 
+            SET status = 'blocked', rejection_reason = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [reason, id]);
+
+        res.json({ success: true, message: 'Carte bloquée' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/cards/:id/unblock
+ * Débloquer une carte
+ */
+app.post('/api/admin/cards/:id/unblock', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        await run(`
+            UPDATE virtual_cards 
+            SET status = 'active', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [id]);
+
+        res.json({ success: true, message: 'Carte débloquée' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/admin/card-transactions
+ * Toutes les transactions par carte
+ */
+app.get('/api/admin/card-transactions', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const transactions = await query(`
+            SELECT 
+                ct.*,
+                u1.fullname as holder_name,
+                u1.phone as holder_phone,
+                u2.fullname as merchant_name
+            FROM card_transactions ct
+            LEFT JOIN users u1 ON ct.card_holder_id = u1.id
+            LEFT JOIN users u2 ON ct.merchant_id = u2.id
+            ORDER BY ct.created_at DESC
+            LIMIT 200
+        `).catch(() => []);
+
+        res.json({
+            success: true,
+            transactions: transactions || [],
+            count: transactions?.length || 0
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message, transactions: [] });
+    }
+});
+
+/**
+ * GET /api/admin/cards/stats
+ */
+app.get('/api/admin/cards/stats', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) as blocked,
+                SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+            FROM virtual_cards
+        `).catch(() => ({}));
+
+        const txStats = await get(`
+            SELECT 
+                COUNT(*) as total_transactions,
+                COALESCE(SUM(amount), 0) as total_amount,
+                COALESCE(SUM(fee), 0) as total_fees
+            FROM card_transactions
+            WHERE status = 'completed'
+        `).catch(() => ({}));
+
+        res.json({
+            success: true,
+            stats: {
+                ...(stats || {}),
+                ...(txStats || {})
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
 
 // ============================================
 // DÉMARRAGE DU SERVEUR

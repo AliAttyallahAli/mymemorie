@@ -411,7 +411,7 @@ function Transfer({ user, socket }) {
           <div class="info-row"><span class="label">EXPÉDITEUR</span><span>${transactionData?.sender_name || user?.fullname}</span></div>
           <div class="info-row"><span class="label">TÉLÉPHONE EXP</span><span>${transactionData?.sender_phone || user?.phone}</span></div>
           <div class="info-row"><span class="label">DESTINATAIRE</span><span>${transactionData?.receiver_name}</span></div>
-          <div class="info-row"><span class="label">TÉLÉPHONE DEST</span><span>${transactionData?.receiver_phone}</span></div>
+          <div class="info-row"><span class="label">TÉLÉPHONE DEST</span><span>${transactionData?.receiver_phone ||user?.phone}</span></div>
           <div class="info-row"><span class="label">MONTANT ENVOYÉ</span><span>${formatAmount(transactionData?.amount)}</span></div>
           <div class="info-row"><span class="label">FRAIS (2%)</span><span>${formatAmount(transactionData?.fee)}</span></div>
           <div class="info-row total"><span class="label">TOTAL DÉBITÉ</span><span>${formatAmount((transactionData?.amount || 0) + (transactionData?.fee || 0))}</span></div>

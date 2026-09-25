@@ -42,7 +42,7 @@ function Features({ user }) {
     {
       icon: FaGlobeAfrica,
       title: 'Couverture nationale',
-      description: 'Service disponible dans les 23 provinces du Tchad.',
+      description: 'Service disponible dans les 23 provinces du Tchad et les autres pays du monde.',
       details: 'Plus de 100 agents répartis sur tout le territoire.',
       color: 'from-red-500 to-red-600'
     },

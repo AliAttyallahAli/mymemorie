@@ -1,4 +1,4 @@
-// src/pages/CompanyDashboard.jsx - Version complète et corrigée
+// src/pages/CompanyDashboard.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -12,16 +12,19 @@ import {
   FaDownload, FaEye, FaPrint, FaShare, FaArrowLeft, FaHome,
   FaCreditCard, FaClock, FaPercent,
   FaUserFriends, FaCog, FaBell, FaSearch, FaFilter,
-  FaArrowUp
+  FaArrowUp, FaChartBar, FaDollarSign, FaFileInvoice,
+  FaQrcode, FaLink, FaSync
 } from 'react-icons/fa';
 
-const CompanyDashboard = ({ user }) => {
+const CompanyDashboard = ({ user, socket }) => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [companyData, setCompanyData] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [transferAmount, setTransferAmount] = useState('');
   const [transferPhone, setTransferPhone] = useState('');
@@ -41,29 +44,68 @@ const CompanyDashboard = ({ user }) => {
   const [searchMeter, setSearchMeter] = useState('');
   const [meterInfo, setMeterInfo] = useState(null);
   const [searchingMeter, setSearchingMeter] = useState(false);
+  const [searchPayment, setSearchPayment] = useState('');
+  const [filterPayments, setFilterPayments] = useState('all');
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [notifications, setNotifications] = useState([]);
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5173/api';
 
+  // ✅ Récupération des données de l'entreprise
   const fetchCompanyData = useCallback(async () => {
-    setLoading(true);
     try {
       const token = localStorage.getItem('accessToken');
       const response = await axios.get(`${API_URL}/company/wallet/balance`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      
+      console.log('📊 Données entreprise:', response.data);
       setCompanyData(response.data);
+
+      // Générer le QR Code pour l'entreprise
+      if (response.data?.company?.id) {
+        const shareUrl = `${window.location.origin}/pay/${response.data.company.id}`;
+        setQrCodeUrl(`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}`);
+      }
     } catch (error) {
-      console.error('Erreur chargement:', error);
+      console.error('❌ Erreur chargement:', error);
       toast.error(error.response?.data?.error || 'Erreur lors du chargement des données');
-    } finally {
-      setLoading(false);
     }
   }, [API_URL]);
 
+  // ✅ Récupération des notifications
+  const fetchNotifications = async () => {
+    try {
+      const token = localStorage.getItem('accessToken');
+      const response = await axios.get(`${API_URL}/notifications`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setNotifications(response.data.data || response.data || []);
+    } catch (error) {
+      console.error('Erreur notifications:', error);
+    }
+  };
+
+  // ✅ Rafraîchir les données
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchCompanyData();
+    await fetchNotifications();
+    setRefreshing(false);
+    toast.success('✅ Données actualisées');
+  };
+
   useEffect(() => {
-    fetchCompanyData();
+    const loadData = async () => {
+      setLoading(true);
+      await fetchCompanyData();
+      await fetchNotifications();
+      setLoading(false);
+    };
+    loadData();
   }, [fetchCompanyData]);
 
+  // ✅ Rechercher un compteur
   const handleSearchMeter = async () => {
     if (!searchMeter) {
       toast.error('Veuillez entrer un numéro de compteur');
@@ -88,7 +130,8 @@ const CompanyDashboard = ({ user }) => {
           customer_phone: response.data.data.customer_phone || '',
           customer_address: response.data.data.address || '',
           amount: response.data.data.outstanding_amount || 0,
-          period: response.data.data.period || ''
+          period: response.data.data.period || '',
+          meter_number: searchMeter
         }));
         toast.success('✅ Compteur trouvé');
       }
@@ -100,6 +143,7 @@ const CompanyDashboard = ({ user }) => {
     }
   };
 
+  // ✅ Effectuer un paiement
   const handlePayment = async () => {
     const { customer_name, customer_phone, amount, meter_number } = paymentData;
     
@@ -133,7 +177,7 @@ const CompanyDashboard = ({ user }) => {
       });
 
       if (response.data.success) {
-        toast.success('✅ Paiement effectué avec succès');
+        toast.success(`✅ Paiement de ${amountNum.toLocaleString()} FCFA effectué`);
         setPaymentData({
           customer_name: '',
           customer_phone: '',
@@ -147,7 +191,7 @@ const CompanyDashboard = ({ user }) => {
         });
         setMeterInfo(null);
         setSearchMeter('');
-        fetchCompanyData();
+        await fetchCompanyData();
       }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erreur lors du paiement');
@@ -156,6 +200,7 @@ const CompanyDashboard = ({ user }) => {
     }
   };
 
+  // ✅ Effectuer un transfert
   const handleTransfer = async () => {
     if (!transferPhone || !transferAmount) {
       toast.error('Téléphone et montant requis');
@@ -168,7 +213,7 @@ const CompanyDashboard = ({ user }) => {
       return;
     }
     
-    if (amountNum > companyData?.wallet?.balance) {
+    if (amountNum > (companyData?.wallet?.balance || 0)) {
       toast.error('Solde insuffisant');
       return;
     }
@@ -190,7 +235,7 @@ const CompanyDashboard = ({ user }) => {
         setShowTransferModal(false);
         setTransferAmount('');
         setTransferPhone('');
-        fetchCompanyData();
+        await fetchCompanyData();
       }
     } catch (error) {
       toast.error(error.response?.data?.error || 'Erreur lors du transfert');
@@ -199,13 +244,53 @@ const CompanyDashboard = ({ user }) => {
     }
   };
 
+  // ✅ Copier dans le presse-papiers
   const copyToClipboard = (text, label = 'Copié') => {
-    navigator.clipboard.writeText(text);
-    toast.success(`✅ ${label} !`);
+    if (!text) {
+      toast.error('Aucune information à copier');
+      return;
+    }
+    
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      toast.success(`✅ ${label} !`);
+    } else {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      toast.success(`✅ ${label} !`);
+    }
   };
 
+  // ✅ Partager
+  const shareCompany = (platform = 'copy') => {
+    const shareUrl = `${window.location.origin}/pay/${companyData?.company?.id}`;
+    const message = `💳 Payez vos factures chez ${companyData?.company?.name} sur AlkherPay ! ${shareUrl}`;
+    
+    switch(platform) {
+      case 'copy':
+        copyToClipboard(shareUrl, 'Lien copié');
+        break;
+      case 'whatsapp':
+        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+        break;
+      case 'facebook':
+        window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank');
+        break;
+      case 'email':
+        window.open(`mailto:?subject=${encodeURIComponent('Payez chez ' + companyData?.company?.name)}&body=${encodeURIComponent(message)}`, '_blank');
+        break;
+      default:
+        break;
+    }
+  };
+
+  // ✅ Formater la date
   const formatDate = (dateString) => {
-    if (!dateString) return '';
+    if (!dateString) return 'N/A';
     try {
       return new Date(dateString).toLocaleString('fr-FR', {
         day: '2-digit',
@@ -219,12 +304,51 @@ const CompanyDashboard = ({ user }) => {
     }
   };
 
+  // ✅ Filtrer les paiements
+  const filteredPayments = (companyData?.recent_payments || []).filter(payment => {
+    const matchSearch = !searchPayment || 
+      payment.customer_name?.toLowerCase().includes(searchPayment.toLowerCase()) ||
+      payment.customer_phone?.includes(searchPayment) ||
+      payment.receipt_number?.toLowerCase().includes(searchPayment.toLowerCase());
+    
+    if (filterPayments === 'all') return matchSearch;
+    if (filterPayments === 'today') {
+      const today = new Date().toDateString();
+      return matchSearch && new Date(payment.created_at).toDateString() === today;
+    }
+    if (filterPayments === 'week') {
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      return matchSearch && new Date(payment.created_at) >= weekAgo;
+    }
+    return matchSearch;
+  });
+
+  // ✅ Statistiques dynamiques
+  const calculateStats = () => {
+    const payments = companyData?.recent_payments || [];
+    const today = new Date().toDateString();
+    const todayPayments = payments.filter(p => new Date(p.created_at).toDateString() === today);
+    
+    return {
+      todayTotal: todayPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
+      todayCount: todayPayments.length,
+      avgPayment: payments.length > 0 
+        ? Math.round(payments.reduce((sum, p) => sum + (p.amount || 0), 0) / payments.length) 
+        : 0
+    };
+  };
+
+  const stats = calculateStats();
   const handleGoBack = () => navigate(-1);
   const handleGoHome = () => navigate('/');
 
   // Composant StatCard
-  const StatCard = ({ icon: Icon, label, value, subtitle, color, bgColor }) => (
-    <div className={`bg-white rounded-2xl shadow-lg p-6 border-l-4 ${color} hover:shadow-xl transition-all duration-300`}>
+  const StatCard = ({ icon: Icon, label, value, subtitle, color, bgColor, onClick }) => (
+   
+    <div 
+      onClick={onClick}
+      className={`bg-white rounded-2xl shadow-lg p-6 border-l-4 ${color} hover:shadow-xl transition-all duration-300 ${onClick ? 'cursor-pointer' : ''}`}
+    > 
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm text-gray-500 font-medium">{label}</p>
@@ -258,6 +382,7 @@ const CompanyDashboard = ({ user }) => {
         </div>
       </div>
     );
+    
   }
 
   if (!companyData) {
@@ -267,11 +392,11 @@ const CompanyDashboard = ({ user }) => {
           <FaBuilding className="text-6xl text-gray-300 mx-auto mb-4" />
           <h2 className="text-xl font-bold text-gray-700 mb-2">Aucune entreprise associée</h2>
           <p className="text-gray-500 mb-4">Vous n'êtes pas encore associé à une entreprise.</p>
-         <p className="text-gray-500 mb-4">reservez pour leq entrprise de service comme ZIZ.</p>
           <button onClick={handleGoHome} className="bg-yellow-500 text-white px-6 py-2 rounded-xl hover:bg-yellow-600 transition">
             Retour à l'accueil
           </button>
         </div>
+
       </div>
     );
   }
@@ -304,6 +429,15 @@ const CompanyDashboard = ({ user }) => {
               <FaHome />
               <span className="text-sm font-medium">Accueil</span>
             </button>
+
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white rounded-xl shadow-md hover:shadow-lg transition-all duration-300"
+            >
+              <FaSync className={`text-yellow-500 ${refreshing ? 'animate-spin' : ''}`} />
+              <span className="text-sm font-medium text-gray-700 hidden sm:inline">Actualiser</span>
+            </button>
           </div>
           
           <div className="flex items-center gap-3">
@@ -317,7 +451,7 @@ const CompanyDashboard = ({ user }) => {
             </span>
             <div className="bg-white rounded-xl px-4 py-2 shadow-md">
               <p className="text-xs text-gray-400">Solde</p>
-              <p className="font-bold text-yellow-600">{wallet?.balance?.toLocaleString() || 0} FCFA</p>
+              <p className="font-bold text-yellow-600">{(wallet?.balance || 0).toLocaleString()} FCFA</p>
             </div>
           </div>
         </div>
@@ -360,8 +494,15 @@ const CompanyDashboard = ({ user }) => {
               </div>
               <div className="bg-white/20 backdrop-blur-sm rounded-xl px-4 py-2 text-center">
                 <p className="text-xs text-yellow-200">Revenus</p>
-                <p className="font-bold">{statistics?.total_received?.toLocaleString() || 0} FCFA</p>
+                <p className="font-bold">{(statistics?.total_received || 0).toLocaleString()} FCFA</p>
               </div>
+              <button
+                onClick={() => setShowShareModal(true)}
+                className="bg-white/20 backdrop-blur-sm rounded-xl px-4 py-2 hover:bg-white/30 transition"
+                title="Partager"
+              >
+                <FaShare />
+              </button>
             </div>
           </div>
         </div>
@@ -371,7 +512,8 @@ const CompanyDashboard = ({ user }) => {
           {[
             { id: 'dashboard', icon: FaChartLine, label: 'Tableau de bord' },
             ...(canCollectPayments ? [{ id: 'payments', icon: FaReceipt, label: 'Paiements' }] : []),
-            { id: 'history', icon: FaHistory, label: 'Historique' }
+            { id: 'history', icon: FaHistory, label: 'Historique' },
+            { id: 'analytics', icon: FaChartBar, label: 'Analytique' }
           ].map((tab) => (
             <button
               key={tab.id}
@@ -396,14 +538,14 @@ const CompanyDashboard = ({ user }) => {
               <StatCard 
                 icon={FaWallet}
                 label="Solde disponible"
-                value={`${wallet?.balance?.toLocaleString() || 0} FCFA`}
+                value={`${(wallet?.balance || 0).toLocaleString()} FCFA`}
                 color="border-yellow-500"
                 bgColor="bg-yellow-100 text-yellow-600"
               />
               <StatCard 
                 icon={FaMoneyBillWave}
                 label="Total reçu"
-                value={`${statistics?.total_received?.toLocaleString() || 0} FCFA`}
+                value={`${(statistics?.total_received || 0).toLocaleString()} FCFA`}
                 subtitle={`${statistics?.total_payments || 0} transactions`}
                 color="border-green-500"
                 bgColor="bg-green-100 text-green-600"
@@ -411,7 +553,7 @@ const CompanyDashboard = ({ user }) => {
               <StatCard 
                 icon={FaPercent}
                 label="Frais collectés"
-                value={`${statistics?.total_fees?.toLocaleString() || 0} FCFA`}
+                value={`${(statistics?.total_fees || 0).toLocaleString()} FCFA`}
                 subtitle="Commission 1.5%"
                 color="border-blue-500"
                 bgColor="bg-blue-100 text-blue-600"
@@ -424,6 +566,40 @@ const CompanyDashboard = ({ user }) => {
                 color="border-purple-500"
                 bgColor="bg-purple-100 text-purple-600"
               />
+            </div>
+
+            {/* Statistiques du jour */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+              <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-4 border border-green-200">
+                <div className="flex items-center gap-2">
+                  <FaArrowUp className="text-green-600" />
+                  <p className="text-sm text-green-700 font-medium">Aujourd'hui</p>
+                </div>
+                <p className="text-2xl font-bold text-green-700 mt-1">
+                  {stats.todayTotal.toLocaleString()} FCFA
+                </p>
+                <p className="text-xs text-green-600">{stats.todayCount} transaction(s)</p>
+              </div>
+              <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4 border border-blue-200">
+                <div className="flex items-center gap-2">
+                  <FaDollarSign className="text-blue-600" />
+                  <p className="text-sm text-blue-700 font-medium">Paiement moyen</p>
+                </div>
+                <p className="text-2xl font-bold text-blue-700 mt-1">
+                  {stats.avgPayment.toLocaleString()} FCFA
+                </p>
+                <p className="text-xs text-blue-600">Par transaction</p>
+              </div>
+              <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-4 border border-purple-200">
+                <div className="flex items-center gap-2">
+                  <FaFileInvoice className="text-purple-600" />
+                  <p className="text-sm text-purple-700 font-medium">Total factures</p>
+                </div>
+                <p className="text-2xl font-bold text-purple-700 mt-1">
+                  {recent_payments?.length || 0}
+                </p>
+                <p className="text-xs text-purple-600">Factures traitées</p>
+              </div>
             </div>
 
             {/* Actions rapides */}
@@ -443,9 +619,9 @@ const CompanyDashboard = ({ user }) => {
                 color="bg-gradient-to-br from-green-500 to-green-600"
               />
               <QuickAction
-                icon={FaCopy}
-                label="Copier mon numéro"
-                onClick={() => copyToClipboard(user?.phone || company?.contact_phone, 'Numéro copié')}
+                icon={FaQrcode}
+                label="Mon QR Code"
+                onClick={() => setShowShareModal(true)}
                 color="bg-gradient-to-br from-purple-500 to-purple-600"
               />
               <QuickAction
@@ -480,8 +656,12 @@ const CompanyDashboard = ({ user }) => {
                 <div className="divide-y divide-gray-100">
                   {recent_payments?.slice(0, 5).map((payment, index) => (
                     <div
-                      key={payment.receipt_number}
+                      key={payment.receipt_number || index}
                       className="p-4 hover:bg-gray-50 transition cursor-pointer flex flex-wrap items-center justify-between gap-3"
+                      onClick={() => {
+                        setSelectedReceipt(payment);
+                        setShowReceiptModal(true);
+                      }}
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center text-green-600">
@@ -497,7 +677,7 @@ const CompanyDashboard = ({ user }) => {
                       </div>
                       <div className="text-right">
                         <p className="text-lg font-bold text-green-600">
-                          +{payment.amount?.toLocaleString() || 0} FCFA
+                          +{(payment.amount || 0).toLocaleString()} FCFA
                         </p>
                         <p className="text-xs text-gray-400">
                           {formatDate(payment.created_at)}
@@ -525,7 +705,7 @@ const CompanyDashboard = ({ user }) => {
             </div>
 
             {(isWaterCompany || isElectricityCompany) && (
-              <div className="mb-6 p-4 bg-gradient-to-r from-blue-50 to-blue-50/50 rounded-xl border border-blue-100">
+              <div className="mb-6 p-4 bg-gradient-to-r from-blue-900 to-blue-50/50 rounded-xl border border-blue-100">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   <FaSearch className="inline mr-2 text-blue-500" /> Rechercher un compteur
                 </label>
@@ -559,7 +739,7 @@ const CompanyDashboard = ({ user }) => {
                       <span className="text-gray-500">Adresse</span>
                       <span>{meterInfo.address}</span>
                       <span className="text-gray-500">Montant dû</span>
-                      <span className="font-bold text-green-700">{meterInfo.outstanding_amount?.toLocaleString()} FCFA</span>
+                      <span className="font-bold text-green-700">{(meterInfo.outstanding_amount || 0).toLocaleString()} FCFA</span>
                       <span className="text-gray-500">Période</span>
                       <span>{meterInfo.period}</span>
                     </div>
@@ -578,7 +758,7 @@ const CompanyDashboard = ({ user }) => {
                     type="text"
                     value={paymentData.customer_name}
                     onChange={(e) => setPaymentData({...paymentData, customer_name: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 text-black border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder="Nom complet"
                     required
                   />
@@ -591,7 +771,7 @@ const CompanyDashboard = ({ user }) => {
                     type="tel"
                     value={paymentData.customer_phone}
                     onChange={(e) => setPaymentData({...paymentData, customer_phone: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 border text-black border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder="Ex: 62787300"
                     required
                   />
@@ -602,7 +782,7 @@ const CompanyDashboard = ({ user }) => {
                     type="email"
                     value={paymentData.customer_email}
                     onChange={(e) => setPaymentData({...paymentData, customer_email: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 border text-black border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder="email@exemple.com"
                   />
                 </div>
@@ -612,7 +792,7 @@ const CompanyDashboard = ({ user }) => {
                     type="text"
                     value={paymentData.customer_address}
                     onChange={(e) => setPaymentData({...paymentData, customer_address: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 border text-black border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder="Adresse du client"
                   />
                 </div>
@@ -624,7 +804,7 @@ const CompanyDashboard = ({ user }) => {
                     type="text"
                     value={paymentData.meter_number}
                     onChange={(e) => setPaymentData({...paymentData, meter_number: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 border text-black border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder={isWaterCompany ? 'Ex: 123456789' : 'Ex: CON-2026-001'}
                     required
                   />
@@ -637,7 +817,7 @@ const CompanyDashboard = ({ user }) => {
                     type="number"
                     value={paymentData.amount}
                     onChange={(e) => setPaymentData({...paymentData, amount: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 border text-black border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder="Montant à payer"
                     min="100"
                     required
@@ -649,7 +829,7 @@ const CompanyDashboard = ({ user }) => {
                     type="text"
                     value={paymentData.period}
                     onChange={(e) => setPaymentData({...paymentData, period: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 border text-black border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder="Ex: Janvier 2026"
                   />
                 </div>
@@ -659,7 +839,7 @@ const CompanyDashboard = ({ user }) => {
                     type="text"
                     value={paymentData.invoice_number}
                     onChange={(e) => setPaymentData({...paymentData, invoice_number: e.target.value})}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                    className="w-full px-4 py-2.5 border text-black border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
                     placeholder="Numéro de facture"
                   />
                 </div>
@@ -683,7 +863,7 @@ const CompanyDashboard = ({ user }) => {
                     setMeterInfo(null);
                     setSearchMeter('');
                   }}
-                  className="px-6 py-2.5 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+                  className="px-6 py-2.5 border text-black border-gray-500 rounded-xl hover:bg-gray-500 transition"
                 >
                   Réinitialiser
                 </button>
@@ -707,16 +887,43 @@ const CompanyDashboard = ({ user }) => {
         {activeTab === 'history' && (
           <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
             <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-6 py-4 border-b">
-              <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                <FaHistory className="text-yellow-500" /> Historique complet des paiements
-              </h2>
+              <div className="flex flex-wrap justify-between items-center gap-3">
+                <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                  <FaHistory className="text-yellow-500" /> Historique complet des paiements
+                </h2>
+                <div className="flex gap-2 flex-wrap">
+                  <div className="relative">
+                    <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 text-sm" />
+                    <input
+                      type="text"
+                      value={searchPayment}
+                      onChange={(e) => setSearchPayment(e.target.value)}
+                      placeholder="Rechercher..."
+                      className="pl-9 pr-4 py-2 border rounded-lg text-black focus:ring-2 focus:ring-yellow-500"
+                    />
+                  </div>
+                  <select
+                    value={filterPayments}
+                    onChange={(e) => setFilterPayments(e.target.value)}
+                    className="px-3 py-2 border rounded-lg text-black focus:ring-2 focus:ring-yellow-500"
+                  >
+                    <option value="all">Tous</option>
+                    <option value="today">Aujourd'hui</option>
+                    <option value="week">Cette semaine</option>
+                  </select>
+                </div>
+              </div>
             </div>
             
-            {recent_payments?.length === 0 ? (
+            {filteredPayments.length === 0 ? (
               <div className="text-center py-16 text-gray-500">
                 <FaReceipt className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-                <p className="font-medium">Aucun paiement enregistré</p>
-                <p className="text-sm">Les paiements apparaîtront ici une fois effectués</p>
+                <p className="font-medium">
+                  {searchPayment ? 'Aucun résultat' : 'Aucun paiement enregistré'}
+                </p>
+                <p className="text-sm">
+                  {searchPayment ? 'Essayez avec d\'autres critères' : 'Les paiements apparaîtront ici une fois effectués'}
+                </p>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -732,11 +939,11 @@ const CompanyDashboard = ({ user }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {recent_payments?.map((payment) => (
-                      <tr key={payment.receipt_number} className="hover:bg-gray-50 transition">
+                    {filteredPayments.map((payment, index) => (
+                      <tr key={payment.receipt_number || index} className="hover:bg-gray-50 transition">
                         <td className="px-6 py-4">
                           <span className="font-mono text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded">
-                            {payment.receipt_number?.slice(0, 12)}...
+                            {payment.receipt_number?.slice(0, 12) || 'N/A'}...
                           </span>
                         </td>
                         <td className="px-6 py-4">
@@ -745,11 +952,11 @@ const CompanyDashboard = ({ user }) => {
                         </td>
                         <td className="px-6 py-4 text-right">
                           <span className="font-bold text-gray-800">
-                            {payment.amount?.toLocaleString() || 0} FCFA
+                            {(payment.amount || 0).toLocaleString()} FCFA
                           </span>
                         </td>
                         <td className="px-6 py-4 text-right text-sm text-gray-600">
-                          {payment.amount_to_company?.toLocaleString() || 0} FCFA
+                          {(payment.amount_to_company || 0).toLocaleString()} FCFA
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-500">
                           {formatDate(payment.created_at)}
@@ -772,10 +979,10 @@ const CompanyDashboard = ({ user }) => {
                     <tr>
                       <td colSpan="2" className="px-6 py-3 font-bold text-right">Total:</td>
                       <td className="px-6 py-3 font-bold text-green-600 text-right">
-                        {recent_payments?.reduce((sum, p) => sum + (p.amount || 0), 0).toLocaleString()} FCFA
+                        {filteredPayments.reduce((sum, p) => sum + (p.amount || 0), 0).toLocaleString()} FCFA
                       </td>
                       <td className="px-6 py-3 font-bold text-blue-600 text-right">
-                        {recent_payments?.reduce((sum, p) => sum + (p.amount_to_company || 0), 0).toLocaleString()} FCFA
+                        {filteredPayments.reduce((sum, p) => sum + (p.amount_to_company || 0), 0).toLocaleString()} FCFA
                       </td>
                       <td colSpan="2"></td>
                     </tr>
@@ -783,6 +990,127 @@ const CompanyDashboard = ({ user }) => {
                 </table>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Onglet Analytique */}
+        {activeTab === 'analytics' && (
+          <div className="space-y-6">
+            {/* Statistiques principales */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-3 bg-green-100 rounded-xl">
+                    <FaMoneyBillWave className="text-green-600 text-xl" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Revenus totaux</p>
+                    <p className="text-2xl font-bold text-green-600">
+                      {(statistics?.total_received || 0).toLocaleString()} FCFA
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-3 bg-blue-100 rounded-xl">
+                    <FaReceipt className="text-blue-600 text-xl" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Transactions</p>
+                    <p className="text-2xl font-bold text-blue-600">
+                      {statistics?.total_payments || 0}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-3 bg-purple-100 rounded-xl">
+                    <FaUsers className="text-purple-600 text-xl" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Clients uniques</p>
+                    <p className="text-2xl font-bold text-purple-600">
+                      {statistics?.total_clients || 0}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Répartition */}
+            <div className="bg-white rounded-xl shadow-lg p-6">
+              <h3 className="font-bold text-gray-800 mb-4">📊 Répartition des transactions</h3>
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-600">Paiements reçus</span>
+                    <span className="font-bold">{(statistics?.total_received || 0).toLocaleString()} FCFA</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div 
+                      className="h-3 rounded-full bg-green-500"
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-gray-600">Frais collectés</span>
+                    <span className="font-bold">{(statistics?.total_fees || 0).toLocaleString()} FCFA</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div 
+                      className="h-3 rounded-full bg-blue-500"
+                      style={{ 
+                        width: `${statistics?.total_received > 0 
+                          ? ((statistics.total_fees / statistics.total_received) * 100) 
+                          : 0}%` 
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Export */}
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={() => {
+                  const csv = [
+                    ['Reçu', 'Client', 'Téléphone', 'Montant', 'Net', 'Date'].join(','),
+                    ...(recent_payments || []).map(p => [
+                      p.receipt_number,
+                      p.customer_name,
+                      p.customer_phone,
+                      p.amount,
+                      p.amount_to_company,
+                      formatDate(p.created_at)
+                    ].join(','))
+                  ].join('\n');
+                  
+                  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `rapport_${company?.name}_${Date.now()}.csv`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  
+                  toast.success('📥 Rapport exporté !');
+                }}
+                className="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition flex items-center gap-2"
+              >
+                <FaDownload /> Exporter CSV
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="px-6 py-2.5 bg-gray-600 text-white rounded-xl hover:bg-gray-700 transition flex items-center gap-2"
+              >
+                <FaPrint /> Imprimer
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -806,13 +1134,13 @@ const CompanyDashboard = ({ user }) => {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  <FaPhone className="inline mr-2 text-gray-400" /> Numéro du destinataire *
+                  <FaPhone className="inline mr-2 text-gray-900" /> Numéro du destinataire *
                 </label>
                 <input
                   type="tel"
                   value={transferPhone}
                   onChange={(e) => setTransferPhone(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  className="w-full px-4 py-3 border border-gray-900 text-black rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
                   placeholder="Ex: 62787307"
                   required
                 />
@@ -826,16 +1154,18 @@ const CompanyDashboard = ({ user }) => {
                   type="number"
                   value={transferAmount}
                   onChange={(e) => setTransferAmount(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
+                  className="w-full px-4 py-3 border text-black border-gray-900 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition"
                   placeholder="Montant à transférer"
                   min="100"
                   required
                 />
                 <div className="flex justify-between mt-1">
-                  <p className="text-xs text-gray-500">Solde disponible: {wallet?.balance?.toLocaleString() || 0} FCFA</p>
+                  <p className="text-xs text-gray-500">
+                    Solde disponible: {(wallet?.balance || 0).toLocaleString()} FCFA
+                  </p>
                   <button
                     type="button"
-                    onClick={() => setTransferAmount(wallet?.balance?.toString() || '0')}
+                    onClick={() => setTransferAmount((wallet?.balance || 0).toString())}
                     className="text-xs text-green-600 hover:text-green-700"
                   >
                     Transférer tout
@@ -846,7 +1176,7 @@ const CompanyDashboard = ({ user }) => {
               <div className="flex gap-3 pt-4">
                 <button
                   onClick={() => setShowTransferModal(false)}
-                  className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50 transition"
+                  className="flex-1 px-4 py-3 border text-black border-gray-900 rounded-xl hover:bg-red-500 transition"
                 >
                   Annuler
                 </button>
@@ -887,7 +1217,7 @@ const CompanyDashboard = ({ user }) => {
               <div className="text-center mb-6">
                 <div className="text-5xl mb-2">✅</div>
                 <p className="text-2xl font-bold text-green-600">
-                  {selectedReceipt.amount?.toLocaleString() || 0} FCFA
+                  {(selectedReceipt.amount || 0).toLocaleString()} FCFA
                 </p>
                 <p className="text-sm text-gray-500 font-mono">Reçu: {selectedReceipt.receipt_number}</p>
               </div>
@@ -895,29 +1225,29 @@ const CompanyDashboard = ({ user }) => {
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-3 bg-gray-50 rounded-xl">
                   <p className="text-xs text-gray-500">Client</p>
-                  <p className="font-semibold">{selectedReceipt.customer_name}</p>
+                  <p className="text-black font-semibold">{selectedReceipt.customer_name}</p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl">
-                  <p className="text-xs text-gray-500">Téléphone</p>
-                  <p className="font-semibold">{selectedReceipt.customer_phone}</p>
+                  <p className="text-xs text-black">Téléphone</p>
+                  <p className="text-black font-semibold">{selectedReceipt.customer_phone}</p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl">
                   <p className="text-xs text-gray-500">Montant</p>
-                  <p className="font-semibold">{selectedReceipt.amount?.toLocaleString()} FCFA</p>
+                  <p className="text-black font-semibold">{(selectedReceipt.amount || 0).toLocaleString()} FCFA</p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl">
                   <p className="text-xs text-gray-500">Frais</p>
-                  <p className="font-semibold">{selectedReceipt.fee?.toLocaleString()} FCFA</p>
+                  <p className="text-black font-semibold">{(selectedReceipt.fee || 0).toLocaleString()} FCFA</p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl col-span-2">
                   <p className="text-xs text-gray-500">Net perçu</p>
                   <p className="font-bold text-green-600 text-lg">
-                    {selectedReceipt.amount_to_company?.toLocaleString()} FCFA
+                    {(selectedReceipt.amount_to_company || 0).toLocaleString()} FCFA
                   </p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl col-span-2">
                   <p className="text-xs text-gray-500">Date</p>
-                  <p className="font-semibold">{formatDate(selectedReceipt.created_at)}</p>
+                  <p className="text-black font-semibold">{formatDate(selectedReceipt.created_at)}</p>
                 </div>
               </div>
 
@@ -934,6 +1264,63 @@ const CompanyDashboard = ({ user }) => {
                 >
                   <FaCopy /> Copier le reçu
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Partage */}
+      {showShareModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h3 className="text-xl font-bold text-gray-800">🔗 Partager</h3>
+              <button onClick={() => setShowShareModal(false)} className="text-gray-400 hover:text-gray-600">
+                <FaTimes size={20} />
+              </button>
+            </div>
+            <div className="p-6 text-center">
+              {qrCodeUrl && (
+                <img src={qrCodeUrl} alt="QR Code" className="w-40 h-40 mx-auto mb-4 border rounded-lg p-2" />
+              )}
+              <p className="text-sm text-gray-500 mb-4">Scannez ce QR code pour payer</p>
+              
+              <div className="flex justify-center gap-3 mb-4 flex-wrap">
+                <button
+                  onClick={() => shareCompany('whatsapp')}
+                  className="p-3 bg-green-500 text-white rounded-full hover:bg-green-600 transition-colors"
+                  title="WhatsApp"
+                >
+                  <FaPhone />
+                </button>
+                <button
+                  onClick={() => shareCompany('facebook')}
+                  className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors"
+                  title="Facebook"
+                >
+                  <FaShare />
+                </button>
+                <button
+                  onClick={() => shareCompany('email')}
+                  className="p-3 bg-gray-600 text-white rounded-full hover:bg-gray-700 transition-colors"
+                  title="Email"
+                >
+                  <FaEnvelope />
+                </button>
+                <button
+                  onClick={() => shareCompany('copy')}
+                  className="p-3 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors"
+                  title="Copier le lien"
+                >
+                  <FaCopy />
+                </button>
+              </div>
+
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-xs text-gray-500 break-all">
+                  {`${window.location.origin}/pay/${companyData?.company?.id}`}
+                </p>
               </div>
             </div>
           </div>

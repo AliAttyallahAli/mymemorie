@@ -9,10 +9,30 @@ import { ThemeProvider } from './context/ThemeContext';
 import { LanguageProvider } from './context/LanguageContext';
 import './index.css';
 
-const rootElement = document.getElementById('root');
-if (!rootElement) throw new Error('Failed to find the root element');
+// ✅ Gestionnaire global d'erreurs pour les extensions navigateur
+window.addEventListener('error', (event) => {
+  if (
+    event.error?.name === 'NotFoundError' ||
+    event.message?.includes('removeChild')
+  ) {
+    console.warn('⚠️ Erreur d\'extension navigateur interceptée');
+    event.preventDefault();
+    return true;
+  }
+});
 
-ReactDOM.createRoot(rootElement).render(
+window.addEventListener('unhandledrejection', (event) => {
+  if (
+    event.reason?.name === 'NotFoundError' ||
+    event.reason?.message?.includes('removeChild')
+  ) {
+    console.warn('⚠️ Erreur d\'extension navigateur interceptée');
+    event.preventDefault();
+    return true;
+  }
+});
+
+ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
       <ThemeProvider>
@@ -27,16 +47,6 @@ ReactDOM.createRoot(rootElement).render(
                   background: '#DAA520',
                   color: '#fff',
                   borderRadius: '12px',
-                },
-                success: {
-                  duration: 3000,
-                  iconTheme: {
-                    primary: '#fff',
-                    secondary: '#DAA520',
-                  },
-                },
-                error: {
-                  duration: 5000,
                 },
               }}
             />
