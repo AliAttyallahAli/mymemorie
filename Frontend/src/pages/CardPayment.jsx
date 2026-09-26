@@ -246,7 +246,7 @@ function CardPayment({ user }) {
                 {/* BOUTON RETOUR */}
                 <button
                     onClick={() => navigate('/dashboard')}
-                    className="mb-4 flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                    className="mb-4 flex items-center gap-2 px-4 py-2 bg border border-gray-300 rounded-lg hover:bg-gray-500 transition"
                 >
                     <FaArrowLeft /> Retour
                 </button>
@@ -283,7 +283,7 @@ function CardPayment({ user }) {
                     ÉTAPE 1 : VÉRIFICATION
                 ============================================ */}
                 {step === 1 && (
-                    <div className="bg-white rounded-2xl shadow-xl p-6">
+                    <div className="bg-purple-600 rounded-2xl shadow-xl p-6">
 
                         {/* BANNIÈRE QR CODE */}
                         {searchParams.get('card') && (
@@ -295,8 +295,8 @@ function CardPayment({ user }) {
                             </div>
                         )}
 
-                        <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
-                            <FaCreditCard className="text-purple-600" /> Informations de la carte
+                        <h2 className="text-lg font-bold text-gray-80 mb-4 flex items-center gap-2">
+                            <FaCreditCard className="text-yellow-300" /> Informations de la carte
                         </h2>
 
                         {/* ALERTE PIN NON DÉFINI */}
@@ -329,11 +329,11 @@ function CardPayment({ user }) {
 
                         <form onSubmit={handleVerify} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                <label className="block text-sm font-medium text-gray-70 mb-2">
                                     Numéro de carte
                                 </label>
                                 <div className="relative">
-                                    <FaCreditCard className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                    <FaCreditCard className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-400" />
                                     <input
                                         type="text"
                                         value={cardNumber}
@@ -348,11 +348,11 @@ function CardPayment({ user }) {
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                <label className="block text-sm font-medium text-gray-70 mb-2">
                                     Code PIN
                                 </label>
                                 <div className="relative">
-                                    <FaLock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                    <FaLock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-40" />
                                     <input
                                         type="password"
                                         inputMode="numeric"
@@ -364,7 +364,7 @@ function CardPayment({ user }) {
                                         required
                                     />
                                 </div>
-                                <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
+                                <p className="text-xs text-white mt-2 flex items-center gap-1">
                                     <FaUser className="text-purple-500" />
                                     Le client tape son PIN lui-même
                                 </p>
@@ -403,7 +403,7 @@ function CardPayment({ user }) {
                     ÉTAPE 2 : MONTANT
                 ============================================ */}
                 {step === 2 && verifiedCard && (
-                    <div className="bg-white rounded-2xl shadow-xl p-6">
+                    <div className="bg-purple-700 rounded-2xl shadow-xl p-6">
 
                         <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6">
                             <div className="flex items-center gap-3 mb-3">
@@ -433,7 +433,7 @@ function CardPayment({ user }) {
 
                         <form onSubmit={handlePayment} className="space-y-4">
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                <label className="block text-sm font-medium text-gray-70 mb-2">
                                     Montant à débiter (FCFA)
                                 </label>
                                 <div className="relative">
@@ -459,7 +459,7 @@ function CardPayment({ user }) {
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                <label className="block text-sm font-medium text-gray-70 mb-2">
                                     Description (optionnel)
                                 </label>
                                 <input
@@ -475,7 +475,7 @@ function CardPayment({ user }) {
                                 <button
                                     type="button"
                                     onClick={() => setStep(1)}
-                                    className="px-6 py-3 border border-gray-300 rounded-xl hover:bg-gray-50 font-medium"
+                                    className="px-6 py-3 border border-gray-300 rounded-xl hover:bg-gray-500 font-medium"
                                 >
                                     Retour
                                 </button>

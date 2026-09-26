@@ -24,6 +24,19 @@ const extractArray = (data, ...keys) => {
     return [];
 };
 
+// ============================================
+// ✅ DÉTECTION AUTOMATIQUE DU RÉSEAU
+// ============================================
+const getNetworkBaseUrl = () => {
+    const { protocol, hostname, port } = window.location;
+    const portPart = port ? `:${port}` : '';
+    const baseUrl = `${protocol}//${hostname}${portPart}`;
+
+    console.log('🌐 Réseau détecté:', { hostname, baseUrl });
+
+    return baseUrl;
+};
+
 function VirtualCard({ user }) {
     const navigate = useNavigate();
 
@@ -46,7 +59,7 @@ function VirtualCard({ user }) {
     const [pinForm, setPinForm] = useState({ new_pin: '', confirm_pin: '' });
     const [settingPin, setSettingPin] = useState(false);
 
-    // ✅ RESET PIN
+    // RESET PIN
     const [showResetModal, setShowResetModal] = useState(false);
     const [resetReason, setResetReason] = useState('');
     const [resetRequest, setResetRequest] = useState(null);
@@ -90,7 +103,6 @@ function VirtualCard({ user }) {
         }
     };
 
-    // ✅ Récupérer le statut de la demande de reset PIN
     const fetchResetStatus = async () => {
         setLoadingResetStatus(true);
         try {
@@ -205,7 +217,7 @@ function VirtualCard({ user }) {
     };
 
     // ============================================
-    // ✅ DEMANDER UN RESET PIN
+    // DEMANDER UN RESET PIN
     // ============================================
     const handleRequestReset = async () => {
         if (!resetReason.trim()) {
@@ -215,15 +227,11 @@ function VirtualCard({ user }) {
 
         setSubmittingReset(true);
         try {
-            console.log('📤 Envoi demande reset...');
-            
             const response = await axios.post(
                 `${API_URL}/api/cards/request-pin-reset`,
                 { reason: resetReason },
                 getAuthHeaders()
             );
-
-            console.log('📥 Réponse:', response.data);
 
             if (response.data.success) {
                 toast.success('📤 Demande envoyée ! En attente de validation.', {
@@ -237,8 +245,7 @@ function VirtualCard({ user }) {
             }
         } catch (error) {
             console.error('❌ Erreur reset:', error);
-            console.error('Détails:', error.response?.data);
-            
+
             if (error.response?.status === 404) {
                 toast.error('Route non disponible. Contactez le support.');
             } else if (error.response?.data?.error) {
@@ -252,29 +259,45 @@ function VirtualCard({ user }) {
     };
 
     // ============================================
-    // URL DU QR CODE
+    // URL DE PAIEMENT (dynamique selon le réseau)
     // ============================================
     const getPaymentUrl = () => {
-        if (!card?.card_number) return '';
-        return `${window.location.origin}/card-payment?card=${encodeURIComponent(card.card_number)}`;
+        const fullCardNumber = revealedData?.card_number
+                            || card?.full_number
+                            || card?.card_number;
+
+        if (!fullCardNumber || fullCardNumber.includes('*')) {
+            return '';
+        }
+
+        const baseUrl = getNetworkBaseUrl();
+        const cleanNumber = fullCardNumber.replace(/\s/g, '');
+
+        return `${baseUrl}/card-payment?card=${encodeURIComponent(cleanNumber)}`;
     };
 
+    // ============================================
+    // URL DU QR CODE
+    // ============================================
     const getPaymentQRUrl = () => {
         const url = getPaymentUrl();
         if (!url) return '';
+
         return `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(url)}&color=7c3aed&bgcolor=ffffff&margin=5`;
     };
 
     // ============================================
-    // TÉLÉCHARGER LA CARTE EN PDF
+    // ✅ TÉLÉCHARGER PDF (avec QR dynamique)
     // ============================================
     const handleDownloadPDF = async () => {
         if (!card) return;
         setDownloading(true);
 
         try {
+            const currentBaseUrl = getNetworkBaseUrl();
+
             const response = await axios.get(
-                `${API_URL}/api/cards/download-pdf`,
+                `${API_URL}/api/cards/download-pdf?baseUrl=${encodeURIComponent(currentBaseUrl)}`,
                 { ...getAuthHeaders(), responseType: 'text' }
             );
 
@@ -344,7 +367,7 @@ function VirtualCard({ user }) {
                 {/* RETOUR */}
                 <button
                     onClick={() => navigate('/dashboard')}
-                    className="mb-4 flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                    className="mb-4 flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition"
                 >
                     <FaArrowLeft /> Retour
                 </button>
@@ -401,10 +424,28 @@ function VirtualCard({ user }) {
                 ) : (
                     <div className="grid md:grid-cols-2 gap-6">
 
-                        {/* CARTE VISUELLE */}
+                        {/* CARTE VISUELLE AVEC QR INTÉGRÉ */}
                         <div>
-                            <div className="bg-gradient-to-br from-purple-700 via-purple-800 to-indigo-900 rounded-2xl p-6 text-white shadow-2xl aspect-[1.586/1] flex flex-col justify-between">
-                                <div className="flex justify-between items-start">
+                            <div className="bg-gradient-to-br from-purple-700 via-purple-800 to-indigo-900 rounded-2xl p-6 text-white shadow-2xl aspect-[1.586/1] flex flex-col justify-between relative overflow-hidden">
+
+                                {/* ✅ QR CODE INTÉGRÉ SUR LA CARTE */}
+                                {card.pin_set && revealedData?.card_number && (
+                                    <div className="absolute top-1/2 -translate-y-1/2 right-4 bg-white p-2 rounded-xl shadow-2xl z-20">
+                                        <img
+                                            src={getPaymentQRUrl()}
+                                            alt="QR de paiement"
+                                            className="w-24 h-24"
+                                            onError={(e) => {
+                                                e.target.style.display = 'none';
+                                            }}
+                                        />
+                                        <p className="text-[7px] text-purple-700 text-center font-bold mt-1 tracking-wider">
+                                            SCANNER
+                                        </p>
+                                    </div>
+                                )}
+
+                                <div className="flex justify-between items-start relative z-10">
                                     <div>
                                         <div className="text-xs opacity-70 mb-1">CARTE VIRTUELLE</div>
                                         <div className="text-lg font-bold">CashPays</div>
@@ -414,14 +455,14 @@ function VirtualCard({ user }) {
                                     </div>
                                 </div>
 
-                                <div className="my-4">
+                                <div className="my-4 relative z-10 max-w-[60%]">
                                     <div className="text-xs opacity-70 mb-1">Numéro de carte</div>
                                     <div className="font-mono text-xl tracking-wider">
                                         {revealedData?.card_number || card.card_number_masked || '**** **** **** ****'}
                                     </div>
                                 </div>
 
-                                <div className="flex justify-between items-end">
+                                <div className="flex justify-between items-end relative z-10 max-w-[60%]">
                                     <div>
                                         <div className="text-xs opacity-70">Titulaire</div>
                                         <div className="font-semibold text-sm">
@@ -436,6 +477,17 @@ function VirtualCard({ user }) {
                                     </div>
                                 </div>
                             </div>
+
+                            {/* Message si QR non disponible */}
+                            {(!card.pin_set || !revealedData?.card_number) && card.status === 'active' && (
+                                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mt-3">
+                                    <p className="text-xs text-blue-800 text-center">
+                                        {!card.pin_set
+                                            ? '💡 Définissez votre PIN pour afficher le QR sur la carte'
+                                            : '💡 Cliquez sur "Afficher" pour révéler le QR sur la carte'}
+                                    </p>
+                                </div>
+                            )}
 
                             {/* SOLDE */}
                             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 mt-4">
@@ -473,12 +525,19 @@ function VirtualCard({ user }) {
                                     <span className="text-[10px] opacity-70">Recto/Verso + QR</span>
                                 </button>
                             </div>
+
+                            {/* INFO RÉSEAU */}
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mt-3">
+                                <p className="text-xs text-blue-800 text-center">
+                                    🌐 QR généré pour : <span className="font-mono font-bold">{getNetworkBaseUrl()}</span>
+                                </p>
+                            </div>
                         </div>
 
                         {/* DÉTAILS */}
                         <div className="space-y-4">
 
-                            {/* BANNIÈRE PIN RÉINITIALISÉ (approuvé) */}
+                            {/* BANNIÈRE PIN RÉINITIALISÉ */}
                             {!card.pin_set && resetRequest?.status === 'approved' && (
                                 <div className="bg-green-50 border-2 border-green-400 rounded-2xl p-5">
                                     <div className="flex items-start gap-3">
@@ -502,7 +561,7 @@ function VirtualCard({ user }) {
                                 </div>
                             )}
 
-                            {/* BANNIÈRE PIN NON DÉFINI (normale) */}
+                            {/* BANNIÈRE PIN NON DÉFINI */}
                             {!card.pin_set && (!resetRequest || resetRequest.status !== 'approved') && (
                                 <div className="bg-yellow-50 border-2 border-yellow-400 rounded-2xl p-5">
                                     <div className="flex items-start gap-3">
@@ -579,8 +638,8 @@ function VirtualCard({ user }) {
                                             <div className="text-xs text-gray-500 mb-1">PIN</div>
                                             <div className="flex items-center gap-2">
                                                 <div className={`flex-1 font-mono text-sm px-3 py-2 rounded-lg text-center font-bold ${
-                                                    card.pin_set 
-                                                        ? 'bg-gray-50 text-purple-700' 
+                                                    card.pin_set
+                                                        ? 'bg-gray-50 text-purple-700'
                                                         : 'bg-yellow-50 text-yellow-700 border border-yellow-300'
                                                 }`}>
                                                     {card.pin_set ? '••••' : 'Non défini'}
@@ -614,7 +673,7 @@ function VirtualCard({ user }) {
                                     </div>
                                 </div>
 
-                                {/* ✅ BOUTON DE DEMANDE DE RÉINITIALISATION DU PIN */}
+                                {/* BOUTON RESET PIN */}
                                 {card.pin_set && (
                                     <div className="mt-4 pt-4 border-t border-gray-100">
                                         {loadingResetStatus ? (
@@ -754,48 +813,93 @@ function VirtualCard({ user }) {
                             </div>
 
                             <div className="p-6">
-                                <div className="bg-blue-50 rounded-xl p-3 mb-4 border border-blue-200">
-                                    <p className="text-xs text-blue-800 text-center">
-                                        📱 Faites scanner ce QR code par un guichet pour payer
-                                    </p>
-                                </div>
-
-                                <div className="bg-white p-4 rounded-xl border-2 border-purple-200 mb-4">
-                                    <img
-                                        src={getPaymentQRUrl()}
-                                        alt="QR Code de paiement"
-                                        className="w-full max-w-[250px] mx-auto"
-                                        onError={(e) => {
-                                            e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="250" height="250"%3E%3Crect width="250" height="250" fill="%237c3aed"/%3E%3Ctext x="125" y="125" text-anchor="middle" fill="white" font-size="16"%3ECashPays%3C/text%3E%3C/svg%3E';
-                                        }}
-                                    />
-                                </div>
-
-                                <div className="bg-purple-50 rounded-xl p-4 border border-purple-200 mb-4">
-                                    <div className="flex justify-between text-sm mb-1">
-                                        <span className="text-gray-600">Titulaire</span>
-                                        <span className="font-medium text-gray-800">
-                                            {card.card_holder || user?.fullname}
-                                        </span>
+                                {!revealedData?.card_number ? (
+                                    <div className="bg-yellow-50 border-2 border-yellow-400 rounded-xl p-4 mb-4">
+                                        <div className="flex items-start gap-3">
+                                            <FaExclamationTriangle className="text-yellow-600 text-2xl flex-shrink-0" />
+                                            <div className="flex-1">
+                                                <h4 className="font-bold text-yellow-900 mb-1">
+                                                    🔓 Numéro masqué
+                                                </h4>
+                                                <p className="text-sm text-yellow-800 mb-3">
+                                                    Pour générer un QR code fonctionnel, vous devez d'abord afficher votre numéro de carte.
+                                                </p>
+                                                <button
+                                                    onClick={() => {
+                                                        setRevealedData({
+                                                            card_number: card.full_number || card.card_number,
+                                                            cvv: card.cvv
+                                                        });
+                                                        toast.success('Numéro révélé ! Le QR va se générer.');
+                                                    }}
+                                                    className="w-full py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white rounded-lg font-semibold hover:opacity-90 flex items-center justify-center gap-2"
+                                                >
+                                                    <FaEye /> Révéler le numéro
+                                                </button>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-gray-600">Carte</span>
-                                        <span className="font-mono font-medium text-purple-700">
-                                            **** {card.card_number?.slice(-4)}
-                                        </span>
-                                    </div>
-                                </div>
+                                ) : (
+                                    <>
+                                        <div className="bg-blue-50 rounded-xl p-3 mb-4 border border-blue-200">
+                                            <p className="text-xs text-blue-800 text-center">
+                                                📱 Faites scanner ce QR code par un guichet pour payer
+                                            </p>
+                                        </div>
 
-                                <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-200 mb-4">
-                                    <p className="text-xs text-yellow-800">
-                                        ⚠️ Ce QR code ne remplace pas votre PIN.
-                                    </p>
-                                </div>
+                                        <div className="bg-white p-4 rounded-xl border-2 border-purple-200 mb-4">
+                                            {getPaymentQRUrl() ? (
+                                                <img
+                                                    src={getPaymentQRUrl()}
+                                                    alt="QR Code de paiement"
+                                                    className="w-full max-w-[250px] mx-auto"
+                                                    onError={(e) => {
+                                                        console.error('❌ Erreur chargement QR');
+                                                        e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="250" height="250"%3E%3Crect width="250" height="250" fill="%237c3aed"/%3E%3Ctext x="125" y="125" text-anchor="middle" fill="white" font-size="16"%3ECashPays%3C/text%3E%3C/svg%3E';
+                                                    }}
+                                                />
+                                            ) : (
+                                                <div className="text-center py-8 text-gray-400">
+                                                    <FaQrcode className="text-5xl mx-auto mb-2" />
+                                                    <p className="text-sm">QR non disponible</p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="bg-purple-50 rounded-xl p-4 border border-purple-200 mb-4">
+                                            <div className="flex justify-between text-sm mb-1">
+                                                <span className="text-gray-600">Titulaire</span>
+                                                <span className="font-medium text-gray-800">
+                                                    {card.card_holder || user?.fullname}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between text-sm mb-2">
+                                                <span className="text-gray-600">Carte</span>
+                                                <span className="font-mono font-medium text-purple-700">
+                                                    {revealedData.card_number}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between text-sm pt-2 border-t border-purple-200">
+                                                <span className="text-gray-600">Réseau</span>
+                                                <span className="font-mono text-xs text-purple-700">
+                                                    {getNetworkBaseUrl()}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-green-50 rounded-lg p-3 border border-green-200 mb-4">
+                                            <p className="text-xs text-green-800">
+                                                ✅ QR dynamique : s'adapte automatiquement au réseau (localhost, IP locale, ou domaine)
+                                            </p>
+                                        </div>
+                                    </>
+                                )}
 
                                 <div className="flex gap-3">
                                     <button
                                         onClick={() => copyToClipboard(getPaymentUrl(), 'link')}
-                                        className="flex-1 py-2 border-2 border-purple-300 text-purple-700 rounded-lg hover:bg-purple-50 text-sm font-medium"
+                                        disabled={!revealedData?.card_number}
+                                        className="flex-1 py-2 border-2 border-purple-300 text-purple-700 rounded-lg hover:bg-purple-50 text-sm font-medium disabled:opacity-50"
                                     >
                                         <FaCopy className="inline mr-1" /> Copier le lien
                                     </button>
@@ -875,7 +979,7 @@ function VirtualCard({ user }) {
 
                                 <div className="bg-blue-50 rounded-xl p-4 mb-4 border border-blue-200">
                                     <p className="text-sm text-blue-800">
-                                        {card.pin_set 
+                                        {card.pin_set
                                             ? 'Entrez un nouveau PIN à 4 chiffres.'
                                             : 'Choisissez un PIN à 4 chiffres. Ne le partagez jamais.'}
                                     </p>
@@ -891,9 +995,9 @@ function VirtualCard({ user }) {
                                             inputMode="numeric"
                                             maxLength="4"
                                             value={pinForm.new_pin}
-                                            onChange={(e) => setPinForm({ 
-                                                ...pinForm, 
-                                                new_pin: e.target.value.replace(/\D/g, '').slice(0, 4) 
+                                            onChange={(e) => setPinForm({
+                                                ...pinForm,
+                                                new_pin: e.target.value.replace(/\D/g, '').slice(0, 4)
                                             })}
                                             className="w-full px-4 py-3 border rounded-xl text-center text-2xl tracking-widest font-mono focus:ring-2 focus:ring-purple-500"
                                             placeholder="••••"
@@ -910,9 +1014,9 @@ function VirtualCard({ user }) {
                                             inputMode="numeric"
                                             maxLength="4"
                                             value={pinForm.confirm_pin}
-                                            onChange={(e) => setPinForm({ 
-                                                ...pinForm, 
-                                                confirm_pin: e.target.value.replace(/\D/g, '').slice(0, 4) 
+                                            onChange={(e) => setPinForm({
+                                                ...pinForm,
+                                                confirm_pin: e.target.value.replace(/\D/g, '').slice(0, 4)
                                             })}
                                             className={`w-full px-4 py-3 border rounded-xl text-center text-2xl tracking-widest font-mono focus:ring-2 focus:ring-purple-500 ${
                                                 pinForm.confirm_pin && pinForm.new_pin !== pinForm.confirm_pin
@@ -951,8 +1055,8 @@ function VirtualCard({ user }) {
                                     <button
                                         onClick={handleSetPin}
                                         disabled={
-                                            settingPin || 
-                                            pinForm.new_pin.length !== 4 || 
+                                            settingPin ||
+                                            pinForm.new_pin.length !== 4 ||
                                             pinForm.new_pin !== pinForm.confirm_pin
                                         }
                                         className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-700 text-white rounded-lg font-semibold hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2"
@@ -969,7 +1073,7 @@ function VirtualCard({ user }) {
                     </div>
                 )}
 
-                {/* ✅ MODAL RESET PIN */}
+                {/* MODAL RESET PIN */}
                 {showResetModal && (
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
                         <div className="bg-white rounded-2xl max-w-md w-full">

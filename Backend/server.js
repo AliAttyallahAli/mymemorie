@@ -6267,36 +6267,1235 @@ app.get('/api/tax/offices', async (req, res) => {
 // ============================================
 // ROUTES COMMUNES (SERVICES D'IMPÔTS)
 // ============================================
-
-// Admin: Récupérer toutes les communes
-app.get('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    console.log('📊 GET /api/admin/communes - Admin:', req.user.userId);
-
-    const communes = await query(`
-            SELECT 
-                u.id,
-                u.phone,
-                u.fullname as contact_name,
-                u.commune_name as name,
-                u.commune_address as address,
-                u.email,
-                u.is_active,
-                w.balance,
-                u.created_at
-            FROM users u
-            LEFT JOIN wallets w ON u.id = w.user_id
-            WHERE u.role = 'commune'
-            ORDER BY u.commune_name
+async function createCommunesTable() {
+    try {
+        await run(`
+            CREATE TABLE IF NOT EXISTS communes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                code TEXT,
+                office_number TEXT,
+                province TEXT,
+                city TEXT,
+                address TEXT,
+                phone TEXT,
+                email TEXT,
+                responsable TEXT,
+                user_id INTEGER,
+                is_active INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
         `);
 
-    console.log(`✅ ${communes.length} communes trouvées`);
-    res.json(communes || []);
+        // Ajouter user_id si absent (migration)
+        const columns = await query("PRAGMA table_info(communes)").catch(() => []);
+        const cols = columns.map(c => c.name);
 
-  } catch (error) {
-    console.error('❌ Erreur chargement communes:', error);
-    res.status(500).json({ error: error.message });
-  }
+        if (!cols.includes('user_id')) {
+            await run('ALTER TABLE communes ADD COLUMN user_id INTEGER').catch(() => {});
+            console.log('✅ Colonne user_id ajoutée');
+        }
+
+        await run('CREATE INDEX IF NOT EXISTS idx_communes_user ON communes(user_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_communes_active ON communes(is_active)').catch(() => {});
+
+        console.log('✅ Table communes prête');
+    } catch (error) {
+        console.error('❌ Erreur createCommunesTable:', error);
+    }
+}
+/**
+ * POST /api/admin/communes
+ * Créer une commune avec son compte utilisateur et wallet
+ */
+app.post('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    console.log('\n========== CRÉATION COMMUNE ==========');
+    console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+
+    // ✅ Extraction tolérante
+    const name = req.body.name || req.body.commune_name || req.body.communeName;
+    const phone = req.body.phone;
+    const fullname = req.body.fullname || name;
+    const address = req.body.commune_address || req.body.address || '';
+    const email = req.body.email || '';
+    const password = req.body.password;
+    const code = req.body.code || null;
+    const office_number = req.body.office_number || null;
+    const province = req.body.province || null;
+    const city = req.body.city || null;
+
+    // ✅ Validation
+    const errors = [];
+    if (!name) errors.push('Nom de la commune requis');
+    if (!phone) errors.push('Téléphone requis');
+    if (!password) errors.push('Mot de passe requis');
+    if (phone && !/^\d{8}$/.test(phone)) errors.push('Téléphone doit avoir 8 chiffres');
+    if (password && password.length < 4) errors.push('Mot de passe: minimum 4 caractères');
+
+    if (errors.length > 0) {
+        return res.status(400).json({
+            success: false,
+            error: errors.join(', '),
+            errors
+        });
+    }
+
+    try {
+        // Vérifier si le téléphone est déjà utilisé
+        const existingUser = await get('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                error: 'Ce numéro de téléphone est déjà utilisé'
+            });
+        }
+
+        // Vérifier si la commune existe déjà
+        const existingCommune = await get('SELECT id FROM communes WHERE name = ?', [name]);
+        if (existingCommune) {
+            return res.status(400).json({
+                success: false,
+                error: 'Une commune avec ce nom existe déjà'
+            });
+        }
+
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedKey = await bcrypt.hash(privateKey, 10);
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // ✅ 1. Créer l'utilisateur avec role='commune'
+            const userResult = await run(`
+                INSERT INTO users (
+                    phone, fullname, password_hash, private_key_6,
+                    role, is_active, is_verified, created_at
+                ) VALUES (?, ?, ?, ?, 'commune', 1, 1, CURRENT_TIMESTAMP)
+            `, [phone, fullname, hashedPassword, hashedKey]);
+
+            const userId = userResult.lastID;
+            console.log('✅ Utilisateur commune créé:', { id: userId, phone, role: 'commune' });
+
+            // ✅ 2. Créer le wallet
+            const existingWallet = await get('SELECT id FROM wallets WHERE user_id = ?', [userId]);
+            if (!existingWallet) {
+                await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [userId]);
+                console.log('✅ Wallet créé');
+            }
+
+            // ✅ 3. Créer la commune liée à cet utilisateur
+            const communeResult = await run(`
+                INSERT INTO communes (
+                    name, code, office_number, province, city,
+                    address, phone, email, responsable, user_id, is_active, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            `, [
+                name, code, office_number, province, city,
+                address, phone, email, fullname, userId
+            ]);
+
+            console.log('✅ Commune créée:', {
+                id: communeResult.lastID,
+                name,
+                user_id: userId
+            });
+
+            await run('COMMIT');
+
+            res.status(201).json({
+                success: true,
+                message: 'Commune créée avec succès',
+                data: {
+                    id: communeResult.lastID,
+                    name,
+                    phone,
+                    fullname,
+                    address,
+                    email,
+                    user_id: userId,
+                    agent: {
+                        phone,
+                        password,
+                        private_key: privateKey
+                    }
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur création commune:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+/**
+ * GET /api/admin/communes
+ * Liste toutes les communes avec infos wallet et user
+ */
+app.get('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const communes = await query(`
+            SELECT 
+                c.id,
+                c.name,
+                c.name as commune_name,
+                c.code,
+                c.office_number,
+                c.province,
+                c.city,
+                c.address,
+                c.address as commune_address,
+                c.phone,
+                c.email,
+                c.responsable,
+                c.user_id,
+                c.is_active,
+                c.created_at,
+                u.fullname,
+                w.balance
+            FROM communes c
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN wallets w ON u.id = w.user_id
+            WHERE c.is_active = 1 OR c.is_active IS NULL
+            ORDER BY c.name ASC
+        `).catch((err) => {
+            console.error('❌ Erreur SQL:', err);
+            return [];
+        });
+
+        console.log(`📋 ${communes?.length || 0} communes retournées`);
+
+        res.json({
+            success: true,
+            data: communes || [],
+            communes: communes || [],
+            count: communes?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur admin communes:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            data: []
+        });
+    }
+});
+
+/**
+ * PUT /api/admin/communes/:id
+ */
+app.put('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const name = req.body.name || req.body.commune_name;
+    const fullname = req.body.fullname;
+    const address = req.body.commune_address || req.body.address;
+    const email = req.body.email;
+    const phone = req.body.phone;
+
+    try {
+        await run(`
+            UPDATE communes 
+            SET name = COALESCE(?, name),
+                address = COALESCE(?, address),
+                email = COALESCE(?, email),
+                responsable = COALESCE(?, responsable),
+                phone = COALESCE(?, phone),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [name, address, email, fullname, phone, id]);
+
+        // Mettre à jour l'utilisateur lié si nécessaire
+        const commune = await get('SELECT user_id FROM communes WHERE id = ?', [id]);
+        if (commune?.user_id) {
+            await run(`
+                UPDATE users 
+                SET fullname = COALESCE(?, fullname),
+                    phone = COALESCE(?, phone),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [fullname, phone, commune.user_id]).catch(() => {});
+        }
+
+        res.json({ success: true, message: 'Commune modifiée' });
+    } catch (error) {
+        console.error('❌ Erreur modification:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * DELETE /api/admin/communes/:id
+ * Désactive la commune et son compte utilisateur
+ */
+app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Récupérer le user_id lié
+        const commune = await get('SELECT user_id FROM communes WHERE id = ?', [id]);
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // Désactiver la commune
+            await run('UPDATE communes SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [id]);
+
+            // Désactiver l'utilisateur lié
+            if (commune?.user_id) {
+                await run('UPDATE users SET is_active = 0 WHERE id = ?', [commune.user_id]);
+            }
+
+            await run('COMMIT');
+
+            console.log('✅ Commune désactivée:', id);
+            res.json({ success: true, message: 'Commune supprimée' });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur suppression:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+/**
+ * GET /api/commune/payments
+ * Paiements de LA commune connectée (via son user_id)
+ */
+app.get('/api/commune/payments', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    console.log('📋 GET /api/commune/payments - user:', userId, '| role:', userRole);
+
+    try {
+        if (userRole !== 'commune' && userRole !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                error: 'Accès réservé aux communes',
+                payments: []
+            });
+        }
+
+        // ✅ Récupérer la commune via user_id
+        const commune = await get(`
+            SELECT * FROM communes WHERE user_id = ?
+        `, [userId]);
+
+        if (!commune) {
+            return res.json({
+                success: true,
+                payments: [],
+                commune: null,
+                count: 0
+            });
+        }
+
+        console.log('✅ Commune:', commune.name, '(id:', commune.id, ')');
+
+        // ✅ Récupérer les paiements
+        const payments = await query(`
+            SELECT 
+                tp.*,
+                c.name as commune_name,
+                c.province,
+                c.city
+            FROM tax_payments tp
+            LEFT JOIN communes c ON tp.commune_id = c.id
+            WHERE tp.commune_id = ?
+            ORDER BY tp.payment_date DESC
+            LIMIT 500
+        `, [commune.id]).catch(() => []);
+
+        console.log(`✅ ${payments?.length || 0} paiements retournés`);
+
+        res.json({
+            success: true,
+            payments: payments || [],
+            commune: {
+                id: commune.id,
+                name: commune.name,
+                code: commune.code,
+                province: commune.province,
+                city: commune.city,
+                phone: commune.phone
+            },
+            count: payments?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            payments: []
+        });
+    }
+});
+/**
+ * POST /api/admin/communes
+ * Crée une commune + son compte utilisateur + wallet
+ */
+app.post('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    console.log('\n========== CRÉATION COMMUNE ==========');
+    console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+
+    const name = req.body.name || req.body.commune_name || req.body.communeName;
+    const phone = req.body.phone;
+    const fullname = req.body.fullname || name;
+    const address = req.body.commune_address || req.body.address || '';
+    const email = req.body.email || '';
+    const password = req.body.password;
+    const code = req.body.code || null;
+    const office_number = req.body.office_number || null;
+    const province = req.body.province || null;
+    const city = req.body.city || null;
+
+    // Validation
+    const errors = [];
+    if (!name) errors.push('Nom de la commune requis');
+    if (!phone) errors.push('Téléphone requis');
+    if (!password) errors.push('Mot de passe requis');
+    if (phone && !/^\d{8}$/.test(phone)) errors.push('Téléphone doit avoir 8 chiffres');
+    if (password && password.length < 4) errors.push('Mot de passe: minimum 4 caractères');
+
+    if (errors.length > 0) {
+        return res.status(400).json({
+            success: false,
+            error: errors.join(', '),
+            errors
+        });
+    }
+
+    try {
+        // Vérifier que le téléphone est libre
+        const existingUser = await get('SELECT id FROM users WHERE phone = ?', [phone]);
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                error: 'Ce numéro de téléphone est déjà utilisé'
+            });
+        }
+
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const privateKey = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedKey = await bcrypt.hash(privateKey, 10);
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // 1. Créer l'utilisateur commune
+            const userResult = await run(`
+                INSERT INTO users (
+                    phone, fullname, password_hash, private_key_6,
+                    role, is_active, is_verified, created_at
+                ) VALUES (?, ?, ?, ?, 'commune', 1, 1, CURRENT_TIMESTAMP)
+            `, [phone, fullname, hashedPassword, hashedKey]);
+
+            const userId = userResult.lastID;
+            console.log('✅ Utilisateur commune créé:', { id: userId, phone });
+
+            // 2. Créer le wallet
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [userId]);
+            console.log('✅ Wallet créé');
+
+            // 3. Créer la commune liée
+            const communeResult = await run(`
+                INSERT INTO communes (
+                    name, code, office_number, province, city,
+                    address, phone, email, responsable, user_id, is_active, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+            `, [
+                name, code, office_number, province, city,
+                address, phone, email, fullname, userId
+            ]);
+
+            console.log('✅ Commune créée:', { id: communeResult.lastID, user_id: userId });
+
+            await run('COMMIT');
+
+            res.status(201).json({
+                success: true,
+                message: 'Commune créée avec succès',
+                data: {
+                    id: communeResult.lastID,
+                    name,
+                    phone,
+                    fullname,
+                    user_id: userId,
+                    agent: {
+                        phone,
+                        password,
+                        private_key: privateKey
+                    }
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur création commune:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+app.get('/api/admin/communes', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const communes = await query(`
+            SELECT 
+                c.id,
+                c.name,
+                c.name as commune_name,
+                c.code,
+                c.office_number,
+                c.province,
+                c.city,
+                c.address,
+                c.address as commune_address,
+                c.phone,
+                c.email,
+                c.responsable,
+                c.user_id,
+                c.is_active,
+                c.created_at,
+                u.fullname,
+                w.balance
+            FROM communes c
+            LEFT JOIN users u ON c.user_id = u.id
+            LEFT JOIN wallets w ON u.id = w.user_id
+            WHERE c.is_active = 1 OR c.is_active IS NULL
+            ORDER BY c.name ASC
+        `).catch(() => []);
+
+        console.log(`📋 ${communes?.length || 0} communes retournées`);
+
+        res.json({
+            success: true,
+            data: communes || [],
+            communes: communes || [],
+            count: communes?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur admin communes:', error);
+        res.status(500).json({ success: false, error: error.message, data: [] });
+    }
+});
+app.put('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const name = req.body.name || req.body.commune_name;
+    const fullname = req.body.fullname;
+    const address = req.body.commune_address || req.body.address;
+    const email = req.body.email;
+    const phone = req.body.phone;
+
+    try {
+        await run(`
+            UPDATE communes 
+            SET name = COALESCE(?, name),
+                address = COALESCE(?, address),
+                email = COALESCE(?, email),
+                responsable = COALESCE(?, responsable),
+                phone = COALESCE(?, phone),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [name, address, email, fullname, phone, id]);
+
+        // Mettre à jour l'utilisateur lié
+        const commune = await get('SELECT user_id FROM communes WHERE id = ?', [id]);
+        if (commune?.user_id) {
+            await run(`
+                UPDATE users 
+                SET fullname = COALESCE(?, fullname),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [fullname, commune.user_id]).catch(() => {});
+        }
+
+        res.json({ success: true, message: 'Commune modifiée' });
+    } catch (error) {
+        console.error('❌ Erreur modification:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.delete('/api/admin/communes/:id', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const commune = await get('SELECT user_id FROM communes WHERE id = ?', [id]);
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            await run('UPDATE communes SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [id]);
+
+            if (commune?.user_id) {
+                await run('UPDATE users SET is_active = 0 WHERE id = ?', [commune.user_id]);
+            }
+
+            await run('COMMIT');
+            res.json({ success: true, message: 'Commune supprimée' });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur suppression:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+/**
+ * GET /api/communes
+ * Liste des communes actives (accessible à tous les users)
+ */
+app.get('/api/communes', authenticateToken, async (req, res) => {
+    try {
+        const communes = await query(`
+            SELECT 
+                id, name, code,
+                COALESCE(office_number, code) as office_number,
+                province, city, address, phone
+            FROM communes
+            WHERE is_active = 1 OR is_active IS NULL
+            ORDER BY name ASC
+        `).catch(() => []);
+
+        console.log(`📋 ${communes?.length || 0} communes retournées`);
+
+        // Retourne un TABLEAU direct
+        res.json(communes || []);
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.json([]);
+    }
+});
+/**
+ * POST /api/tax/pay
+ * Paiement d'une taxe : débite user, crédite commune, frais à admin
+ */
+app.post('/api/tax/pay', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('\n========== PAIEMENT TAXE ==========');
+    console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+
+    const commune_id = req.body.commune_id
+                    || req.body.office_id
+                    || req.body.communeId
+                    || req.body.officeId;
+
+    const taxpayer_name = (req.body.taxpayer_name || '').toString().trim();
+    const taxpayer_phone = (req.body.taxpayer_phone || '').toString().trim();
+    const taxpayer_address = (req.body.taxpayer_address || '').toString().trim();
+    const business_number = (req.body.business_number || '').toString().trim();
+    const property_address = (req.body.property_address || '').toString().trim();
+    const tax_type = (req.body.tax_type || '').toString().trim();
+    const tax_period = (req.body.tax_period || '').toString().trim();
+    const notes = (req.body.notes || '').toString().trim();
+    const amount = parseInt(req.body.amount) || 0;
+
+    console.log('✅ Commune ID:', commune_id, '| Montant:', amount);
+
+    // Validation
+    const errors = [];
+    if (!commune_id) errors.push('Commune non sélectionnée');
+    if (!tax_type) errors.push('Type de taxe requis');
+    if (amount < 100) errors.push('Montant minimum: 100 FCFA');
+    if (!taxpayer_name) errors.push('Nom du contribuable requis');
+    if (!taxpayer_phone) errors.push('Téléphone requis');
+
+    if (errors.length > 0) {
+        return res.status(400).json({ success: false, error: errors.join(' | '), errors });
+    }
+
+    try {
+        // Récupérer la commune
+        const commune = await get(`
+            SELECT * FROM communes 
+            WHERE id = ? AND (is_active = 1 OR is_active IS NULL)
+        `, [commune_id]);
+
+        if (!commune) {
+            return res.status(404).json({ success: false, error: 'Commune non trouvée' });
+        }
+
+        // Vérifier que la commune a un compte utilisateur lié
+        if (!commune.user_id) {
+            return res.status(400).json({
+                success: false,
+                error: 'Cette commune n\'a pas de compte utilisateur lié'
+            });
+        }
+
+        console.log('✅ Commune:', commune.name, '| user_id:', commune.user_id);
+
+        // Wallet de la commune
+        let communeWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [commune.user_id]);
+        if (!communeWallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [commune.user_id]);
+            communeWallet = { balance: 0 };
+        }
+
+        // Frais (1%)
+        const fee = Math.floor(amount * 0.01);
+        const totalAmount = amount + fee;
+        const ADMIN_MAIN_ID = parseInt(process.env.ADMIN_MAIN_ID) || 1;
+
+        // Wallet admin
+        let adminWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [ADMIN_MAIN_ID]);
+        if (!adminWallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [ADMIN_MAIN_ID]);
+        }
+
+        // Vérifier le solde du payeur
+        const payerWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [userId]);
+        if (!payerWallet) {
+            return res.status(404).json({ success: false, error: 'Wallet non trouvé' });
+        }
+
+        if (payerWallet.balance < totalAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Requis: ${totalAmount.toLocaleString()} FCFA`
+            });
+        }
+
+        const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // 1. Débiter le payeur
+            await run(`
+                UPDATE wallets 
+                SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [totalAmount, userId]);
+
+            console.log(`💸 Débité payeur: -${totalAmount} FCFA`);
+
+            // 2. Créditer la commune
+            await run(`
+                UPDATE wallets 
+                SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [amount, commune.user_id]);
+
+            console.log(`✅ Crédité commune "${commune.name}": +${amount} FCFA`);
+
+            // 3. Créditer admin (frais)
+            if (fee > 0) {
+                await run(`
+                    UPDATE wallets 
+                    SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE user_id = ?
+                `, [fee, ADMIN_MAIN_ID]);
+                console.log(`💰 Frais admin: +${fee} FCFA`);
+            }
+
+            // 4. Enregistrer le paiement
+            const result = await run(`
+                INSERT INTO tax_payments (
+                    user_id, payer_id, receipt_number, commune_id,
+                    taxpayer_name, taxpayer_phone, taxpayer_address,
+                    business_number, property_address, tax_type, tax_period,
+                    amount, fee, total_amount, payment_status, notes, payment_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, CURRENT_TIMESTAMP)
+            `, [
+                userId, userId, receiptNumber, commune_id,
+                taxpayer_name, taxpayer_phone, taxpayer_address,
+                business_number, property_address, tax_type, tax_period,
+                amount, fee, totalAmount, notes
+            ]);
+
+            // 5. Notifications
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💰 Paiement effectué', ?, 'success', CURRENT_TIMESTAMP)
+            `, [userId, `Paiement de ${totalAmount.toLocaleString()} FCFA pour ${tax_type}. Reçu: ${receiptNumber}`]).catch(() => {});
+
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '🏛️ Taxe reçue', ?, 'success', CURRENT_TIMESTAMP)
+            `, [commune.user_id, `Vous avez reçu ${amount.toLocaleString()} FCFA de ${taxpayer_name}. Reçu: ${receiptNumber}`]).catch(() => {});
+
+            await run('COMMIT');
+
+            console.log('✅ PAIEMENT RÉUSSI:', receiptNumber);
+
+            res.json({
+                success: true,
+                message: 'Paiement effectué avec succès',
+                receipt: {
+                    id: result.lastID,
+                    receipt_number: receiptNumber,
+                    commune_id,
+                    office_name: commune.name,
+                    commune_name: commune.name,
+                    office_code: commune.code || null,
+                    office_province: commune.province || null,
+                    office_city: commune.city || null,
+                    tax_type,
+                    tax_period,
+                    amount,
+                    fee,
+                    total_amount: totalAmount,
+                    taxpayer_name,
+                    taxpayer_phone,
+                    taxpayer_address,
+                    business_number,
+                    property_address,
+                    payment_date: new Date().toISOString(),
+                    payment_status: 'paid',
+                    notes
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur paiement taxe:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+/**
+ * GET /api/commune/payments
+ * Paiements de LA commune connectée
+ */
+app.get('/api/commune/payments', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    console.log('📋 GET /api/commune/payments - user:', userId, '| role:', userRole);
+
+    try {
+        if (userRole !== 'commune' && userRole !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                error: 'Accès réservé aux communes',
+                payments: []
+            });
+        }
+
+        const commune = await get('SELECT * FROM communes WHERE user_id = ?', [userId]);
+
+        if (!commune) {
+            return res.json({ success: true, payments: [], commune: null, count: 0 });
+        }
+
+        console.log('✅ Commune:', commune.name, '(id:', commune.id, ')');
+
+        const payments = await query(`
+            SELECT 
+                tp.*,
+                c.name as commune_name,
+                c.province,
+                c.city
+            FROM tax_payments tp
+            LEFT JOIN communes c ON tp.commune_id = c.id
+            WHERE tp.commune_id = ?
+            ORDER BY tp.payment_date DESC
+            LIMIT 500
+        `, [commune.id]).catch(() => []);
+
+        console.log(`✅ ${payments?.length || 0} paiements retournés`);
+
+        res.json({
+            success: true,
+            payments: payments || [],
+            commune: {
+                id: commune.id,
+                name: commune.name,
+                code: commune.code,
+                province: commune.province,
+                city: commune.city,
+                phone: commune.phone
+            },
+            count: payments?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message, payments: [] });
+    }
+});
+/**
+ * GET /api/commune/info
+ * Infos de la commune connectée + statistiques
+ */
+app.get('/api/commune/info', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const commune = await get(`
+            SELECT c.*, w.balance as wallet_balance
+            FROM communes c
+            LEFT JOIN wallets w ON c.user_id = w.user_id
+            WHERE c.user_id = ?
+        `, [userId]);
+
+        if (!commune) {
+            return res.status(404).json({ success: false, error: 'Commune non trouvée' });
+        }
+
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total,
+                COALESCE(SUM(amount), 0) as total_amount,
+                COALESCE(SUM(fee), 0) as total_fees,
+                COALESCE(SUM(CASE WHEN DATE(payment_date) = DATE('now') THEN amount ELSE 0 END), 0) as today_amount,
+                COALESCE(SUM(CASE WHEN strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now') THEN amount ELSE 0 END), 0) as month_amount,
+                COALESCE(SUM(CASE WHEN payment_status = 'pending' THEN 1 ELSE 0 END), 0) as pending
+            FROM tax_payments
+            WHERE commune_id = ?
+        `, [commune.id]);
+
+        res.json({
+            success: true,
+            commune,
+            stats: stats || {
+                total: 0, total_amount: 0, total_fees: 0,
+                today_amount: 0, month_amount: 0, pending: 0
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/tax/receipt/:receiptNumber/print
+ * Génère le HTML du reçu
+ */
+app.get('/api/tax/receipt/:receiptNumber/print', authenticateToken, async (req, res) => {
+    const { receiptNumber } = req.params;
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    try {
+        let payment;
+
+        if (userRole === 'commune') {
+            // La commune voit les reçus de sa commune
+            const commune = await get('SELECT id FROM communes WHERE user_id = ?', [userId]);
+            payment = await get(`
+                SELECT tp.*, c.name as office_name, c.address as office_address,
+                       c.phone as office_phone, c.province, c.city
+                FROM tax_payments tp
+                LEFT JOIN communes c ON tp.commune_id = c.id
+                WHERE tp.receipt_number = ? AND tp.commune_id = ?
+            `, [receiptNumber, commune?.id]);
+        } else {
+            // Le user voit ses propres reçus
+            payment = await get(`
+                SELECT tp.*, c.name as office_name, c.address as office_address,
+                       c.phone as office_phone, c.province, c.city
+                FROM tax_payments tp
+                LEFT JOIN communes c ON tp.commune_id = c.id
+                WHERE tp.receipt_number = ? AND tp.user_id = ?
+            `, [receiptNumber, userId]);
+        }
+
+        if (!payment) {
+            return res.status(404).send('<h2>Reçu non trouvé</h2>');
+        }
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Reçu ${payment.receipt_number}</title>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; padding: 40px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #1e3a5f, #0a192f) !important; color: white; padding: 30px; text-align: center; }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .body { padding: 30px; }
+        .section { margin-bottom: 25px; border-bottom: 1px solid #e0e0e0; padding-bottom: 20px; }
+        .section h3 { color: #1e3a5f; font-size: 16px; margin-bottom: 15px; border-left: 4px solid #1e3a5f; padding-left: 10px; }
+        .row { display: flex; justify-content: space-between; padding: 8px 0; }
+        .label { color: #666; font-weight: 500; }
+        .value { color: #333; font-weight: 600; }
+        .total { background: #eff6ff !important; padding: 20px; border-radius: 12px; margin-top: 20px; text-align: center; }
+        .total .amount { font-size: 32px; font-weight: bold; color: #1e3a5f; }
+        .badge { display: inline-block; background: #16a34a !important; color: white; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+        .footer { background: #f9f9f9; padding: 20px; text-align: center; font-size: 12px; color: #999; }
+        .action-bar { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: white; padding: 15px 25px; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); display: flex; gap: 10px; }
+        .btn-print { background: linear-gradient(135deg, #1e3a5f, #0a192f); color: white; border: none; padding: 12px 30px; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer; }
+        .btn-close { background: #e5e7eb; color: #374151; border: none; padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer; }
+        @media print { body { background: white; padding: 0; } .no-print { display: none !important; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏛️ REÇU OFFICIEL</h1>
+            <p>République du Tchad - Paiement d'impôt</p>
+        </div>
+        <div class="body">
+            <div class="section">
+                <h3>📄 Informations générales</h3>
+                <div class="row"><span class="label">N° Reçu</span><span class="value">${payment.receipt_number}</span></div>
+                <div class="row"><span class="label">Date</span><span class="value">${new Date(payment.payment_date).toLocaleString('fr-FR')}</span></div>
+                <div class="row"><span class="label">Statut</span><span class="badge">PAYÉ</span></div>
+            </div>
+            <div class="section">
+                <h3>🏛️ Commune</h3>
+                <div class="row"><span class="label">Nom</span><span class="value">${payment.office_name || '-'}</span></div>
+                <div class="row"><span class="label">Adresse</span><span class="value">${payment.office_address || '-'}</span></div>
+            </div>
+            <div class="section">
+                <h3>👤 Contribuable</h3>
+                <div class="row"><span class="label">Nom</span><span class="value">${payment.taxpayer_name}</span></div>
+                <div class="row"><span class="label">Téléphone</span><span class="value">${payment.taxpayer_phone}</span></div>
+            </div>
+            <div class="section">
+                <h3>💰 Détails</h3>
+                <div class="row"><span class="label">Type</span><span class="value">${payment.tax_type}</span></div>
+                <div class="row"><span class="label">Période</span><span class="value">${payment.tax_period || '-'}</span></div>
+                <div class="row"><span class="label">Montant</span><span class="value">${Number(payment.amount || 0).toLocaleString()} FCFA</span></div>
+                <div class="row"><span class="label">Frais</span><span class="value">${Number(payment.fee || 0).toLocaleString()} FCFA</span></div>
+            </div>
+            <div class="total">
+                <div style="color: #666; margin-bottom: 8px;">TOTAL PAYÉ</div>
+                <div class="amount">${Number(payment.total_amount || 0).toLocaleString()} FCFA</div>
+            </div>
+        </div>
+        <div class="footer">
+            <p>Ce reçu est généré électroniquement et fait foi de paiement.</p>
+            <p>CashPays - Plateforme sécurisée</p>
+        </div>
+    </div>
+
+    <div class="action-bar no-print">
+        <button class="btn-print" onclick="window.print()">🖨️ Imprimer</button>
+        <button class="btn-close" onclick="window.close()">✕ Fermer</button>
+    </div>
+
+    <script>
+        window.onload = () => setTimeout(() => window.print(), 800);
+    </script>
+</body>
+</html>`);
+
+    } catch (error) {
+        console.error('❌ Erreur génération reçu:', error);
+        res.status(500).send('<h2>Erreur lors de la génération</h2>');
+    }
+});
+
+/**
+ * GET /api/commune/info
+ * Infos de la commune connectée + stats
+ */
+app.get('/api/commune/info', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const commune = await get(`
+            SELECT c.*, w.balance as wallet_balance
+            FROM communes c
+            LEFT JOIN wallets w ON c.user_id = w.user_id
+            WHERE c.user_id = ?
+        `, [userId]);
+
+        if (!commune) {
+            return res.status(404).json({ success: false, error: 'Commune non trouvée' });
+        }
+
+        // Statistiques des paiements
+        const stats = await get(`
+            SELECT 
+                COUNT(*) as total,
+                COALESCE(SUM(amount), 0) as total_amount,
+                COALESCE(SUM(fee), 0) as total_fees,
+                COALESCE(SUM(CASE WHEN DATE(payment_date) = DATE('now') THEN amount ELSE 0 END), 0) as today_amount,
+                COALESCE(SUM(CASE WHEN strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now') THEN amount ELSE 0 END), 0) as month_amount,
+                COALESCE(SUM(CASE WHEN payment_status = 'pending' THEN 1 ELSE 0 END), 0) as pending
+            FROM tax_payments
+            WHERE commune_id = ?
+        `, [commune.id]);
+
+        res.json({
+            success: true,
+            commune,
+            stats: stats || {
+                total: 0,
+                total_amount: 0,
+                total_fees: 0,
+                today_amount: 0,
+                month_amount: 0,
+                pending: 0
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+/**
+ * GET /api/communes
+ * Liste des communes actives (accessible aux users qui veulent payer)
+ */
+app.get('/api/communes', authenticateToken, async (req, res) => {
+    try {
+        const communes = await query(`
+            SELECT 
+                id, name, code,
+                COALESCE(office_number, code) as office_number,
+                province, city, address, phone
+            FROM communes
+            WHERE is_active = 1 OR is_active IS NULL
+            ORDER BY name ASC
+        `).catch(() => []);
+
+        console.log(`📋 ${communes?.length || 0} communes retournées`);
+
+        // Retourner un TABLEAU direct (compatibilité frontend)
+        res.json(communes || []);
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.json([]);
+    }
+});
+/**
+ * GET /api/tax/receipt/:receiptNumber/print
+ * Génère le HTML du reçu pour impression
+ */
+app.get('/api/tax/receipt/:receiptNumber/print', authenticateToken, async (req, res) => {
+    const { receiptNumber } = req.params;
+    const userId = req.user.userId;
+
+    try {
+        const payment = await get(`
+            SELECT 
+                tp.*,
+                c.name as office_name,
+                c.address as office_address,
+                c.phone as office_phone,
+                c.province,
+                c.city
+            FROM tax_payments tp
+            LEFT JOIN communes c ON tp.commune_id = c.id
+            WHERE tp.receipt_number = ? AND tp.user_id = ?
+        `, [receiptNumber, userId]);
+
+        if (!payment) {
+            return res.status(404).send('<h2>Reçu non trouvé</h2>');
+        }
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Reçu ${payment.receipt_number}</title>
+    <meta charset="UTF-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; padding: 40px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        .header { background: linear-gradient(135deg, #1e3a5f, #0a192f) !important; color: white; padding: 30px; text-align: center; }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .header p { opacity: 0.9; }
+        .body { padding: 30px; }
+        .section { margin-bottom: 25px; border-bottom: 1px solid #e0e0e0; padding-bottom: 20px; }
+        .section h3 { color: #1e3a5f; font-size: 16px; margin-bottom: 15px; border-left: 4px solid #1e3a5f; padding-left: 10px; }
+        .row { display: flex; justify-content: space-between; padding: 8px 0; }
+        .label { color: #666; font-weight: 500; }
+        .value { color: #333; font-weight: 600; }
+        .total { background: #eff6ff !important; padding: 20px; border-radius: 12px; margin-top: 20px; text-align: center; }
+        .total .amount { font-size: 32px; font-weight: bold; color: #1e3a5f; }
+        .badge { display: inline-block; background: #16a34a !important; color: white; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+        .footer { background: #f9f9f9; padding: 20px; text-align: center; font-size: 12px; color: #999; }
+        .action-bar { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: white; padding: 15px 25px; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); display: flex; gap: 10px; z-index: 999; }
+        .btn-print { background: linear-gradient(135deg, #1e3a5f, #0a192f); color: white; border: none; padding: 12px 30px; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer; }
+        .btn-close { background: #e5e7eb; color: #374151; border: none; padding: 12px 20px; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer; }
+        @media print { body { background: white; padding: 0; } .container { box-shadow: none; } .no-print { display: none !important; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏛️ REÇU OFFICIEL</h1>
+            <p>République du Tchad - Paiement d'impôt</p>
+        </div>
+        <div class="body">
+            <div class="section">
+                <h3>📄 Informations générales</h3>
+                <div class="row"><span class="label">N° Reçu</span><span class="value">${payment.receipt_number}</span></div>
+                <div class="row"><span class="label">Date</span><span class="value">${new Date(payment.payment_date).toLocaleString('fr-FR')}</span></div>
+                <div class="row"><span class="label">Statut</span><span class="badge">PAYÉ</span></div>
+            </div>
+            <div class="section">
+                <h3>🏛️ Commune</h3>
+                <div class="row"><span class="label">Nom</span><span class="value">${payment.office_name || '-'}</span></div>
+                <div class="row"><span class="label">Adresse</span><span class="value">${payment.office_address || '-'}</span></div>
+                ${payment.office_phone ? `<div class="row"><span class="label">Téléphone</span><span class="value">${payment.office_phone}</span></div>` : ''}
+            </div>
+            <div class="section">
+                <h3>👤 Contribuable</h3>
+                <div class="row"><span class="label">Nom</span><span class="value">${payment.taxpayer_name}</span></div>
+                <div class="row"><span class="label">Téléphone</span><span class="value">${payment.taxpayer_phone}</span></div>
+                ${payment.taxpayer_address ? `<div class="row"><span class="label">Adresse</span><span class="value">${payment.taxpayer_address}</span></div>` : ''}
+            </div>
+            <div class="section">
+                <h3>💰 Détails du paiement</h3>
+                <div class="row"><span class="label">Type de taxe</span><span class="value">${payment.tax_type}</span></div>
+                <div class="row"><span class="label">Période</span><span class="value">${payment.tax_period || '-'}</span></div>
+                <div class="row"><span class="label">Montant</span><span class="value">${Number(payment.amount || 0).toLocaleString()} FCFA</span></div>
+                <div class="row"><span class="label">Frais</span><span class="value">${Number(payment.fee || 0).toLocaleString()} FCFA</span></div>
+            </div>
+            <div class="total">
+                <div style="color: #666; margin-bottom: 8px;">TOTAL PAYÉ</div>
+                <div class="amount">${Number(payment.total_amount || 0).toLocaleString()} FCFA</div>
+            </div>
+        </div>
+        <div class="footer">
+            <p>Ce reçu est généré électroniquement et fait foi de paiement.</p>
+            <p>CashPays - Plateforme sécurisée</p>
+        </div>
+    </div>
+
+    <div class="action-bar no-print">
+        <button class="btn-print" onclick="window.print()">🖨️ Imprimer</button>
+        <button class="btn-close" onclick="window.close()">✕ Fermer</button>
+    </div>
+
+    <script>
+        window.onload = () => setTimeout(() => window.print(), 800);
+    </script>
+</body>
+</html>`);
+
+    } catch (error) {
+        console.error('❌ Erreur génération reçu:', error);
+        res.status(500).send('<h2>Erreur lors de la génération</h2>');
+    }
 });
 
 // ============================================
@@ -14431,30 +15630,20 @@ app.get('/api/tax/provinces', async (req, res) => {
         res.status(500).json({ success: false, provinces: [] });
     }
 });
-
-// ------------------------------------------------------------
-// 3. ROUTE PAIEMENT DE TAXE
-// ------------------------------------------------------------
-
-/**
- * POST /api/tax/pay
- * Effectuer un paiement de taxe
- * Accepte commune_id OU office_id
- */
 app.post('/api/tax/pay', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
 
     console.log('\n========== PAIEMENT TAXE ==========');
-    console.log('📦 Body reçu:', JSON.stringify(req.body, null, 2));
+    console.log('📦 Body:', JSON.stringify(req.body, null, 2));
 
-    // ✅ EXTRAIRE commune_id (accepte plusieurs noms)
+    // ✅ Extraction
     const commune_id = req.body.commune_id
                     || req.body.office_id
                     || req.body.communeId
                     || req.body.officeId;
 
     const taxpayer_name = (req.body.taxpayer_name || '').toString().trim();
-    const taxpayer_phone = (req.body.taxpayer_phone || '').toString().trim().slice(0, 8);
+    const taxpayer_phone = (req.body.taxpayer_phone || '').toString().trim();
     const taxpayer_address = (req.body.taxpayer_address || '').toString().trim();
     const business_number = (req.body.business_number || '').toString().trim();
     const property_address = (req.body.property_address || '').toString().trim();
@@ -14463,143 +15652,175 @@ app.post('/api/tax/pay', authenticateToken, async (req, res) => {
     const notes = (req.body.notes || '').toString().trim();
     const amount = parseInt(req.body.amount) || 0;
 
-    console.log('✅ Commune ID:', commune_id, '| type:', typeof commune_id);
+    console.log('✅ Commune ID:', commune_id);
     console.log('✅ Montant:', amount);
-    console.log('👤 User:', userId);
 
-    // ✅ VALIDATION
+    // Validation
     const errors = [];
     if (!commune_id) errors.push('Commune non sélectionnée');
     if (!tax_type) errors.push('Type de taxe requis');
-    if (amount < 100) errors.push(`Montant minimum: 100 FCFA (reçu: ${amount})`);
+    if (amount < 100) errors.push(`Montant minimum: 100 FCFA`);
     if (!taxpayer_name) errors.push('Nom du contribuable requis');
     if (!taxpayer_phone) errors.push('Téléphone requis');
 
     if (errors.length > 0) {
-        console.log('❌ Validation échouée:', errors);
         return res.status(400).json({
             success: false,
             error: errors.join(' | '),
-            errors,
-            received: req.body
+            errors
         });
     }
 
     try {
-        // ✅ CHERCHER LA COMMUNE
-        let office = await get('SELECT * FROM communes WHERE id = ?', [commune_id]);
+        // ✅ RÉCUPÉRER LA COMMUNE avec son user_id
+        const commune = await get(`
+            SELECT * FROM communes 
+            WHERE id = ? AND (is_active = 1 OR is_active IS NULL)
+        `, [commune_id]);
 
-        if (!office && req.body.commune_name) {
-            office = await get('SELECT * FROM communes WHERE name = ?', [req.body.commune_name]);
-        }
-
-        if (!office) {
-            console.log('⚠️ Commune non trouvée pour ID:', commune_id);
-            office = {
-                id: commune_id,
-                name: req.body.commune_name || 'Commune',
-                code: null,
-                province: null,
-                city: null
-            };
-        }
-
-        console.log('✅ Commune:', office.name);
-
-        // ✅ CALCULS
-        const fee = Math.floor(amount * 0.01);
-        const totalAmount = amount + fee;
-
-        // ✅ WALLET
-        let wallet = await get('SELECT * FROM wallets WHERE user_id = ?', [userId]);
-
-        if (!wallet) {
-            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [userId]);
-            wallet = { balance: 0 };
-            console.log('✅ Wallet créé automatiquement');
-        }
-
-        console.log('💰 Solde:', wallet.balance, '| Requis:', totalAmount);
-
-        if (wallet.balance < totalAmount) {
-            return res.status(400).json({
+        if (!commune) {
+            return res.status(404).json({
                 success: false,
-                error: `Solde insuffisant. Requis: ${totalAmount.toLocaleString()} FCFA, Disponible: ${wallet.balance.toLocaleString()} FCFA`,
-                required: totalAmount,
-                available: wallet.balance
+                error: 'Commune non trouvée'
             });
         }
 
-        // ✅ GÉNÉRER REÇU UNIQUE
+        console.log('✅ Commune:', commune.name, '| user_id:', commune.user_id);
+
+        // ✅ VÉRIFIER QUE LA COMMUNE A UN COMPTE UTILISATEUR LIÉ
+        if (!commune.user_id) {
+            return res.status(400).json({
+                success: false,
+                error: 'Cette commune n\'a pas de compte utilisateur lié. Contactez l\'administrateur.'
+            });
+        }
+
+        // ✅ RÉCUPÉRER LE WALLET DE LA COMMUNE
+        let communeWallet = await get(
+            'SELECT * FROM wallets WHERE user_id = ?',
+            [commune.user_id]
+        );
+
+        if (!communeWallet) {
+            // Créer le wallet de la commune s'il n'existe pas
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [commune.user_id]);
+            communeWallet = { balance: 0 };
+            console.log('✅ Wallet commune créé');
+        }
+
+        console.log('💰 Wallet commune:', communeWallet.balance, 'FCFA');
+
+        // ✅ FRAIS (1%) vers ADMIN principal
+        const fee = Math.floor(amount * 0.01);
+        const totalAmount = amount + fee;
+        const ADMIN_MAIN_ID = parseInt(process.env.ADMIN_MAIN_ID) || 1;
+
+        // Vérifier wallet admin
+        let adminWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [ADMIN_MAIN_ID]);
+        if (!adminWallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [ADMIN_MAIN_ID]);
+            console.log('✅ Wallet admin créé');
+        }
+
+        // ✅ VÉRIFIER LE SOLDE DU PAYEUR
+        const payerWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [userId]);
+        if (!payerWallet) {
+            return res.status(404).json({ success: false, error: 'Wallet non trouvé' });
+        }
+
+        if (payerWallet.balance < totalAmount) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Requis: ${totalAmount.toLocaleString()} FCFA, Disponible: ${payerWallet.balance.toLocaleString()} FCFA`
+            });
+        }
+
+        // ✅ GÉNÉRER LE REÇU
         const receiptNumber = `TAX-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
-        const cashpaysRef = `CP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
         // ✅ TRANSACTION ATOMIQUE
         await run('BEGIN TRANSACTION');
 
         try {
-            // Débiter le wallet
+            // 1. Débiter le payeur (user)
             await run(`
                 UPDATE wallets 
                 SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP 
                 WHERE user_id = ?
             `, [totalAmount, userId]);
 
-            // ✅ INSÉRER LE PAIEMENT avec les BONNES COLONNES
+            console.log(`💸 Débité payeur: -${totalAmount} FCFA`);
+
+            // ✅ 2. CRÉDITER LA COMMUNE (user_id lié au numéro)
+            await run(`
+                UPDATE wallets 
+                SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [amount, commune.user_id]);
+
+            console.log(`✅ Crédité commune "${commune.name}" (user #${commune.user_id}): +${amount} FCFA`);
+
+            // ✅ 3. CRÉDITER L'ADMIN avec les frais
+            if (fee > 0) {
+                await run(`
+                    UPDATE wallets 
+                    SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE user_id = ?
+                `, [fee, ADMIN_MAIN_ID]);
+
+                console.log(`💰 Frais crédités admin #${ADMIN_MAIN_ID}: +${fee} FCFA`);
+            }
+
+            // 4. Enregistrer le paiement
             const result = await run(`
                 INSERT INTO tax_payments (
-                    user_id,
-                    payer_id,
-                    receipt_number,
-                    commune_id,
-                    taxpayer_name,
-                    taxpayer_phone,
-                    taxpayer_address,
-                    business_number,
-                    property_address,
-                    tax_type,
-                    tax_period,
-                    amount,
-                    fee,
-                    total_amount,
-                    payment_status,
-                    cashpays_transaction_ref,
-                    notes,
-                    payment_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?, CURRENT_TIMESTAMP)
+                    user_id, payer_id, receipt_number, commune_id,
+                    taxpayer_name, taxpayer_phone, taxpayer_address,
+                    business_number, property_address, tax_type, tax_period,
+                    amount, fee, total_amount, payment_status, notes, payment_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, CURRENT_TIMESTAMP)
             `, [
-                userId,
-                userId,
-                receiptNumber,
-                commune_id,
-                taxpayer_name,
-                taxpayer_phone,
-                taxpayer_address,
-                business_number,
-                property_address,
-                tax_type,
-                tax_period,
-                amount,
-                fee,
-                totalAmount,
-                cashpaysRef,
-                notes
+                userId, userId, receiptNumber, commune_id,
+                taxpayer_name, taxpayer_phone, taxpayer_address,
+                business_number, property_address, tax_type, tax_period,
+                amount, fee, totalAmount, notes
             ]);
 
-            // ✅ Notification (best-effort)
+            // ✅ 5. Notifications
+            // Payeur
             await run(`
                 INSERT INTO notifications (user_id, title, message, type, created_at)
                 VALUES (?, '💰 Paiement effectué', ?, 'success', CURRENT_TIMESTAMP)
             `, [
                 userId,
-                `Paiement de ${totalAmount.toLocaleString()} FCFA pour ${tax_type}. Reçu N° ${receiptNumber}`
+                `Paiement de ${totalAmount.toLocaleString()} FCFA pour ${tax_type} effectué. Reçu: ${receiptNumber}`
             ]).catch(() => {});
+
+            // ✅ Commune (notification)
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '🏛️ Taxe reçue', ?, 'success', CURRENT_TIMESTAMP)
+            `, [
+                commune.user_id,
+                `Vous avez reçu ${amount.toLocaleString()} FCFA de ${taxpayer_name} (${tax_type}). Reçu: ${receiptNumber}`
+            ]).catch(() => {});
+
+            // Admin
+            if (fee > 0) {
+                await run(`
+                    INSERT INTO notifications (user_id, title, message, type, created_at)
+                    VALUES (?, '💵 Frais de taxe', ?, 'success', CURRENT_TIMESTAMP)
+                `, [
+                    ADMIN_MAIN_ID,
+                    `Frais de ${fee.toLocaleString()} FCFA encaissés (${receiptNumber})`
+                ]).catch(() => {});
+            }
 
             await run('COMMIT');
 
-            console.log('✅ PAIEMENT RÉUSSI:', receiptNumber);
+            console.log('✅ PAIEMENT TAXE RÉUSSI:', receiptNumber);
+            console.log(`   Payeur: -${totalAmount} | Commune: +${amount} | Admin: +${fee}`);
 
-            // ✅ RÉPONSE
             res.json({
                 success: true,
                 message: 'Paiement effectué avec succès',
@@ -14607,11 +15828,11 @@ app.post('/api/tax/pay', authenticateToken, async (req, res) => {
                     id: result.lastID,
                     receipt_number: receiptNumber,
                     commune_id: commune_id,
-                    office_name: office.name,
-                    commune_name: office.name,
-                    office_code: office.code || null,
-                    office_province: office.province || null,
-                    office_city: office.city || null,
+                    office_name: commune.name,
+                    commune_name: commune.name,
+                    office_code: commune.code || null,
+                    office_province: commune.province || null,
+                    office_city: commune.city || null,
                     tax_type,
                     tax_period,
                     amount,
@@ -14624,7 +15845,6 @@ app.post('/api/tax/pay', authenticateToken, async (req, res) => {
                     property_address,
                     payment_date: new Date().toISOString(),
                     payment_status: 'paid',
-                    cashpays_transaction_ref: cashpaysRef,
                     notes
                 }
             });
@@ -25656,7 +26876,7 @@ app.get('/api/cards/download-pdf', authenticateToken, async (req, res) => {
         const holder = card.card_holder || 'CARDHOLDER';
         const expiry = `${String(card.expiry_month).padStart(2, '0')}/${String(card.expiry_year).slice(-2)}`;
 
-        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173'|| 'http://192.168.1.199';
         const paymentUrl = `${baseUrl}/card-payment?card=${encodeURIComponent(card.card_number)}`;
         const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(paymentUrl)}&color=7c3aed&bgcolor=ffffff`;
 

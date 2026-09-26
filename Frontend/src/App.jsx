@@ -275,7 +275,7 @@ function App() {
 
                             {/* Taxes & Impôts */}
                             <Route path="/tax-payment" element={<TaxPayment user={user} />} />
-                            <Route path="/tax-management" element={<TaxManagement />} />
+                            <Route path="/tax-management" element={<TaxManagement user={user} />} />
 
                             {/* Entreprises */}
                             <Route path="/my-company" element={<MyCompany user={user} socket={socket} />} />

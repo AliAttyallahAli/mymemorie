@@ -121,19 +121,20 @@ CREATE TABLE IF NOT EXISTS transactions (
 -- ============================================
 CREATE TABLE IF NOT EXISTS communes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone TEXT(8) UNIQUE NOT NULL,
     name TEXT NOT NULL,
+    code TEXT,
+    office_number TEXT,
+    province TEXT,
+    city TEXT,
     address TEXT,
-    contact_name TEXT,
-    contact_phone TEXT(8),
+    phone TEXT,
     email TEXT,
-    logo TEXT,
-    code TEXT UNIQUE,
+    responsable TEXT,
+    user_id INTEGER,
     is_active INTEGER DEFAULT 1,
-    created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES users(id)
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 
@@ -302,6 +303,7 @@ CREATE TABLE IF NOT EXISTS kyc_documents (
 -- ============================================
 CREATE TABLE IF NOT EXISTS kyc_limits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
     level INTEGER DEFAULT 1,
     daily_transaction_limit INTEGER DEFAULT 100000,
     monthly_transaction_limit INTEGER DEFAULT 500000,
@@ -1026,6 +1028,10 @@ CREATE INDEX IF NOT EXISTS idx_kyc_requests_submitted ON kyc_requests(submitted_
 CREATE INDEX IF NOT EXISTS idx_agent_reviews_agent_id ON agent_reviews(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_applications_status ON agent_applications(status);
 CREATE INDEX IF NOT EXISTS idx_communes_phone ON communes(phone);
+
+CREATE INDEX IF NOT EXISTS idx_communes_user ON communes(user_id);
+CREATE INDEX IF NOT EXISTS idx_communes_active ON communes(is_active);
+
 CREATE INDEX IF NOT EXISTS idx_tax_payments_payer_id ON tax_payments(payer_id);
 CREATE INDEX IF NOT EXISTS idx_tax_payments_commune_id ON tax_payments(commune_id);
 CREATE INDEX IF NOT EXISTS idx_tax_payments_receipt ON tax_payments(receipt_number);
@@ -1162,7 +1168,7 @@ CREATE TRIGGER IF NOT EXISTS create_wallet_on_user_insert
 AFTER INSERT ON users
 WHEN NEW.role = 'user'
 BEGIN
-    INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 250);
+    INSERT INTO wallets (user_id, balance) VALUES (NEW.id, 5);
 END;
 
 CREATE TRIGGER IF NOT EXISTS create_wallet_on_agent_insert
@@ -1182,6 +1188,45 @@ END;
 -- ============================================
 -- VUES UTILES
 -- ============================================
+SELECT u.id, u.phone, u.role, w.balance
+FROM users u
+LEFT JOIN wallets w ON u.id = w.user_id
+WHERE u.role = 'commune';
+
+
+-- Commune (doit avoir +25 000)
+SELECT u.id, u.phone, w.balance
+FROM users u
+JOIN wallets w ON u.id = w.user_id
+WHERE u.role = 'commune';
+
+-- Voir les paiements
+SELECT 
+    receipt_number, 
+    commune_id, 
+    amount, 
+    fee, 
+    total_amount,
+    payment_date
+FROM tax_payments
+ORDER BY payment_date DESC
+LIMIT 5;
+
+-- Voir le wallet de la commune
+SELECT 
+    c.name as commune,
+    c.phone,
+    c.user_id,
+    w.balance
+FROM communes c
+LEFT JOIN wallets w ON c.user_id = w.user_id;
+
+-- Voir les frais encaissés par l'admin
+SELECT 
+    COUNT(*) as total_transactions,
+    SUM(fee) as total_frais
+FROM tax_payments
+WHERE payment_status = 'paid';
 
 CREATE VIEW IF NOT EXISTS v_transactions_details AS
 SELECT 
