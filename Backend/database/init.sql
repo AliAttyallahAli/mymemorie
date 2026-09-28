@@ -1227,7 +1227,7 @@ VALUES ('62787307', 'Admin Core Team - AlkherPay', 'PLACEHOLDER_HASH', 'PLACEHOL
 
 -- Insertion du wallet admin
 INSERT OR IGNORE INTO wallets (user_id, balance, is_principal)
-SELECT id, 999999999, 1 FROM users WHERE phone = '62787307';
+SELECT id, 10000000000, 1 FROM users WHERE phone = '62787307';
 
 -- Insertion du wallet principal
 INSERT OR IGNORE INTO main_wallet (id, balance, total_revenue) VALUES (1, 0, 0);
