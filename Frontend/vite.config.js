@@ -33,7 +33,7 @@ export default defineConfig({
     host: true, // Permet l'accès depuis le réseau local
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:5000',
         changeOrigin: true,
         secure: false,
         rewrite: (path) => path,
@@ -50,7 +50,7 @@ export default defineConfig({
         },
       },
       '/socket.io': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:5000',
         changeOrigin: true,
         ws: true,
         configure: (proxy, options) => {
