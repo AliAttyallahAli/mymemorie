@@ -4,7 +4,6 @@
     "outputDirectory": "dist",
     "installCommand": "npm install --legacy-peer-deps",
     "framework": "vite",
-    "nodeVersion": "20.x",
     "rewrites": [
         {
             "source": "/((?!api/).*)",
