@@ -58,6 +58,7 @@ function AdminPanel({ user, socket }) {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [users, setUsers] = useState([])
   const [agents, setAgents] = useState([])
+  const [communes, setCommune] = useState([])
   const [stats, setStats] = useState({})
   const [loading, setLoading] = useState(true)
   const [mounted, setMounted] = useState(false)
@@ -1387,6 +1388,7 @@ function AdminPanel({ user, socket }) {
                   <option value="all">Tous les rôles</option>
                   <option value="user">Utilisateurs</option>
                   <option value="agent">Agents</option>
+                 <option value="commune">Commune</option>
                   <option value="admin">Administrateurs</option>
                 </select>
                 <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-4 py-2 rounded-lg bg-gray-700 text-white">
@@ -3039,6 +3041,7 @@ function AdminPanel({ user, socket }) {
             >
               <option value="user">Utilisateur</option>
               <option value="agent">Agent</option>
+              <option value="commune">Commune</option>
               <option value="admin">Administrateur</option>
             </select>
           </div>
@@ -3712,6 +3715,7 @@ function AdminPanel({ user, socket }) {
             <select value={editUserForm.role} onChange={(e) => setEditUserForm({ ...editUserForm, role: e.target.value })} className="w-full px-4 py-2 rounded-lg bg-gray-700 border border-gray-600 text-white">
               <option value="user">Utilisateur</option>
               <option value="agent">Agent</option>
+              <option value="commune">Commune</option>
               <option value="admin">Administrateur</option>
             </select>
           </div>

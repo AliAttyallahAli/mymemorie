@@ -303,8 +303,9 @@ CREATE TABLE IF NOT EXISTS kyc_documents (
 -- ============================================
 CREATE TABLE IF NOT EXISTS kyc_limits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
     level INTEGER DEFAULT 1,
+    daily_limit INTEGER DEFAULT 100000,
+    monthly_limit INTEGER DEFAULT 500000,
     daily_transaction_limit INTEGER DEFAULT 100000,
     monthly_transaction_limit INTEGER DEFAULT 500000,
     single_transaction_limit INTEGER DEFAULT 50000,
@@ -747,7 +748,8 @@ CREATE TABLE IF NOT EXISTS tax_payments (
     notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (payer_id) REFERENCES users(id),
-    FOREIGN KEY (commune_id) REFERENCES users(id)
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (commune_id) REFERENCES communes(id)   -- ✅ CORRECTION ICI
 );
 
 -- Table des compteurs (mètres)
@@ -967,10 +969,98 @@ CREATE TABLE IF NOT EXISTS card_pin_resets (
 );
 
 -- ============================================
--- INDEX POUR PERFORMANCES
+-- TABLE TOKENS
 -- ============================================
--- Index pour les performances
--- Index pour virtual_cards
+CREATE TABLE IF NOT EXISTS tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_id INTEGER NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    description TEXT,
+    logo TEXT,
+    category TEXT DEFAULT 'autre',
+    asset_type TEXT,
+    location TEXT,
+    total_parts INTEGER NOT NULL,
+    parts_available INTEGER NOT NULL,
+    price_per_part INTEGER NOT NULL,
+    initial_valuation INTEGER NOT NULL,
+    current_valuation INTEGER,
+    creation_fee INTEGER DEFAULT 0,
+    currency TEXT DEFAULT 'XAF',
+    status TEXT DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (creator_id) REFERENCES users(id)
+);
+
+-- ============================================
+-- TABLE TOKEN_HOLDINGS (parts détenues)
+-- ============================================
+CREATE TABLE IF NOT EXISTS token_holdings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    parts_owned INTEGER DEFAULT 0,
+    parts_listed_for_sale INTEGER DEFAULT 0,
+    average_buy_price INTEGER DEFAULT 0,
+    total_invested INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(token_id, user_id),
+    FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+-- ============================================
+-- TABLE TOKEN_SELL_ORDERS (ordres de vente)
+-- ============================================
+CREATE TABLE IF NOT EXISTS token_sell_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id INTEGER NOT NULL,
+    seller_id INTEGER NOT NULL,
+    parts_count INTEGER NOT NULL,
+    price_per_part INTEGER NOT NULL,
+    parts_remaining INTEGER NOT NULL,
+    status TEXT DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE,
+    FOREIGN KEY (seller_id) REFERENCES users(id)
+);
+
+-- ============================================
+-- TABLE TOKEN_TRANSACTIONS (historique)
+-- ============================================
+CREATE TABLE IF NOT EXISTS token_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id INTEGER NOT NULL,
+    buyer_id INTEGER,
+    seller_id INTEGER,
+    order_id INTEGER,
+    parts_count INTEGER NOT NULL,
+    price_per_part INTEGER NOT NULL,
+    total_amount INTEGER NOT NULL,
+    fee INTEGER DEFAULT 0,
+    transaction_type TEXT DEFAULT 'buy',
+    status TEXT DEFAULT 'completed',
+    reference TEXT UNIQUE NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (token_id) REFERENCES tokens(id),
+    FOREIGN KEY (buyer_id) REFERENCES users(id),
+    FOREIGN KEY (seller_id) REFERENCES users(id)
+);
+
+-- ============================================
+-- INDEX
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_tokens_creator ON tokens(creator_id);
+CREATE INDEX IF NOT EXISTS idx_tokens_status ON tokens(status);
+CREATE INDEX IF NOT EXISTS idx_holdings_user ON token_holdings(user_id);
+CREATE INDEX IF NOT EXISTS idx_holdings_token ON token_holdings(token_id);
+CREATE INDEX IF NOT EXISTS idx_orders_token ON token_sell_orders(token_id);
+CREATE INDEX IF NOT EXISTS idx_orders_seller ON token_sell_orders(seller_id);
+CREATE INDEX IF NOT EXISTS idx_tx_token ON token_transactions(token_id);
 
 CREATE INDEX IF NOT EXISTS idx_pin_resets_user ON card_pin_resets(user_id);
 CREATE INDEX IF NOT EXISTS idx_pin_resets_status ON card_pin_resets(status);
@@ -1120,7 +1210,7 @@ INSERT OR IGNORE INTO app_settings (setting_key, setting_value, setting_type, de
     ('withdrawal_fee', '2', 'integer', 'Frais de retrait en pourcentage'),
     ('referral_bonus', '500', 'integer', 'Bonus de parrainage en FCFA'),
     ('maintenance_mode', 'false', 'boolean', 'Mode maintenance'),
-    ('app_version', '1.0.0', 'string', 'Version de l''application');
+    ('app_version', '1.1.0', 'string', 'Version de l''application');
 
 -- Insertion des types de taxes par défaut
 INSERT OR IGNORE INTO tax_types (name, description, default_amount) VALUES
@@ -1227,7 +1317,6 @@ SELECT
     SUM(fee) as total_frais
 FROM tax_payments
 WHERE payment_status = 'paid';
-
 CREATE VIEW IF NOT EXISTS v_transactions_details AS
 SELECT 
     t.*,

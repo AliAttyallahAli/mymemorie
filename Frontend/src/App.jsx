@@ -7,7 +7,9 @@ import { Toaster } from 'react-hot-toast'
 import { toast } from './utils/toast'
 import ErrorBoundary from './components/ErrorBoundary'
 import PrivateRoute from './components/PrivateRoute'
-
+import TokenMarket from './pages/TokenMarket';
+import TokenDetail from './pages/TokenDetail';
+import MyTokens from './pages/MyTokens';
 // ============================================
 // PAGES PUBLIQUES (import direct - chargement immédiat)
 // ============================================
@@ -260,6 +262,10 @@ function App() {
                             <Route path="/chat" element={<Chat user={user} socket={socket} />} />
                             <Route path="/chat/:conversationId" element={<Chat user={user} socket={socket} />} />
                             <Route path="/notifications/:id" element={<NotificationDetail user={user} />} />
+
+                            <Route path="/token-market" element={user ? <TokenMarket user={user} /> : <Navigate to="/login" />} />
+                            <Route path="/token/:id" element={user ? <TokenDetail user={user} /> : <Navigate to="/login" />} />
+                            <Route path="/my-tokens" element={user ? <MyTokens user={user} /> : <Navigate to="/login" />} />
 
                             {/* Services financiers */}
                             <Route path="/deposit" element={<Deposit user={user} socket={socket} />} />

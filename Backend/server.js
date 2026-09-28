@@ -30,7 +30,7 @@ const io = socketIO(server, {
       'http://localhost:5173',
       'http://localhost:3000',
       'http://192.168.1.199:5173',
-      'http://localhost:5000',
+      'http://localhost:8000',
       'http://Frotend/src/api',
 
       process.env.FRONTEND_URL
@@ -63,7 +63,7 @@ app.use(morgan('combined'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Port
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 
 // Clé secrète JWT
 const JWT_SECRET = process.env.JWT_SECRET || 'alkherpay_super_secret_key_2024';
@@ -12884,7 +12884,131 @@ app.get('/api/commune/payments', authenticateToken, async (req, res) => {
     res.json([]);
   }
 });
+// ============================================================
+// ROUTES ÉPARGNE (SAVINGS) - POUR HISTORY
+// ============================================================
 
+/**
+ * GET /api/savings/transactions
+ * Historique des transactions d'épargne de l'utilisateur
+ */
+app.get('/api/savings/transactions', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('📋 GET /api/savings/transactions - user:', userId);
+
+    try {
+        // Vérifier si la table savings_transactions existe
+        const tables = await query(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='savings_transactions'
+        `);
+
+        if (tables.length === 0) {
+            console.log('⚠️ Table savings_transactions inexistante');
+            return res.json({
+                success: true,
+                transactions: [],
+                count: 0,
+                message: 'Aucune épargne'
+            });
+        }
+
+        // Récupérer les transactions
+        const transactions = await query(`
+            SELECT 
+                st.*,
+                s.name as savings_name,
+                s.type as savings_type
+            FROM savings_transactions st
+            LEFT JOIN savings s ON st.savings_id = s.id
+            WHERE st.user_id = ?
+            ORDER BY st.created_at DESC
+            LIMIT 100
+        `, [userId]).catch((err) => {
+            console.error('❌ Erreur SQL:', err);
+            return [];
+        });
+
+        console.log(`✅ ${transactions?.length || 0} transactions d'épargne`);
+
+        res.json({
+            success: true,
+            transactions: transactions || [],
+            count: transactions?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur /api/savings/transactions:', error);
+        res.json({
+            success: true,
+            transactions: [],
+            count: 0,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/savings/withdrawal-requests
+ * Demandes de retrait d'épargne de l'utilisateur
+ */
+app.get('/api/savings/withdrawal-requests', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('📋 GET /api/savings/withdrawal-requests - user:', userId);
+
+    try {
+        // Vérifier si la table savings_withdrawal_requests existe
+        const tables = await query(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='savings_withdrawal_requests'
+        `);
+
+        if (tables.length === 0) {
+            console.log('⚠️ Table savings_withdrawal_requests inexistante');
+            return res.json({
+                success: true,
+                requests: [],
+                count: 0,
+                message: 'Aucune demande retrait'
+            });
+        }
+
+        // Récupérer les demandes
+        const requests = await query(`
+            SELECT 
+                swr.*,
+                s.name as savings_name,
+                s.type as savings_type
+            FROM savings_withdrawal_requests swr
+            LEFT JOIN savings s ON swr.savings_id = s.id
+            WHERE swr.user_id = ?
+            ORDER BY swr.created_at DESC
+            LIMIT 100
+        `, [userId]).catch((err) => {
+            console.error('❌ Erreur SQL:', err);
+            return [];
+        });
+
+        console.log(`✅ ${requests?.length || 0} demandes de retrait`);
+
+        res.json({
+            success: true,
+            requests: requests || [],
+            count: requests?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur /api/savings/withdrawal-requests:', error);
+        res.json({
+            success: true,
+            requests: [],
+            count: 0,
+            error: error.message
+        });
+    }
+});
 
 // ============================================
 // ROUTE ADMIN - RÉINITIALISATION DE CLÉ PRIVÉE AVEC NOTIFICATIONS
@@ -27993,6 +28117,237 @@ app.post('/api/cards/verify', authenticateToken, async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// ============================================
+// ROUTES ÉPARGNE & FACTURES (compatibles History)
+// ============================================
+
+/**
+ * GET /api/savings/transactions
+ * Transactions d'épargne de l'utilisateur
+ */
+app.get('/api/savings/transactions', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        // Vérifier si la table existe
+        const tables = await query(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='savings_transactions'
+        `).catch(() => []);
+
+        if (tables.length === 0) {
+            return res.json({ success: true, data: [], count: 0 });
+        }
+
+        const transactions = await query(`
+            SELECT 
+                st.*,
+                s.name as savings_name,
+                s.type as savings_type
+            FROM savings_transactions st
+            LEFT JOIN savings s ON st.savings_id = s.id
+            WHERE st.user_id = ?
+            ORDER BY st.created_at DESC
+            LIMIT 100
+        `, [userId]).catch(() => []);
+
+        res.json({
+            success: true,
+            data: transactions || [],
+            count: transactions?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur savings/transactions:', error);
+        res.json({ success: true, data: [] });
+    }
+});
+
+/**
+ * GET /api/savings/withdrawal-requests
+ * Demandes de retrait d'épargne
+ */
+app.get('/api/savings/withdrawal-requests', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const tables = await query(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='savings_withdrawal_requests'
+        `).catch(() => []);
+
+        if (tables.length === 0) {
+            return res.json({ success: true, data: [], count: 0 });
+        }
+
+        const requests = await query(`
+            SELECT 
+                wr.*,
+                s.name as savings_name
+            FROM savings_withdrawal_requests wr
+            LEFT JOIN savings s ON wr.savings_id = s.id
+            WHERE wr.user_id = ?
+            ORDER BY wr.requested_at DESC
+            LIMIT 100
+        `, [userId]).catch(() => []);
+
+        res.json({
+            success: true,
+            data: requests || [],
+            count: requests?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur withdrawal-requests:', error);
+        res.json({ success: true, data: [] });
+    }
+});
+
+/**
+ * GET /api/bills/my-payments
+ * Historique des paiements de factures
+ */
+app.get('/api/bills/my-payments', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const tables = await query(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='bill_payments'
+        `).catch(() => []);
+
+        if (tables.length === 0) {
+            return res.json({ success: true, payments: [], count: 0 });
+        }
+
+        const payments = await query(`
+            SELECT 
+                bp.*,
+                bc.name as company_name,
+                bc.type as bill_type
+            FROM bill_payments bp
+            LEFT JOIN bill_companies bc ON bp.company_id = bc.id
+            WHERE bp.user_id = ?
+            ORDER BY bp.created_at DESC
+            LIMIT 100
+        `, [userId]).catch(() => []);
+
+        res.json({
+            success: true,
+            payments: payments || [],
+            count: payments?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur bills/my-payments:', error);
+        res.json({ success: true, payments: [] });
+    }
+});
+// ============================================
+// ROUTES ÉPARGNE
+// ============================================
+
+/**
+ * GET /api/savings/transactions
+ */
+app.get('/api/savings/transactions', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('📋 GET /api/savings/transactions - user:', userId);
+
+    try {
+        // Vérifier si la table existe
+        const tables = await query(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='savings_transactions'
+        `).catch(() => []);
+
+        if (tables.length === 0) {
+            console.log('ℹ️ Table savings_transactions inexistante');
+            return res.json({ 
+                success: true, 
+                data: [], 
+                count: 0,
+                message: 'Table non créée' 
+            });
+        }
+
+        const transactions = await query(`
+            SELECT 
+                st.*,
+                s.name as savings_name,
+                s.type as savings_type
+            FROM savings_transactions st
+            LEFT JOIN savings s ON st.savings_id = s.id
+            WHERE st.user_id = ?
+            ORDER BY st.created_at DESC
+            LIMIT 100
+        `, [userId]).catch(() => []);
+
+        console.log(`✅ ${transactions?.length || 0} transactions épargne`);
+
+        res.json({
+            success: true,
+            data: transactions || [],
+            count: transactions?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur savings/transactions:', error);
+        res.json({ success: true, data: [], count: 0 });
+    }
+});
+
+/**
+ * GET /api/savings/withdrawal-requests
+ */
+app.get('/api/savings/withdrawal-requests', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    console.log('📋 GET /api/savings/withdrawal-requests - user:', userId);
+
+    try {
+        const tables = await query(`
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='savings_withdrawal_requests'
+        `).catch(() => []);
+
+        if (tables.length === 0) {
+            console.log('ℹ️ Table savings_withdrawal_requests inexistante');
+            return res.json({ 
+                success: true, 
+                data: [], 
+                count: 0,
+                message: 'Table non créée' 
+            });
+        }
+
+        const requests = await query(`
+            SELECT 
+                wr.*,
+                s.name as savings_name
+            FROM savings_withdrawal_requests wr
+            LEFT JOIN savings s ON wr.savings_id = s.id
+            WHERE wr.user_id = ?
+            ORDER BY wr.requested_at DESC
+            LIMIT 100
+        `, [userId]).catch(() => []);
+
+        console.log(`✅ ${requests?.length || 0} demandes de retrait`);
+
+        res.json({
+            success: true,
+            data: requests || [],
+            count: requests?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur withdrawal-requests:', error);
+        res.json({ success: true, data: [], count: 0 });
+    }
+});
+
 /**
  * GET /api/admin/cards/fees
  * Voir tous les frais encaissés par la plateforme
@@ -28837,6 +29192,716 @@ app.get('/api/admin/cards/stats', authenticateToken, requireAdmin, async (req, r
             }
         });
     } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+
+// ============================================================
+// SYSTÈME DE TOKENISATION
+// ============================================================
+
+async function createTokenTables() {
+    try {
+        // Table des tokens
+        await run(`
+            CREATE TABLE IF NOT EXISTS tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                creator_id INTEGER NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                description TEXT,
+                logo TEXT,
+                category TEXT CHECK(category IN ('immobilier', 'entreprise', 'commerce', 'agriculture', 'autre')),
+                asset_type TEXT,
+                location TEXT,
+                total_parts INTEGER NOT NULL,
+                parts_available INTEGER NOT NULL,
+                price_per_part INTEGER NOT NULL,
+                initial_valuation INTEGER NOT NULL,
+                current_valuation INTEGER,
+                creation_fee INTEGER DEFAULT 0,
+                currency TEXT DEFAULT 'XAF',
+                status TEXT DEFAULT 'active' CHECK(status IN ('pending', 'active', 'suspended', 'sold_out')),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (creator_id) REFERENCES users(id)
+            )
+        `);
+
+        // Table des parts détenues par les users
+        await run(`
+            CREATE TABLE IF NOT EXISTS token_holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                parts_owned INTEGER DEFAULT 0,
+                parts_listed_for_sale INTEGER DEFAULT 0,
+                average_buy_price INTEGER DEFAULT 0,
+                total_invested INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(token_id, user_id),
+                FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        `);
+
+        // Table des ordres de vente (parts mises en vente)
+        await run(`
+            CREATE TABLE IF NOT EXISTS token_sell_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_id INTEGER NOT NULL,
+                seller_id INTEGER NOT NULL,
+                parts_count INTEGER NOT NULL,
+                price_per_part INTEGER NOT NULL,
+                parts_remaining INTEGER NOT NULL,
+                status TEXT DEFAULT 'active' CHECK(status IN ('active', 'partial', 'completed', 'cancelled')),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE,
+                FOREIGN KEY (seller_id) REFERENCES users(id)
+            )
+        `);
+
+        // Table des transactions (achat/vente de parts)
+        await run(`
+            CREATE TABLE IF NOT EXISTS token_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_id INTEGER NOT NULL,
+                buyer_id INTEGER,
+                seller_id INTEGER,
+                order_id INTEGER,
+                parts_count INTEGER NOT NULL,
+                price_per_part INTEGER NOT NULL,
+                total_amount INTEGER NOT NULL,
+                fee INTEGER DEFAULT 0,
+                transaction_type TEXT CHECK(transaction_type IN ('creation', 'primary_buy', 'secondary_buy', 'sell')),
+                status TEXT DEFAULT 'completed',
+                reference TEXT UNIQUE NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (token_id) REFERENCES tokens(id),
+                FOREIGN KEY (buyer_id) REFERENCES users(id),
+                FOREIGN KEY (seller_id) REFERENCES users(id)
+            )
+        `);
+
+        // Index
+        await run('CREATE INDEX IF NOT EXISTS idx_tokens_creator ON tokens(creator_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_tokens_status ON tokens(status)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_holdings_user ON token_holdings(user_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_holdings_token ON token_holdings(token_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_orders_token ON token_sell_orders(token_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_orders_seller ON token_sell_orders(seller_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_tx_token ON token_transactions(token_id)').catch(() => {});
+
+        console.log('✅ Tables tokenisation prêtes');
+    } catch (error) {
+        console.error('❌ Erreur createTokenTables:', error);
+    }
+}
+// ============================================================
+// CRÉATION DE TOKEN (1 seul par user)
+// ============================================================
+app.post('/api/tokens/create', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const {
+        name, symbol, description, logo, category, asset_type,
+        location, total_parts, price_per_part, initial_valuation
+    } = req.body;
+
+    console.log('🪙 Création token:', { userId, name, symbol, total_parts, price_per_part });
+
+    // Validation
+    const errors = [];
+    if (!name) errors.push('Nom requis');
+    if (!symbol) errors.push('Symbole requis');
+    if (!total_parts || total_parts < 10) errors.push('Minimum 10 parts');
+    if (!price_per_part || price_per_part < 100) errors.push('Prix minimum: 100 FCFA');
+
+    if (errors.length > 0) {
+        return res.status(400).json({ success: false, error: errors.join(', ') });
+    }
+
+    try {
+        // Vérifier qu'il n'a pas déjà un token
+        const existing = await get('SELECT id FROM tokens WHERE creator_id = ?', [userId]);
+        if (existing) {
+            return res.status(400).json({
+                success: false,
+                error: 'Vous avez déjà créé un token. Un utilisateur ne peut créer qu\'un seul token.'
+            });
+        }
+
+        // Frais de création (5% de la valorisation)
+        const valuation = initial_valuation || (total_parts * price_per_part);
+        const creationFee = Math.floor(valuation * 0.05);
+        const ADMIN_MAIN_ID = parseInt(process.env.ADMIN_MAIN_ID) || 1;
+
+        // Vérifier le solde du créateur
+        const wallet = await get('SELECT * FROM wallets WHERE user_id = ?', [userId]);
+        if (!wallet || wallet.balance < creationFee) {
+            return res.status(400).json({
+                success: false,
+                error: `Frais de création: ${creationFee.toLocaleString()} FCFA. Solde insuffisant: ${(wallet?.balance || 0).toLocaleString()} FCFA`
+            });
+        }
+
+        // Vérifier wallet admin
+        let adminWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [ADMIN_MAIN_ID]);
+        if (!adminWallet) {
+            await run('INSERT INTO wallets (user_id, balance) VALUES (?, 0)', [ADMIN_MAIN_ID]);
+        }
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // 1. Débiter les frais
+            await run(`
+                UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [creationFee, userId]);
+
+            // 2. Créditer l'admin
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [creationFee, ADMIN_MAIN_ID]);
+
+            // 3. Créer le token
+            const result = await run(`
+                INSERT INTO tokens (
+                    creator_id, name, symbol, description, logo, category,
+                    asset_type, location, total_parts, parts_available,
+                    price_per_part, initial_valuation, current_valuation, creation_fee, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+            `, [
+                userId, name, symbol.toUpperCase(), description || '', logo || '🪙',
+                category || 'autre', asset_type || '', location || '',
+                total_parts, total_parts, price_per_part, valuation, valuation, creationFee
+            ]);
+
+            const tokenId = result.lastID;
+
+            // 4. Créer le holding du créateur (il possède toutes les parts initialement)
+            await run(`
+                INSERT INTO token_holdings (
+                    token_id, user_id, parts_owned, average_buy_price, total_invested
+                ) VALUES (?, ?, ?, ?, ?)
+            `, [tokenId, userId, total_parts, price_per_part, valuation]);
+
+            // 5. Enregistrer la transaction de création
+            const reference = `TOKEN-CREATE-${Date.now()}`;
+            await run(`
+                INSERT INTO token_transactions (
+                    token_id, seller_id, parts_count, price_per_part,
+                    total_amount, fee, transaction_type, reference
+                ) VALUES (?, ?, ?, ?, ?, ?, 'creation', ?)
+            `, [tokenId, userId, total_parts, price_per_part, valuation, creationFee, reference]);
+
+            await run('COMMIT');
+
+            console.log('✅ Token créé:', { id: tokenId, name, symbol });
+
+            res.status(201).json({
+                success: true,
+                message: `Token ${symbol.toUpperCase()} créé avec succès !`,
+                token: {
+                    id: tokenId,
+                    name,
+                    symbol: symbol.toUpperCase(),
+                    total_parts,
+                    price_per_part,
+                    valuation,
+                    creation_fee: creationFee
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur création token:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================
+// LISTE DES TOKENS (MARCHÉ)
+// ============================================================
+app.get('/api/tokens', authenticateToken, async (req, res) => {
+    try {
+        const tokens = await query(`
+            SELECT 
+                t.*,
+                u.fullname as creator_name,
+                u.phone as creator_phone,
+                (SELECT COUNT(DISTINCT user_id) FROM token_holdings WHERE token_id = t.id AND parts_owned > 0) as holders_count
+            FROM tokens t
+            LEFT JOIN users u ON t.creator_id = u.id
+            WHERE t.status = 'active'
+            ORDER BY t.created_at DESC
+        `).catch(() => []);
+
+        // Ajouter les infos de holding pour l'user connecté
+        const userId = req.user.userId;
+        const enriched = [];
+        for (const t of tokens || []) {
+            const holding = await get(
+                'SELECT * FROM token_holdings WHERE token_id = ? AND user_id = ?',
+                [t.id, userId]
+            ).catch(() => null);
+
+            enriched.push({
+                ...t,
+                my_holding: holding || { parts_owned: 0, parts_listed_for_sale: 0 },
+                parts_sold: t.total_parts - t.parts_available,
+                percent_sold: Math.round(((t.total_parts - t.parts_available) / t.total_parts) * 100)
+            });
+        }
+
+        res.json({ success: true, tokens: enriched });
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message, tokens: [] });
+    }
+});
+
+// ============================================================
+// DÉTAIL D'UN TOKEN
+// ============================================================
+app.get('/api/tokens/:id', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const tokenId = req.params.id;
+
+    try {
+        const token = await get(`
+            SELECT t.*, u.fullname as creator_name, u.phone as creator_phone
+            FROM tokens t
+            LEFT JOIN users u ON t.creator_id = u.id
+            WHERE t.id = ?
+        `, [tokenId]);
+
+        if (!token) {
+            return res.status(404).json({ success: false, error: 'Token non trouvé' });
+        }
+
+        // Ordres de vente actifs
+        const sellOrders = await query(`
+            SELECT so.*, u.fullname as seller_name, u.phone as seller_phone
+            FROM token_sell_orders so
+            LEFT JOIN users u ON so.seller_id = u.id
+            WHERE so.token_id = ? AND so.status IN ('active', 'partial')
+            ORDER BY so.price_per_part ASC
+        `, [tokenId]);
+
+        // Mon holding
+        const myHolding = await get(
+            'SELECT * FROM token_holdings WHERE token_id = ? AND user_id = ?',
+            [tokenId, userId]
+        ).catch(() => null);
+
+        // Top détenteurs
+        const topHolders = await query(`
+            SELECT h.parts_owned, u.fullname, u.phone
+            FROM token_holdings h
+            LEFT JOIN users u ON h.user_id = u.id
+            WHERE h.token_id = ? AND h.parts_owned > 0
+            ORDER BY h.parts_owned DESC
+            LIMIT 10
+        `, [tokenId]);
+
+        // Historique transactions
+        const transactions = await query(`
+            SELECT tx.*, 
+                   ub.fullname as buyer_name,
+                   us.fullname as seller_name
+            FROM token_transactions tx
+            LEFT JOIN users ub ON tx.buyer_id = ub.id
+            LEFT JOIN users us ON tx.seller_id = us.id
+            WHERE tx.token_id = ?
+            ORDER BY tx.created_at DESC
+            LIMIT 30
+        `, [tokenId]);
+
+        res.json({
+            success: true,
+            token: {
+                ...token,
+                parts_sold: token.total_parts - token.parts_available,
+                percent_sold: Math.round(((token.total_parts - token.parts_available) / token.total_parts) * 100)
+            },
+            sell_orders: sellOrders || [],
+            my_holding: myHolding || { parts_owned: 0, parts_listed_for_sale: 0, total_invested: 0 },
+            top_holders: topHolders || [],
+            transactions: transactions || []
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================
+// ACHAT DE PARTS (marché primaire ET secondaire)
+// ============================================================
+app.post('/api/tokens/:id/buy', authenticateToken, async (req, res) => {
+    const buyerId = req.user.userId;
+    const tokenId = req.params.id;
+    const { parts_count, sell_order_id } = req.body;
+
+    console.log('🛒 Achat de parts:', { buyerId, tokenId, parts_count, sell_order_id });
+
+    if (!parts_count || parts_count < 1) {
+        return res.status(400).json({ success: false, error: 'Nombre de parts invalide' });
+    }
+
+    try {
+        const token = await get('SELECT * FROM tokens WHERE id = ?', [tokenId]);
+        if (!token) {
+            return res.status(404).json({ success: false, error: 'Token non trouvé' });
+        }
+        if (token.status !== 'active') {
+            return res.status(400).json({ success: false, error: `Token ${token.status}` });
+        }
+        if (token.creator_id === buyerId) {
+            return res.status(400).json({ success: false, error: 'Vous ne pouvez pas acheter vos propres parts' });
+        }
+
+        let sellerId, pricePerPart, orderId = null;
+
+        if (sell_order_id) {
+            // ACHAT SECONDAIRE (depuis un ordre de vente existant)
+            const order = await get(
+                'SELECT * FROM token_sell_orders WHERE id = ? AND status IN ("active", "partial")',
+                [sell_order_id]
+            );
+            if (!order) {
+                return res.status(404).json({ success: false, error: 'Ordre de vente non trouvé' });
+            }
+            if (order.parts_remaining < parts_count) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Seulement ${order.parts_remaining} parts disponibles`
+                });
+            }
+            if (order.seller_id === buyerId) {
+                return res.status(400).json({ success: false, error: 'Vous ne pouvez pas acheter vos propres parts' });
+            }
+            sellerId = order.seller_id;
+            pricePerPart = order.price_per_part;
+            orderId = order.id;
+        } else {
+            // ACHAT PRIMAIRE (depuis le créateur)
+            if (token.parts_available < parts_count) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Seulement ${token.parts_available} parts disponibles`
+                });
+            }
+            sellerId = token.creator_id;
+            pricePerPart = token.price_per_part;
+        }
+
+        const totalAmount = parts_count * pricePerPart;
+        const fee = Math.floor(totalAmount * 0.02); // 2% frais marché
+        const totalToPay = totalAmount + fee;
+        const ADMIN_MAIN_ID = parseInt(process.env.ADMIN_MAIN_ID) || 1;
+
+        // Vérifier solde acheteur
+        const buyerWallet = await get('SELECT * FROM wallets WHERE user_id = ?', [buyerId]);
+        if (!buyerWallet || buyerWallet.balance < totalToPay) {
+            return res.status(400).json({
+                success: false,
+                error: `Solde insuffisant. Requis: ${totalToPay.toLocaleString()} FCFA`
+            });
+        }
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // 1. Débiter l'acheteur
+            await run(`
+                UPDATE wallets SET balance = balance - ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [totalToPay, buyerId]);
+
+            // 2. Créditer le vendeur
+            await run(`
+                UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = ?
+            `, [totalAmount, sellerId]);
+
+            // 3. Créditer l'admin (frais)
+            if (fee > 0) {
+                await run(`
+                    UPDATE wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE user_id = ?
+                `, [fee, ADMIN_MAIN_ID]);
+            }
+
+            // 4. Mettre à jour le holding du vendeur
+            await run(`
+                UPDATE token_holdings 
+                SET parts_owned = parts_owned - ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE token_id = ? AND user_id = ?
+            `, [parts_count, tokenId, sellerId]);
+
+            // 5. Mettre à jour ou créer le holding de l'acheteur
+            const buyerHolding = await get(
+                'SELECT * FROM token_holdings WHERE token_id = ? AND user_id = ?',
+                [tokenId, buyerId]
+            );
+
+            if (buyerHolding) {
+                const newTotalInvested = buyerHolding.total_invested + totalAmount;
+                const newPartsOwned = buyerHolding.parts_owned + parts_count;
+                const newAvgPrice = Math.floor(newTotalInvested / newPartsOwned);
+
+                await run(`
+                    UPDATE token_holdings 
+                    SET parts_owned = ?, total_invested = ?, average_buy_price = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                `, [newPartsOwned, newTotalInvested, newAvgPrice, buyerHolding.id]);
+            } else {
+                await run(`
+                    INSERT INTO token_holdings (token_id, user_id, parts_owned, average_buy_price, total_invested)
+                    VALUES (?, ?, ?, ?, ?)
+                `, [tokenId, buyerId, parts_count, pricePerPart, totalAmount]);
+            }
+
+            // 6. Mettre à jour le token
+            if (orderId) {
+                // Achat secondaire : mettre à jour l'ordre
+                const order = await get('SELECT * FROM token_sell_orders WHERE id = ?', [orderId]);
+                const newRemaining = order.parts_remaining - parts_count;
+                const newStatus = newRemaining === 0 ? 'completed' : 'partial';
+                await run(`
+                    UPDATE token_sell_orders 
+                    SET parts_remaining = ?, status = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = ?
+                `, [newRemaining, newStatus, orderId]);
+
+                // Libérer les parts du vendeur
+                await run(`
+                    UPDATE token_holdings 
+                    SET parts_listed_for_sale = parts_listed_for_sale - ? 
+                    WHERE token_id = ? AND user_id = ?
+                `, [parts_count, tokenId, sellerId]);
+            } else {
+                // Achat primaire : réduire les parts disponibles
+                await run(`
+                    UPDATE tokens 
+                    SET parts_available = parts_available - ?, updated_at = CURRENT_TIMESTAMP,
+                        status = CASE WHEN parts_available - ? <= 0 THEN 'sold_out' ELSE status END
+                    WHERE id = ?
+                `, [parts_count, parts_count, tokenId]);
+            }
+
+            // 7. Enregistrer la transaction
+            const reference = `TOKEN-${orderId ? 'SEC' : 'PRIM'}-${Date.now()}`;
+            await run(`
+                INSERT INTO token_transactions (
+                    token_id, buyer_id, seller_id, order_id, parts_count,
+                    price_per_part, total_amount, fee, transaction_type, reference
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                tokenId, buyerId, sellerId, orderId, parts_count,
+                pricePerPart, totalAmount, fee,
+                orderId ? 'secondary_buy' : 'primary_buy', reference
+            ]);
+
+            // 8. Notifications
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '🪙 Achat de parts', ?, 'success', CURRENT_TIMESTAMP)
+            `, [buyerId, `Vous avez acheté ${parts_count} parts de ${token.name} pour ${totalAmount.toLocaleString()} FCFA`]).catch(() => {});
+
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '💰 Vente de parts', ?, 'success', CURRENT_TIMESTAMP)
+            `, [sellerId, `Vous avez vendu ${parts_count} parts de ${token.name} pour ${totalAmount.toLocaleString()} FCFA`]).catch(() => {});
+
+            await run('COMMIT');
+
+            res.json({
+                success: true,
+                message: `${parts_count} parts achetées avec succès !`,
+                purchase: {
+                    token_name: token.name,
+                    parts_count,
+                    price_per_part: pricePerPart,
+                    total_amount: totalAmount,
+                    fee,
+                    total_paid: totalToPay,
+                    reference
+                }
+            });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur achat:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================
+// METTRE EN VENTE DES PARTS (ordre de vente)
+// ============================================================
+app.post('/api/tokens/:id/sell', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const tokenId = req.params.id;
+    const { parts_count, price_per_part } = req.body;
+
+    console.log('💸 Mise en vente:', { userId, tokenId, parts_count, price_per_part });
+
+    if (!parts_count || parts_count < 1) {
+        return res.status(400).json({ success: false, error: 'Nombre de parts invalide' });
+    }
+    if (!price_per_part || price_per_part < 1) {
+        return res.status(400).json({ success: false, error: 'Prix invalide' });
+    }
+
+    try {
+        const token = await get('SELECT * FROM tokens WHERE id = ?', [tokenId]);
+        if (!token) {
+            return res.status(404).json({ success: false, error: 'Token non trouvé' });
+        }
+
+        const holding = await get(
+            'SELECT * FROM token_holdings WHERE token_id = ? AND user_id = ?',
+            [tokenId, userId]
+        );
+
+        if (!holding) {
+            return res.status(404).json({ success: false, error: 'Vous ne possédez pas ce token' });
+        }
+
+        const partsAvailable = holding.parts_owned - holding.parts_listed_for_sale;
+        if (partsAvailable < parts_count) {
+            return res.status(400).json({
+                success: false,
+                error: `Vous ne pouvez mettre en vente que ${partsAvailable} parts`
+            });
+        }
+
+        // Créer l'ordre de vente
+        const result = await run(`
+            INSERT INTO token_sell_orders (
+                token_id, seller_id, parts_count, price_per_part, parts_remaining, status
+            ) VALUES (?, ?, ?, ?, ?, 'active')
+        `, [tokenId, userId, parts_count, price_per_part, parts_count]);
+
+        // Réserver les parts
+        await run(`
+            UPDATE token_holdings 
+            SET parts_listed_for_sale = parts_listed_for_sale + ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        `, [parts_count, holding.id]);
+
+        res.json({
+            success: true,
+            message: `${parts_count} parts mises en vente à ${price_per_part.toLocaleString()} FCFA/part`,
+            order_id: result.lastID
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur mise en vente:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================
+// ANNULER UN ORDRE DE VENTE
+// ============================================================
+app.delete('/api/tokens/orders/:orderId', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { orderId } = req.params;
+
+    try {
+        const order = await get(
+            'SELECT * FROM token_sell_orders WHERE id = ? AND seller_id = ?',
+            [orderId, userId]
+        );
+
+        if (!order) {
+            return res.status(404).json({ success: false, error: 'Ordre non trouvé' });
+        }
+        if (order.status === 'completed') {
+            return res.status(400).json({ success: false, error: 'Ordre déjà complété' });
+        }
+
+        await run('BEGIN TRANSACTION');
+
+        // Libérer les parts
+        await run(`
+            UPDATE token_holdings 
+            SET parts_listed_for_sale = parts_listed_for_sale - ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE token_id = ? AND user_id = ?
+        `, [order.parts_remaining, order.token_id, userId]);
+
+        // Annuler l'ordre
+        await run(`
+            UPDATE token_sell_orders 
+            SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+        `, [orderId]);
+
+        await run('COMMIT');
+
+        res.json({ success: true, message: 'Ordre annulé' });
+
+    } catch (error) {
+        await run('ROLLBACK');
+        console.error('❌ Erreur:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ============================================================
+// MES TOKENS (créés + achetés)
+// ============================================================
+app.get('/api/tokens/my-tokens', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const created = await get(
+            'SELECT * FROM tokens WHERE creator_id = ?',
+            [userId]
+        ).catch(() => null);
+
+        const holdings = await query(`
+            SELECT h.*, t.name, t.symbol, t.logo, t.price_per_part, t.status, t.creator_id
+            FROM token_holdings h
+            LEFT JOIN tokens t ON h.token_id = t.id
+            WHERE h.user_id = ? AND h.parts_owned > 0
+            ORDER BY h.updated_at DESC
+        `, [userId]).catch(() => []);
+
+        const orders = await query(`
+            SELECT so.*, t.name, t.symbol, t.logo
+            FROM token_sell_orders so
+            LEFT JOIN tokens t ON so.token_id = t.id
+            WHERE so.seller_id = ? AND so.status IN ('active', 'partial')
+            ORDER BY so.created_at DESC
+        `, [userId]).catch(() => []);
+
+        res.json({
+            success: true,
+            my_token: created,
+            holdings: holdings || [],
+            sell_orders: orders || []
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

@@ -367,7 +367,7 @@ function VirtualCard({ user }) {
                 {/* RETOUR */}
                 <button
                     onClick={() => navigate('/dashboard')}
-                    className="mb-4 flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                    className="mb-4 flex items-center gap-2 px-4 py-2 bg border border-gray-300 rounded-lg hover:bg-gray-500 transition"
                 >
                     <FaArrowLeft /> Retour
                 </button>
@@ -585,7 +585,7 @@ function VirtualCard({ user }) {
                             )}
 
                             {/* INFOS SENSIBLES */}
-                            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                            <div className="bg-purple-700 rounded-2xl shadow-sm border border-gray-100 p-6">
                                 <div className="flex justify-between items-center mb-4">
                                     <h3 className="font-bold text-gray-800 flex items-center gap-2">
                                         <FaLock /> Informations sensibles
@@ -601,9 +601,9 @@ function VirtualCard({ user }) {
 
                                 <div className="space-y-3">
                                     <div>
-                                        <div className="text-xs text-gray-500 mb-1">Numéro complet</div>
+                                        <div className="text-xs text-gray-50 mb-1">Numéro complet</div>
                                         <div className="flex items-center gap-2">
-                                            <div className="flex-1 font-mono text-sm bg-gray-50 px-3 py-2 rounded-lg">
+                                            <div className="flex-1 font-mono text-sm bg-gray-500 px-3 py-2 rounded-lg">
                                                 {revealedData?.card_number || card.card_number_masked || '**** **** **** ****'}
                                             </div>
                                             {revealedData?.card_number && (
@@ -619,9 +619,9 @@ function VirtualCard({ user }) {
 
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
-                                            <div className="text-xs text-gray-500 mb-1">CVV</div>
+                                            <div className="text-xs text-gray-50 mb-1">CVV</div>
                                             <div className="flex items-center gap-2">
-                                                <div className="flex-1 font-mono text-sm bg-gray-50 px-3 py-2 rounded-lg text-center">
+                                                <div className="flex-1 font-mono text-sm bg-gray-500 px-3 py-2 rounded-lg text-center">
                                                     {revealedData?.cvv || '***'}
                                                 </div>
                                                 {revealedData?.cvv && (
@@ -635,7 +635,7 @@ function VirtualCard({ user }) {
                                             </div>
                                         </div>
                                         <div>
-                                            <div className="text-xs text-gray-500 mb-1">PIN</div>
+                                            <div className="text-xs text-gray-50 mb-1">PIN</div>
                                             <div className="flex items-center gap-2">
                                                 <div className={`flex-1 font-mono text-sm px-3 py-2 rounded-lg text-center font-bold ${
                                                     card.pin_set
@@ -659,14 +659,14 @@ function VirtualCard({ user }) {
 
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
-                                            <div className="text-xs text-gray-500 mb-1">Expiration</div>
-                                            <div className="font-mono text-sm bg-gray-50 px-3 py-2 rounded-lg text-center">
+                                            <div className="text-xs text-gray-50 mb-1">Expiration</div>
+                                            <div className="font-mono text-sm bg-gray-500 px-3 py-2 rounded-lg text-center">
                                                 {String(card.expiry_month).padStart(2, '0')}/{String(card.expiry_year).slice(-2)}
                                             </div>
                                         </div>
                                         <div>
                                             <div className="text-xs text-gray-500 mb-1">Type</div>
-                                            <div className="text-sm bg-gray-50 px-3 py-2 rounded-lg text-center capitalize">
+                                            <div className="text-sm bg-gray-500 px-3 py-2 rounded-lg text-center capitalize">
                                                 {card.card_type || 'classic'}
                                             </div>
                                         </div>
@@ -749,19 +749,19 @@ function VirtualCard({ user }) {
                 {/* HISTORIQUE */}
                 {card && card.status === 'active' && transactions.length > 0 && (
                     <div className="mt-8 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                        <div className="p-4 border-b border-gray-100 flex items-center gap-2">
-                            <FaHistory className="text-purple-600" />
+                        <div className="bg-purple-600 p-4 border-b border-gray-300 flex items-center gap-2">
+                            <FaHistory className="text-purple-60" />
                             <h3 className="font-bold text-gray-800">Mes transactions par carte</h3>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="w-full">
-                                <thead className="bg-gray-50">
+                                <thead className="bg-gray-500">
                                     <tr>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Reçu</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Montant</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Marchand</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-50 uppercase">Reçu</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-50 uppercase">Date</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-50 uppercase">Type</th>
+                                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-50 uppercase">Montant</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-50 uppercase">Marchand</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
@@ -780,7 +780,7 @@ function VirtualCard({ user }) {
                                                     <span className="text-green-600">💰 Paiement reçu</span>
                                                 )}
                                             </td>
-                                            <td className="px-4 py-3 text-right text-sm font-semibold">
+                                            <td className="px-4 py-3 text-right text-black text-sm font-semibold">
                                                 {Number(tx.total_amount || 0).toLocaleString()} FCFA
                                             </td>
                                             <td className="px-4 py-3 text-sm text-gray-600">
@@ -919,10 +919,10 @@ function VirtualCard({ user }) {
                 {/* MODAL DEMANDE CARTE */}
                 {showRequestModal && (
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-                        <div className="bg-white rounded-2xl max-w-md w-full">
+                        <div className="bg-purple-800 rounded-2xl max-w-md w-full">
                             <div className="p-6">
                                 <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                    <FaCreditCard className="text-purple-600" /> Demander une carte
+                                    <FaCreditCard className="text-yellow-300" /> Demander une carte
                                 </h3>
 
                                 <div className="bg-blue-50 rounded-xl p-4 mb-4 border border-blue-200">
@@ -932,7 +932,7 @@ function VirtualCard({ user }) {
                                     </p>
                                 </div>
 
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                <label className="block text-sm font-medium text-gray-70 mb-2">
                                     Raison (optionnel)
                                 </label>
                                 <textarea
@@ -946,7 +946,7 @@ function VirtualCard({ user }) {
                                 <div className="flex gap-3 mt-6">
                                     <button
                                         onClick={() => setShowRequestModal(false)}
-                                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-500"
                                     >
                                         Annuler
                                     </button>
@@ -970,7 +970,7 @@ function VirtualCard({ user }) {
                 {/* MODAL PIN */}
                 {showPinModal && (
                     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-                        <div className="bg-white rounded-2xl max-w-md w-full">
+                        <div className="bg-purple-700 rounded-2xl max-w-md w-full">
                             <div className="p-6">
                                 <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
                                     <FaKey className="text-purple-600" />

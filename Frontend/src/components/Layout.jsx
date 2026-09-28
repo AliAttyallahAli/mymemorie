@@ -4,7 +4,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom'
 import {
     FaHome, FaExchangeAlt, FaHistory, FaUser, FaSignOutAlt, FaComments,
     FaBullhorn, FaCog, FaBell, FaWallet, FaQrcode, FaTimes, FaUsers, FaHandHoldingUsd,
-    FaCheckCircle, FaExclamationTriangle, FaInfoCircle, FaUserCircle,
+    FaCheckCircle, FaExclamationTriangle, FaInfoCircle, FaUserCircle, FaCoins,
     FaMoneyBillWave, FaPhone, FaEnvelope, FaMapMarkerAlt, FaFacebook,
     FaWhatsapp, FaTelegram, FaGlobe, FaArrowDown, FaArrowUp, FaPiggyBank,
     FaStore, FaReceipt, FaIdCard, FaClock, FaShare, FaChartLine, FaUserShield,
@@ -143,6 +143,14 @@ function Layout({ user, children, socket }) {
             label: 'Agence',
             subLabel: 'Gestion voyages',
             roles: ['agent', 'admin']
+        },
+        // ✅ Menu MARCHÉ TOKENS
+        { 
+             path: '/token-market', 
+            icon: FaCoins, 
+            label: 'Marché Tokens', 
+            subLabel: 'Investir',
+            roles: ['user', 'agent', 'admin', 'commune'] 
         },
 
         { path: '/history', icon: FaHistory, label: 'Historique' },

@@ -16,16 +16,28 @@ import 'jspdf-autotable';
 
 const API_URL = '';
 
+// ✅ Extraction robuste
+const extractArray = (data, ...keys) => {
+    if (Array.isArray(data)) return data;
+    for (const key of keys) {
+        if (data && Array.isArray(data[key])) return data[key];
+    }
+    if (data && Array.isArray(data.data)) return data.data;
+    return [];
+};
+
 const TaxManagement = ({ user }) => {
     const navigate = useNavigate();
     const [loading, setLoading] = useState(true);
     const [payments, setPayments] = useState([]);
     const [filteredPayments, setFilteredPayments] = useState([]);
     const [communeInfo, setCommuneInfo] = useState(null);
-    const [accessDenied, setAccessDenied] = useState(false); // ✅ NOUVEAU
+    const [walletBalance, setWalletBalance] = useState(0); // ✅ NOUVEAU
+    const [accessDenied, setAccessDenied] = useState(false);
     const [stats, setStats] = useState({
         total: 0,
         total_amount: 0,
+        total_fees: 0,
         today: 0,
         this_month: 0,
         pending: 0
@@ -39,10 +51,12 @@ const TaxManagement = ({ user }) => {
     const [currentPage, setCurrentPage] = useState(1);
     const [itemsPerPage] = useState(10);
     const [printing, setPrinting] = useState(false);
-    const [generatingReport, setGeneratingReport] = useState(false);
+
+    const getToken = () => localStorage.getItem('accessToken') || localStorage.getItem('token');
+    const getAuthHeaders = () => ({ headers: { Authorization: `Bearer ${getToken()}` } });
 
     // ============================================
-    // VÉRIFICATION ROLE - AVERTISSEMENT
+    // VÉRIFICATION ROLE
     // ============================================
     useEffect(() => {
         if (!user) {
@@ -74,45 +88,115 @@ const TaxManagement = ({ user }) => {
     }, [accessDenied, navigate]);
 
     // ============================================
-    // CHARGEMENT
+    // ✅ RÉCUPÉRER LE SOLDE DE LA COMMUNE
+    // ============================================
+    const fetchCommuneBalance = useCallback(async () => {
+        try {
+            const response = await axios.get(
+                `${API_URL}/api/commune/info`,
+                getAuthHeaders()
+            );
+
+            console.log('💰 Info commune:', response.data);
+
+            if (response.data.success && response.data.commune) {
+                const commune = response.data.commune;
+                const stats = response.data.stats || {};
+
+                // ✅ Mettre à jour communeInfo
+                setCommuneInfo(commune);
+
+                // ✅ Mettre à jour le solde du wallet
+                const balance = Number(commune.wallet_balance) || 0;
+                setWalletBalance(balance);
+                console.log('✅ Solde commune:', balance, 'FCFA');
+
+                // ✅ Enrichir les stats
+                setStats(prev => ({
+                    ...prev,
+                    total: stats.total || prev.total,
+                    total_amount: stats.total_amount || prev.total_amount,
+                    total_fees: stats.total_fees || prev.total_fees,
+                    today: stats.today_amount || prev.today,
+                    this_month: stats.month_amount || prev.this_month,
+                    pending: stats.pending || prev.pending
+                }));
+            }
+        } catch (error) {
+            console.error('❌ Erreur solde commune:', error);
+
+            // Fallback : récupérer le solde via /api/wallet/balance
+            try {
+                const walletRes = await axios.get(
+                    `${API_URL}/api/wallet/balance`,
+                    getAuthHeaders()
+                );
+                const balance = walletRes.data?.balance 
+                             || walletRes.data?.wallet?.balance 
+                             || 0;
+                setWalletBalance(Number(balance) || 0);
+                console.log('✅ Solde (fallback):', balance);
+            } catch (e) {
+                console.error('❌ Fallback échoué:', e);
+            }
+        }
+    }, []);
+
+    // ============================================
+    // CHARGEMENT DES PAIEMENTS
     // ============================================
     const fetchPayments = useCallback(async () => {
         setLoading(true);
         try {
-            const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
+            const response = await axios.get(
+                `${API_URL}/api/commune/payments`,
+                getAuthHeaders()
+            );
 
-            const response = await axios.get(`${API_URL}/api/commune/payments`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            console.log('📥 Réponse paiements:', response.data);
 
-            console.log('📥 Réponse:', response.data);
+            const data = extractArray(response.data, 'payments', 'data');
+            console.log('✅ Paiements extraits:', data.length);
 
-            const data = response.data.payments || [];
             setPayments(data);
             setFilteredPayments(data);
-            setCommuneInfo(response.data.commune || null);
 
+            // ✅ Mettre à jour communeInfo si présent dans la réponse
+            if (response.data?.commune) {
+                setCommuneInfo(response.data.commune);
+            }
+
+            // ✅ Statistiques
             const today = new Date().toISOString().split('T')[0];
             const firstDayOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
 
-            const totalAmount = data.reduce((sum, p) => sum + (p.amount || 0), 0);
+            const totalAmount = data.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const totalFees = data.reduce((sum, p) => sum + (Number(p.fee) || 0), 0);
             const todayAmount = data
-                .filter(p => p.payment_date?.startsWith(today))
-                .reduce((sum, p) => sum + (p.amount || 0), 0);
+                .filter(p => {
+                    const d = p.payment_date || p.created_at || '';
+                    return d.startsWith(today);
+                })
+                .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
             const monthAmount = data
-                .filter(p => p.payment_date?.startsWith(firstDayOfMonth))
-                .reduce((sum, p) => sum + (p.amount || 0), 0);
+                .filter(p => {
+                    const d = p.payment_date || p.created_at || '';
+                    return d.startsWith(firstDayOfMonth);
+                })
+                .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
-            setStats({
+            setStats(prev => ({
+                ...prev,
                 total: data.length,
                 total_amount: totalAmount,
+                total_fees: totalFees,
                 today: todayAmount,
                 this_month: monthAmount,
-                pending: data.filter(p => p.payment_status === 'pending').length
-            });
+                pending: data.filter(p => (p.payment_status || p.status) === 'pending').length
+            }));
 
         } catch (error) {
-            console.error('❌ Erreur:', error);
+            console.error('❌ Erreur chargement paiements:', error);
             toast.error('Erreur lors du chargement des paiements');
             setPayments([]);
             setFilteredPayments([]);
@@ -121,11 +205,15 @@ const TaxManagement = ({ user }) => {
         }
     }, []);
 
+    // ============================================
+    // EFFET : CHARGER TOUT AU DÉMARRAGE
+    // ============================================
     useEffect(() => {
         if (!accessDenied && user) {
             fetchPayments();
+            fetchCommuneBalance(); // ✅ NOUVEAU
         }
-    }, [fetchPayments, accessDenied, user]);
+    }, [fetchPayments, fetchCommuneBalance, accessDenied, user]);
 
     // ============================================
     // FILTRES
@@ -143,11 +231,14 @@ const TaxManagement = ({ user }) => {
         }
 
         if (filterStatus !== 'all') {
-            filtered = filtered.filter(p => p.payment_status === filterStatus);
+            filtered = filtered.filter(p => (p.payment_status || p.status) === filterStatus);
         }
 
         if (startDate) {
-            filtered = filtered.filter(p => p.payment_date?.startsWith(startDate));
+            filtered = filtered.filter(p => {
+                const d = p.payment_date || p.created_at || '';
+                return d.startsWith(startDate);
+            });
         }
 
         setFilteredPayments(filtered);
@@ -159,7 +250,9 @@ const TaxManagement = ({ user }) => {
     // ============================================
     const indexOfLastItem = currentPage * itemsPerPage;
     const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-    const currentItems = filteredPayments.slice(indexOfFirstItem, indexOfLastItem);
+    const currentItems = Array.isArray(filteredPayments)
+        ? filteredPayments.slice(indexOfFirstItem, indexOfLastItem)
+        : [];
     const totalPages = Math.ceil(filteredPayments.length / itemsPerPage);
 
     // ============================================
@@ -194,55 +287,6 @@ const TaxManagement = ({ user }) => {
     };
 
     // ============================================
-    // IMPRESSION HTML
-    // ============================================
-    const printReceipt = async (payment) => {
-        setPrinting(true);
-        try {
-            const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
-
-            const response = await axios.get(
-                `${API_URL}/api/tax/receipt/${payment.receipt_number}/print`,
-                {
-                    headers: { Authorization: `Bearer ${token}` },
-                    responseType: 'text'
-                }
-            );
-
-            const htmlBlob = new Blob([response.data], { type: 'text/html;charset=utf-8' });
-            const blobUrl = URL.createObjectURL(htmlBlob);
-
-            let opened = false;
-
-            try {
-                const newWindow = window.open(blobUrl, '_blank');
-                if (newWindow && !newWindow.closed) {
-                    opened = true;
-                    toast.success('📄 Reçu ouvert');
-                }
-            } catch (e) { console.warn('window.open échoué'); }
-
-            if (!opened) {
-                const link = document.createElement('a');
-                link.href = blobUrl;
-                link.download = `recu-${payment.receipt_number}.html`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                toast.success('📥 Fichier téléchargé');
-            }
-
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-
-        } catch (error) {
-            console.error('❌ Erreur impression:', error);
-            toast.error('Impossible de générer le reçu');
-        } finally {
-            setPrinting(false);
-        }
-    };
-
-    // ============================================
     // PDF REÇU INDIVIDUEL
     // ============================================
     const generatePDF = (payment = null) => {
@@ -253,6 +297,7 @@ const TaxManagement = ({ user }) => {
             const doc = new jsPDF();
             const pageWidth = doc.internal.pageSize.getWidth();
             const centerX = pageWidth / 2;
+            const date = data.payment_date || data.created_at;
 
             doc.setFillColor(124, 58, 237);
             doc.rect(0, 0, pageWidth, 42, 'F');
@@ -269,7 +314,7 @@ const TaxManagement = ({ user }) => {
             doc.setFontSize(10);
             doc.setTextColor(100, 100, 100);
             doc.text(`N° Reçu: ${data.receipt_number || 'N/A'}`, centerX, 50, { align: 'center' });
-            doc.text(`Date: ${formatDate(data.payment_date)}`, centerX, 56, { align: 'center' });
+            doc.text(`Date: ${formatDate(date)}`, centerX, 56, { align: 'center' });
 
             doc.setFillColor(22, 163, 74);
             doc.roundedRect(centerX - 20, 60, 40, 8, 2, 2, 'F');
@@ -298,15 +343,6 @@ const TaxManagement = ({ user }) => {
             doc.setTextColor(30, 30, 30);
             doc.setFont('helvetica', 'bold');
             doc.text(data.office_name || data.commune_name || communeInfo?.name || 'N/A', 60, y);
-
-            if (communeInfo?.province) {
-                y += 6;
-                doc.setFont('helvetica', 'normal');
-                doc.setTextColor(80, 80, 80);
-                doc.text('Province:', 25, y);
-                doc.setTextColor(30, 30, 30);
-                doc.text(communeInfo.province, 60, y);
-            }
 
             y += 10;
             doc.setDrawColor(124, 58, 237);
@@ -434,8 +470,6 @@ const TaxManagement = ({ user }) => {
     // RAPPORT COMPLET
     // ============================================
     const generateFullReport = () => {
-        setGeneratingReport(true);
-
         try {
             const doc = new jsPDF('landscape');
             const pageWidth = doc.internal.pageSize.getWidth();
@@ -454,9 +488,7 @@ const TaxManagement = ({ user }) => {
             doc.setFont('helvetica', 'normal');
             doc.text(
                 `${communeInfo?.name || 'Commune'}${communeInfo?.province ? ` - ${communeInfo.province}` : ''}`,
-                centerX,
-                24,
-                { align: 'center' }
+                centerX, 24, { align: 'center' }
             );
 
             doc.setFontSize(9);
@@ -472,10 +504,10 @@ const TaxManagement = ({ user }) => {
             y += 6;
 
             const statsCards = [
+                { label: 'Solde wallet', value: `${walletBalance.toLocaleString()} F`, color: [22, 163, 74] },
                 { label: 'Total paiements', value: String(stats.total), color: [59, 130, 246] },
-                { label: 'Montant total', value: `${stats.total_amount.toLocaleString()} F`, color: [22, 163, 74] },
-                { label: "Aujourd'hui", value: `${stats.today.toLocaleString()} F`, color: [234, 88, 12] },
-                { label: 'Ce mois', value: `${stats.this_month.toLocaleString()} F`, color: [124, 58, 237] }
+                { label: 'Montant total', value: `${stats.total_amount.toLocaleString()} F`, color: [234, 88, 12] },
+                { label: 'Frais totaux', value: `${stats.total_fees.toLocaleString()} F`, color: [124, 58, 237] }
             ];
 
             const cardWidth = (pageWidth - 40) / 4;
@@ -484,16 +516,13 @@ const TaxManagement = ({ user }) => {
 
             statsCards.forEach((card, index) => {
                 const x = 15 + (cardWidth + cardGap) * index;
-
                 doc.setFillColor(...card.color);
                 doc.roundedRect(x, y, cardWidth - 2, cardHeight, 3, 3, 'F');
-
                 doc.setFontSize(8);
                 doc.setTextColor(255, 255, 255);
                 doc.setFont('helvetica', 'normal');
                 doc.text(card.label, x + 4, y + 7);
-
-                doc.setFontSize(13);
+                doc.setFontSize(12);
                 doc.setFont('helvetica', 'bold');
                 doc.text(card.value, x + 4, y + 16);
             });
@@ -510,34 +539,25 @@ const TaxManagement = ({ user }) => {
             const tableData = filteredPayments.map((p, index) => [
                 index + 1,
                 p.receipt_number || 'N/A',
-                formatDateShort(p.payment_date),
+                formatDateShort(p.payment_date || p.created_at),
                 p.taxpayer_name || 'N/A',
                 p.taxpayer_phone || 'N/A',
                 p.tax_type || 'N/A',
                 `${Number(p.amount || 0).toLocaleString()} F`,
                 `${Number(p.fee || 0).toLocaleString()} F`,
                 `${Number(p.total_amount || 0).toLocaleString()} F`,
-                p.payment_status === 'paid' || !p.payment_status ? 'Payé' : p.payment_status
+                (p.payment_status || p.status) === 'paid' || !p.payment_status ? 'Payé' : (p.payment_status || p.status)
             ]);
 
-            const totalAmount = filteredPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-            const totalFees = filteredPayments.reduce((sum, p) => sum + (p.fee || 0), 0);
-            const grandTotal = filteredPayments.reduce((sum, p) => sum + (p.total_amount || 0), 0);
+            const totalAmount = filteredPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const totalFees = filteredPayments.reduce((sum, p) => sum + (Number(p.fee) || 0), 0);
+            const grandTotal = filteredPayments.reduce((sum, p) => sum + (Number(p.total_amount) || 0), 0);
 
             doc.autoTable({
                 startY: y,
-                head: [[
-                    '#', 'N° Reçu', 'Date', 'Contribuable', 'Téléphone',
-                    'Type', 'Montant', 'Frais', 'Total', 'Statut'
-                ]],
+                head: [['#', 'N° Reçu', 'Date', 'Contribuable', 'Téléphone', 'Type', 'Montant', 'Frais', 'Total', 'Statut']],
                 body: tableData,
-                foot: [[
-                    '', '', '', '', '', 'TOTAL',
-                    `${totalAmount.toLocaleString()} F`,
-                    `${totalFees.toLocaleString()} F`,
-                    `${grandTotal.toLocaleString()} F`,
-                    ''
-                ]],
+                foot: [['', '', '', '', '', 'TOTAL', `${totalAmount.toLocaleString()} F`, `${totalFees.toLocaleString()} F`, `${grandTotal.toLocaleString()} F`, '']],
                 theme: 'striped',
                 headStyles: {
                     fillColor: [30, 58, 95],
@@ -570,7 +590,6 @@ const TaxManagement = ({ user }) => {
                 didDrawPage: () => {
                     const pageCount = doc.internal.getNumberOfPages();
                     const currentPage = doc.internal.getCurrentPageInfo().pageNumber;
-
                     doc.setFontSize(8);
                     doc.setTextColor(150, 150, 150);
                     doc.setFont('helvetica', 'italic');
@@ -588,8 +607,50 @@ const TaxManagement = ({ user }) => {
         } catch (error) {
             console.error('❌ Erreur rapport:', error);
             toast.error('Erreur génération rapport');
+        }
+    };
+
+    // ============================================
+    // IMPRESSION HTML
+    // ============================================
+    const printReceipt = async (payment) => {
+        setPrinting(true);
+        try {
+            const response = await axios.get(
+                `${API_URL}/api/tax/receipt/${payment.receipt_number}/print`,
+                { ...getAuthHeaders(), responseType: 'text' }
+            );
+
+            const htmlBlob = new Blob([response.data], { type: 'text/html;charset=utf-8' });
+            const blobUrl = URL.createObjectURL(htmlBlob);
+
+            let opened = false;
+
+            try {
+                const newWindow = window.open(blobUrl, '_blank');
+                if (newWindow && !newWindow.closed) {
+                    opened = true;
+                    toast.success('📄 Reçu ouvert');
+                }
+            } catch (e) { console.warn('window.open échoué'); }
+
+            if (!opened) {
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = `recu-${payment.receipt_number}.html`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                toast.success('📥 Fichier téléchargé');
+            }
+
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+
+        } catch (error) {
+            console.error('❌ Erreur impression:', error);
+            toast.error('Impossible de générer le reçu');
         } finally {
-            setGeneratingReport(false);
+            setPrinting(false);
         }
     };
 
@@ -600,7 +661,7 @@ const TaxManagement = ({ user }) => {
         const text = `
 REÇU DE PAIEMENT DE TAXE
 N°: ${payment.receipt_number}
-Date: ${formatDate(payment.payment_date)}
+Date: ${formatDate(payment.payment_date || payment.created_at)}
 
 Contribuable: ${payment.taxpayer_name}
 Téléphone: ${payment.taxpayer_phone}
@@ -613,7 +674,7 @@ Frais: ${(payment.fee || 0).toLocaleString()} FCFA
 Total: ${(payment.total_amount || 0).toLocaleString()} FCFA
 
 CashPays - Paiement sécurisé
-    `;
+        `;
 
         try {
             if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -644,10 +705,10 @@ N°: ${payment.receipt_number}
 Contribuable: ${payment.taxpayer_name}
 Montant: ${(payment.amount || 0).toLocaleString()} FCFA
 Type: ${payment.tax_type}
-Date: ${formatDateShort(payment.payment_date)}
+Date: ${formatDateShort(payment.payment_date || payment.created_at)}
 
 CashPays - Paiement sécurisé
-    `;
+        `;
 
         const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
         window.open(url, '_blank');
@@ -657,29 +718,25 @@ CashPays - Paiement sécurisé
     const handleGoHome = () => navigate('/');
 
     // ============================================
-    // ✅ ÉCRAN D'ACCÈS REFUSÉ
+    // ÉCRAN D'ACCÈS REFUSÉ
     // ============================================
     if (accessDenied) {
         return (
             <div className="min-h-screen bg-gradient-to-br from-red-900 via-red-800 to-orange-900 flex items-center justify-center p-4">
                 <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8 text-center">
 
-                    {/* Icône */}
                     <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6 animate-pulse">
                         <FaBan className="text-red-600 text-5xl" />
                     </div>
 
-                    {/* Titre */}
                     <h1 className="text-3xl font-bold text-gray-800 mb-3">
                         Accès refusé
                     </h1>
 
-                    {/* Message */}
                     <p className="text-gray-600 mb-2">
                         Cette page est réservée aux <strong className="text-red-600">communes</strong>.
                     </p>
 
-                    {/* Rôle actuel */}
                     <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
                         <p className="text-sm text-red-800">
                             <strong>Votre rôle actuel :</strong>{' '}
@@ -692,7 +749,6 @@ CashPays - Paiement sécurisé
                         </p>
                     </div>
 
-                    {/* Info */}
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-left">
                         <p className="text-xs text-blue-800 mb-2">
                             <strong>💡 Que faire ?</strong>
@@ -704,7 +760,6 @@ CashPays - Paiement sécurisé
                         </ul>
                     </div>
 
-                    {/* Boutons */}
                     <div className="flex gap-3">
                         <button
                             onClick={() => navigate('/dashboard')}
@@ -720,7 +775,6 @@ CashPays - Paiement sécurisé
                         </button>
                     </div>
 
-                    {/* Compte à rebours */}
                     <p className="text-xs text-gray-400 mt-4">
                         Redirection automatique dans 8 secondes...
                     </p>
@@ -743,11 +797,14 @@ CashPays - Paiement sécurisé
         );
     }
 
+    // ============================================
+    // RENDU PRINCIPAL
+    // ============================================
     return (
         <div className="min-h-screen bg-blue-900/70">
             <div className="container mx-auto px-4 py-6 max-w-7xl">
 
-                {/* Header navigation */}
+                {/* Header */}
                 <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
                     <div className="flex items-center gap-3">
                         <button
@@ -776,12 +833,6 @@ CashPays - Paiement sécurisé
                                 year: 'numeric'
                             })}
                         </span>
-                        <div className="bg-white rounded-xl px-4 py-2 shadow-md">
-                            <p className="text-xs text-gray-400">Total collecté</p>
-                            <p className="font-bold text-yellow-600">
-                                {stats.total_amount.toLocaleString()} FCFA
-                            </p>
-                        </div>
                     </div>
                 </div>
 
@@ -804,24 +855,46 @@ CashPays - Paiement sécurisé
                                 <p className="text-blue-300 text-xs mt-1">📞 {communeInfo.phone}</p>
                             )}
                         </div>
-                        <div className="flex gap-3">
+
+                        {/* ✅ SOLDE DU WALLET */}
+                        <div className="flex items-center gap-4">
+                            <div className="bg-white/20 backdrop-blur rounded-xl px-5 py-3">
+                                <div className="flex items-center gap-2 text-xs text-blue-100 mb-1">
+                                    <FaWallet /> Solde du wallet
+                                </div>
+                                <div className="text-2xl font-bold text-white">
+                                    {walletBalance.toLocaleString()} FCFA
+                                </div>
+                                {communeInfo?.user_id && (
+                                    <div className="text-[10px] text-blue-200 mt-1">
+                                        User ID: #{communeInfo.user_id}
+                                    </div>
+                                )}
+                            </div>
+
                             <button
                                 onClick={generateFullReport}
-                                disabled={generatingReport || filteredPayments.length === 0}
+                                disabled={filteredPayments.length === 0}
                                 className="bg-white/20 backdrop-blur-sm px-4 py-2 rounded-xl hover:bg-white/30 transition flex items-center gap-2 disabled:opacity-50"
                             >
-                                {generatingReport ? (
-                                    <><FaSpinner className="animate-spin" /> Génération...</>
-                                ) : (
-                                    <><FaDownload /> Rapport complet</>
-                                )}
+                                <FaDownload /> Rapport complet
                             </button>
                         </div>
                     </div>
                 </div>
 
                 {/* Statistiques */}
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+                    {/* SOLDE WALLET */}
+                    <div className="bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl shadow-md p-4 text-white">
+                        <p className="text-xs opacity-90 flex items-center gap-1">
+                            <FaWallet /> Solde wallet
+                        </p>
+                        <p className="text-2xl font-bold">
+                            {walletBalance.toLocaleString()} FCFA
+                        </p>
+                    </div>
+
                     <div className="bg-white rounded-xl shadow-md p-4">
                         <p className="text-xs text-gray-400">Total paiements</p>
                         <p className="text-2xl font-bold text-gray-800">{stats.total}</p>
@@ -861,7 +934,7 @@ CashPays - Paiement sécurisé
                                     placeholder="Rechercher par nom, téléphone, reçu..."
                                     value={searchTerm}
                                     onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500 focus:border-transparent outline-none transition"
+                                    className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-yellow-500"
                                 />
                             </div>
                         </div>
@@ -897,14 +970,10 @@ CashPays - Paiement sécurisé
 
                         <button
                             onClick={generateFullReport}
-                            disabled={generatingReport || filteredPayments.length === 0}
+                            disabled={filteredPayments.length === 0}
                             className="ml-auto px-4 py-2 bg-gradient-to-r from-yellow-500 to-yellow-600 text-white rounded-xl hover:shadow-lg transition flex items-center gap-2 disabled:opacity-50"
                         >
-                            {generatingReport ? (
-                                <><FaSpinner className="animate-spin" /> Génération...</>
-                            ) : (
-                                <><FaDownload /> Exporter PDF</>
-                            )}
+                            <FaDownload /> Exporter PDF
                         </button>
                     </div>
                 </div>
@@ -941,84 +1010,87 @@ CashPays - Paiement sécurisé
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
-                                    {currentItems.map((payment, index) => (
-                                        <tr key={payment.id || index} className="hover:bg-gray-50 transition">
-                                            <td className="px-4 py-3">
-                                                <span className="font-mono text-sm text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                                                    {payment.receipt_number?.slice(0, 12)}...
-                                                </span>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                <p className="font-semibold text-gray-800">{payment.taxpayer_name}</p>
-                                                <p className="text-xs text-gray-500">{payment.taxpayer_phone}</p>
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                <span className="text-black">{payment.tax_type || 'N/A'}</span>
-                                            </td>
-                                            <td className="px-4 py-3 text-right">
-                                                <span className="font-bold text-gray-800">
-                                                    {payment.amount?.toLocaleString() || 0} FCFA
-                                                </span>
-                                            </td>
-                                            <td className="px-4 py-3 text-sm text-gray-500">
-                                                {formatDateShort(payment.payment_date)}
-                                            </td>
-                                            <td className="px-4 py-3 text-center">
-                                                <span className={`px-2 py-1 rounded-full text-xs ${
-                                                    payment.payment_status === 'paid' || !payment.payment_status
-                                                        ? 'bg-green-100 text-green-700'
-                                                        : payment.payment_status === 'pending'
-                                                        ? 'bg-yellow-100 text-yellow-700'
-                                                        : 'bg-red-100 text-red-700'
-                                                }`}>
-                                                    {payment.payment_status === 'paid' || !payment.payment_status
-                                                        ? '✅ Payé'
-                                                        : payment.payment_status}
-                                                </span>
-                                            </td>
-                                            <td className="px-4 py-3 text-center">
-                                                <div className="flex items-center justify-center gap-2">
-                                                    <button
-                                                        onClick={() => {
-                                                            setSelectedPayment(payment);
-                                                            setShowDetailModal(true);
-                                                        }}
-                                                        className="text-blue-600 hover:text-blue-700 bg-blue-50 px-2 py-1 rounded-lg hover:bg-blue-100 transition text-sm"
-                                                        title="Voir détails"
-                                                    >
-                                                        <FaEye />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => generatePDF(payment)}
-                                                        className="text-yellow-600 hover:text-yellow-700 bg-yellow-50 px-2 py-1 rounded-lg hover:bg-yellow-100 transition text-sm"
-                                                        title="Télécharger PDF"
-                                                    >
-                                                        <FaPrint />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => copyReceipt(payment)}
-                                                        className="text-gray-600 hover:text-gray-700 bg-gray-50 px-2 py-1 rounded-lg hover:bg-gray-100 transition text-sm"
-                                                        title="Copier"
-                                                    >
-                                                        <FaCopy />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => shareWhatsApp(payment)}
-                                                        className="text-green-600 hover:text-green-700 bg-green-50 px-2 py-1 rounded-lg hover:bg-green-100 transition text-sm"
-                                                        title="Partager WhatsApp"
-                                                    >
-                                                        <FaWhatsapp />
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
+                                    {Array.isArray(currentItems) && currentItems.map((payment, index) => {
+                                        const status = payment.payment_status || payment.status || 'paid';
+                                        const date = payment.payment_date || payment.created_at;
+
+                                        return (
+                                            <tr key={payment.id || index} className="hover:bg-gray-50 transition">
+                                                <td className="px-4 py-3">
+                                                    <span className="font-mono text-sm text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                                                        {payment.receipt_number?.slice(0, 12)}...
+                                                    </span>
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    <p className="font-semibold text-gray-800">{payment.taxpayer_name}</p>
+                                                    <p className="text-xs text-gray-500">{payment.taxpayer_phone}</p>
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    <span className="text-black">{payment.tax_type || 'N/A'}</span>
+                                                </td>
+                                                <td className="px-4 py-3 text-right">
+                                                    <span className="font-bold text-gray-800">
+                                                        {Number(payment.amount || 0).toLocaleString()} FCFA
+                                                    </span>
+                                                </td>
+                                                <td className="px-4 py-3 text-sm text-gray-500">
+                                                    {formatDateShort(date)}
+                                                </td>
+                                                <td className="px-4 py-3 text-center">
+                                                    <span className={`px-2 py-1 rounded-full text-xs ${
+                                                        status === 'paid'
+                                                            ? 'bg-green-100 text-green-700'
+                                                            : status === 'pending'
+                                                            ? 'bg-yellow-100 text-yellow-700'
+                                                            : 'bg-red-100 text-red-700'
+                                                    }`}>
+                                                        {status === 'paid' ? '✅ Payé' : status}
+                                                    </span>
+                                                </td>
+                                                <td className="px-4 py-3 text-center">
+                                                    <div className="flex items-center justify-center gap-2">
+                                                        <button
+                                                            onClick={() => {
+                                                                setSelectedPayment(payment);
+                                                                setShowDetailModal(true);
+                                                            }}
+                                                            className="text-blue-600 hover:text-blue-700 bg-blue-50 px-2 py-1 rounded-lg hover:bg-blue-100 transition text-sm"
+                                                            title="Voir détails"
+                                                        >
+                                                            <FaEye />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => generatePDF(payment)}
+                                                            className="text-yellow-600 hover:text-yellow-700 bg-yellow-50 px-2 py-1 rounded-lg hover:bg-yellow-100 transition text-sm"
+                                                            title="Télécharger PDF"
+                                                        >
+                                                            <FaPrint />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => copyReceipt(payment)}
+                                                            className="text-gray-600 hover:text-gray-700 bg-gray-50 px-2 py-1 rounded-lg hover:bg-gray-100 transition text-sm"
+                                                            title="Copier"
+                                                        >
+                                                            <FaCopy />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => shareWhatsApp(payment)}
+                                                            className="text-green-600 hover:text-green-700 bg-green-50 px-2 py-1 rounded-lg hover:bg-green-100 transition text-sm"
+                                                            title="Partager WhatsApp"
+                                                        >
+                                                            <FaWhatsapp />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
                                 </tbody>
                                 <tfoot className="bg-gray-50">
                                     <tr>
                                         <td colSpan="3" className="px-4 py-3 font-bold text-right">Total:</td>
                                         <td className="px-4 py-3 font-bold text-green-600 text-right">
-                                            {currentItems.reduce((sum, p) => sum + (p.amount || 0), 0).toLocaleString()} FCFA
+                                            {currentItems.reduce((sum, p) => sum + (Number(p.amount) || 0), 0).toLocaleString()} FCFA
                                         </td>
                                         <td colSpan="3"></td>
                                     </tr>
@@ -1077,7 +1149,7 @@ CashPays - Paiement sécurisé
                             <div className="text-center mb-6">
                                 <div className="text-5xl mb-2">✅</div>
                                 <p className="text-2xl font-bold text-green-600">
-                                    {selectedPayment.amount?.toLocaleString() || 0} FCFA
+                                    {Number(selectedPayment.amount || 0).toLocaleString()} FCFA
                                 </p>
                                 <p className="text-sm text-gray-500 font-mono">
                                     Reçu: {selectedPayment.receipt_number}
@@ -1103,21 +1175,27 @@ CashPays - Paiement sécurisé
                                 </div>
                                 <div className="p-3 bg-gray-50 rounded-xl">
                                     <p className="text-xs text-black">Montant</p>
-                                    <p className="text-black font-semibold">{selectedPayment.amount?.toLocaleString()} FCFA</p>
+                                    <p className="text-black font-semibold">
+                                        {Number(selectedPayment.amount || 0).toLocaleString()} FCFA
+                                    </p>
                                 </div>
                                 <div className="p-3 bg-gray-50 rounded-xl">
                                     <p className="text-xs text-black">Frais</p>
-                                    <p className="text-black font-semibold">{selectedPayment.fee?.toLocaleString()} FCFA</p>
+                                    <p className="text-black font-semibold">
+                                        {Number(selectedPayment.fee || 0).toLocaleString()} FCFA
+                                    </p>
                                 </div>
                                 <div className="p-3 bg-gray-50 rounded-xl col-span-2">
                                     <p className="text-xs text-black">Total payé</p>
                                     <p className="font-bold text-green-600 text-lg">
-                                        {selectedPayment.total_amount?.toLocaleString()} FCFA
+                                        {Number(selectedPayment.total_amount || 0).toLocaleString()} FCFA
                                     </p>
                                 </div>
                                 <div className="p-3 bg-gray-50 rounded-xl col-span-2">
                                     <p className="text-xs text-black">Date</p>
-                                    <p className="text-black font-semibold">{formatDate(selectedPayment.payment_date)}</p>
+                                    <p className="text-black font-semibold">
+                                        {formatDate(selectedPayment.payment_date || selectedPayment.created_at)}
+                                    </p>
                                 </div>
                                 {selectedPayment.taxpayer_address && (
                                     <div className="p-3 bg-gray-50 rounded-xl col-span-2">
@@ -1139,11 +1217,7 @@ CashPays - Paiement sécurisé
                                     disabled={printing}
                                     className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 text-white py-2.5 rounded-xl hover:shadow-lg transition flex items-center justify-center gap-2 disabled:opacity-50"
                                 >
-                                    {printing ? (
-                                        <><FaSpinner className="animate-spin" /> Génération...</>
-                                    ) : (
-                                        <><FaPrint /> Impression</>
-                                    )}
+                                    {printing ? <><FaSpinner className="animate-spin" /> Génération...</> : <><FaPrint /> Impression</>}
                                 </button>
                                 <button
                                     onClick={() => copyReceipt(selectedPayment)}

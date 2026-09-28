@@ -451,7 +451,7 @@ function CardPayment({ user }) {
                                     />
                                 </div>
                                 {amount && parseInt(amount) >= 100 && (
-                                    <div className="text-xs text-gray-500 mt-2 space-y-1">
+                                    <div className="text-xs text-gray-50 mt-2 space-y-1">
                                         <div>Frais de service (1%): <strong>{Math.floor(parseInt(amount) * 0.01).toLocaleString()} FCFA</strong></div>
                                         <div>Total à débiter: <strong className="text-purple-700">{parseInt(amount).toLocaleString()} FCFA</strong></div>
                                     </div>

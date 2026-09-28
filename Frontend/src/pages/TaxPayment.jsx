@@ -318,7 +318,7 @@ const TaxPayment = ({ user }) => {
 
                     {/* ÉTAPE 1 */}
                     {step === 1 && (
-                        <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+                        <div className="bg-gradient-to-br from-purple-700 via-purple-800 to-indigo-900 rounded-2xl shadow-xl overflow-hidden">
                             <div className="bg-gradient-to-r from-[#0a192f] to-[#1e3a5f] p-6">
                                 <h2 className="text-xl font-bold text-white">Sélectionnez votre commune</h2>
                                 <p className="text-blue-300 text-sm">Choisissez la commune où vous payez vos impôts</p>
@@ -367,7 +367,7 @@ const TaxPayment = ({ user }) => {
 
                     {/* ÉTAPE 2 */}
                     {step === 2 && selectedCommune && (
-                        <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+                        <div className="bg-gradient-to-br from-purple-700 via-purple-800 to-indigo-900 rounded-2xl shadow-xl overflow-hidden">
                             <div className="bg-gradient-to-r from-[#0a192f] to-[#1e3a5f] p-6">
                                 <h2 className="text-xl font-bold text-white">Paiement à {selectedCommune.name}</h2>
                                 <p className="text-blue-300 text-sm">Remplissez les informations</p>
@@ -385,7 +385,7 @@ const TaxPayment = ({ user }) => {
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">
                                                 Nom complet <span className="text-red-500">*</span>
                                             </label>
                                             <div className="relative">
@@ -402,7 +402,7 @@ const TaxPayment = ({ user }) => {
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">
                                                 Téléphone <span className="text-red-500">*</span>
                                             </label>
                                             <div className="relative">
@@ -420,7 +420,7 @@ const TaxPayment = ({ user }) => {
                                         </div>
 
                                         <div className="md:col-span-2">
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">Adresse</label>
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">Adresse</label>
                                             <div className="relative">
                                                 <FaMapMarkerAlt className="absolute left-3 top-4 text-gray-400" />
                                                 <textarea
@@ -443,14 +443,14 @@ const TaxPayment = ({ user }) => {
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">
                                                 Type de taxe <span className="text-red-500">*</span>
                                             </label>
                                             <select
                                                 name="taxType"
                                                 value={formData.taxType}
                                                 onChange={handleTaxTypeChange}
-                                                className="w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-blue-500"
+                                                className="bg-purple-600 w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-blue-500"
                                             >
                                                 {taxTypes.map(type => (
                                                     <option key={type.id} value={type.name}>
@@ -458,13 +458,13 @@ const TaxPayment = ({ user }) => {
                                                     </option>
                                                 ))}
                                             </select>
-                                            <p className="text-xs text-gray-500 mt-1">
+                                            <p className="text-xs text-gray-50 mt-1">
                                                 {taxTypes.find(t => t.name === formData.taxType)?.description}
                                             </p>
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">
                                                 Période <span className="text-red-500">*</span>
                                             </label>
                                             <div className="relative">
@@ -481,7 +481,7 @@ const TaxPayment = ({ user }) => {
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">
                                                 Montant (FCFA) <span className="text-red-500">*</span>
                                             </label>
                                             <div className="relative">
@@ -499,7 +499,7 @@ const TaxPayment = ({ user }) => {
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">
                                                 Numéro de commerce
                                             </label>
                                             <input
@@ -513,7 +513,7 @@ const TaxPayment = ({ user }) => {
                                         </div>
 
                                         <div className="md:col-span-2">
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            <label className="block text-sm font-medium text-gray-70 mb-2">
                                                 Adresse de la propriété
                                             </label>
                                             <textarea
@@ -531,7 +531,7 @@ const TaxPayment = ({ user }) => {
                                         <button
                                             type="button"
                                             onClick={() => setStep(1)}
-                                            className="px-6 py-3 border-2 border-gray-300 rounded-xl hover:bg-gray-50 transition font-medium"
+                                            className="px-6 py-3 border-2 border-gray-300 rounded-xl hover:bg-gray-500 transition font-medium"
                                         >
                                             Retour
                                         </button>
@@ -554,7 +554,7 @@ const TaxPayment = ({ user }) => {
 
                     {/* ÉTAPE 3 */}
                     {step === 3 && paymentReceipt && (
-                        <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
+                        <div className="bg-purple-600 rounded-2xl shadow-xl overflow-hidden">
                             <div className="bg-gradient-to-r from-green-600 to-green-700 p-6 text-center">
                                 <FaCheckCircle className="w-20 h-20 mx-auto text-white mb-4" />
                                 <h2 className="text-2xl font-bold text-white">Paiement réussi !</h2>
@@ -562,35 +562,35 @@ const TaxPayment = ({ user }) => {
                             </div>
                             <div className="p-6">
                                 <div className="space-y-4">
-                                    <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-xl">
+                                    <div className="grid grid-cols-2 gap-4 p-4 bg-gray-500 rounded-xl">
                                         <div>
-                                            <p className="text-xs text-gray-500">N° Reçu</p>
+                                            <p className="text-xs text-gray-50">N° Reçu</p>
                                             <p className="font-mono text-sm font-semibold">{paymentReceipt.receipt_number}</p>
                                         </div>
                                         <div>
-                                            <p className="text-xs text-gray-500">Date</p>
+                                            <p className="text-xs text-gray-50">Date</p>
                                             <p className="font-medium">{new Date().toLocaleString('fr-FR')}</p>
                                         </div>
                                     </div>
 
                                     <div className="border-l-4 border-blue-700 pl-4">
-                                        <p className="text-sm text-gray-500">Commune</p>
+                                        <p className="text-sm text-gray-50">Commune</p>
                                         <p className="font-bold text-lg">{selectedCommune?.name}</p>
                                     </div>
 
-                                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-200">
-                                        <p className="text-sm text-gray-500 mb-2">Contribuable</p>
+                                    <div className="bg-blue-500 p-4 rounded-xl border border-blue-200">
+                                        <p className="text-sm text-gray-50 mb-2">Contribuable</p>
                                         <p className="font-medium">{formData.taxpayerName}</p>
-                                        <p className="text-sm text-gray-600">{formData.taxpayerPhone}</p>
+                                        <p className="text-sm text-gray-50">{formData.taxpayerPhone}</p>
                                     </div>
 
-                                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-xl border border-blue-200">
+                                    <div className="bg-gradient-to-r from-blue-500 to-50 p-4 rounded-xl border border-blue-200">
                                         <div className="flex justify-between text-sm mb-2">
-                                            <span className="text-gray-600">Type de taxe:</span>
-                                            <span className="font-medium">{formData.taxType}</span>
+                                            <span className="text-gray-60">Type de taxe:</span>
+                                            <span className="text-white font-medium">{formData.taxType}</span>
                                         </div>
                                         <div className="flex justify-between text-sm mb-2">
-                                            <span className="text-gray-600">Période:</span>
+                                            <span className="text-gray-60">Période:</span>
                                             <span className="font-medium">{formData.taxPeriod}</span>
                                         </div>
                                         <div className="border-t border-blue-200 pt-2 mt-2">
@@ -604,11 +604,11 @@ const TaxPayment = ({ user }) => {
                                     </div>
                                 </div>
                             </div>
-                            <div className="p-6 bg-gray-50 flex gap-4 border-t">
+                            <div className="p-6 bg-gray-500 flex gap-4 border-t">
                                 <button
                                     onClick={handlePrintReceipt}
                                     disabled={printing}
-                                    className="flex-1 border-2 border-gray-300 py-3 rounded-xl hover:bg-gray-100 transition font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                                    className="flex-1 border-2 border-gray-300 py-3 rounded-xl hover:bg-gray-600 transition font-medium flex items-center justify-center gap-2 disabled:opacity-50"
                                 >
                                     {printing ? <><FaSpinner className="animate-spin" /> Génération...</> : <><FaPrint /> Imprimer</>}
                                 </button>
