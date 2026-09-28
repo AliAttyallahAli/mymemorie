@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",
+    "@vitejs/plugin-react": "^6.1.1",
     "@zxing/library": "^0.23.0",
     "axios": "^1.16.1",
     "chart.js": "^4.5.1",
@@ -36,7 +37,6 @@
     "scan": "^0.9.0",
     "socket.io-client": "^4.8.3",
     "vite": "^8.3.1",
-    "@vitejs/plugin-react": "^6.1.1",
     "vite-plugin-svgr": "^3.0.1"
   },
   "devDependencies": {
@@ -51,6 +51,5 @@
     "globals": "^17.5.0",
     "postcss": "^8.5.10",
     "tailwindcss": "^4.2.4"
-    
   }
 }
