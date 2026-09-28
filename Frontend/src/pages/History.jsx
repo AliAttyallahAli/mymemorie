@@ -16,9 +16,31 @@ import {
 } from 'react-icons/fa'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import QRCode from 'qrcode'
 import Layout from '../components/Layout'
 
 const API_URL = ''
+
+// ============================================
+// ✅ GÉNÉRATEUR DE QR CODE EN BASE64
+// ============================================
+const generateQRBase64 = async (text, size = 200) => {
+    try {
+        const dataUrl = await QRCode.toDataURL(text, {
+            width: size,
+            margin: 1,
+            color: {
+                dark: '#1e3a5f',
+                light: '#ffffff'
+            },
+            errorCorrectionLevel: 'M'
+        });
+        return dataUrl;
+    } catch (error) {
+        console.error('❌ Erreur QR:', error);
+        return null;
+    }
+};
 
 function History({ user }) {
     const [transactions, setTransactions] = useState([])
@@ -398,14 +420,21 @@ function History({ user }) {
     }
 
     // ============================================
-    // 📄 REÇU PDF MODERNE ET PROFESSIONNEL
+    // 📄 REÇU PDF A4 AVEC QR CODE
     // ============================================
     const generateReceiptPDF = async (item) => {
         try {
-            const doc = new jsPDF()
-            const pageWidth = doc.internal.pageSize.getWidth()
-            const pageHeight = doc.internal.pageSize.getHeight()
+            const doc = new jsPDF({
+                orientation: 'portrait',
+                unit: 'mm',
+                format: 'a4'
+            });
+
+            const pageWidth = doc.internal.pageSize.getWidth()   // 210 mm
+            const pageHeight = doc.internal.pageSize.getHeight() // 297 mm
             const centerX = pageWidth / 2
+            const margin = 15
+            const contentWidth = pageWidth - (margin * 2)
 
             // ============================================
             // COULEURS PAR TYPE
@@ -419,9 +448,10 @@ function History({ user }) {
                 savings: { primary: [139, 92, 246], secondary: [167, 139, 250], light: [245, 243, 255] },
                 savings_request: { primary: [202, 138, 4], secondary: [250, 204, 21], light: [254, 249, 195] },
                 transaction: { primary: [30, 58, 95], secondary: [59, 130, 246], light: [219, 234, 254] }
-            }
+            };
 
-            const theme = themeColors[item.item_type] || themeColors.transaction
+            const theme = themeColors[item.item_type] || themeColors.transaction;
+
             const typeTitles = {
                 card: 'REÇU DE PAIEMENT',
                 tax: 'REÇU OFFICIEL D\'IMPÔT',
@@ -431,362 +461,395 @@ function History({ user }) {
                 savings: 'REÇU D\'ÉPARGNE',
                 savings_request: 'DEMANDE DE RETRAIT',
                 transaction: 'REÇU DE TRANSACTION'
-            }
+            };
 
             // ============================================
-            // BANDEAU SUPÉRIEUR DÉCORATIF
+            // 1. BANDEAU SUPÉRIEUR (y: 0 → 40 mm)
             // ============================================
-            doc.setFillColor(...theme.primary)
-            doc.rect(0, 0, pageWidth, 50, 'F')
+            doc.setFillColor(...theme.primary);
+            doc.rect(0, 0, pageWidth, 40, 'F');
 
-            // Motif décoratif
-            doc.setFillColor(...theme.secondary)
-            doc.circle(pageWidth - 20, 15, 35, 'F')
-            doc.circle(20, 40, 25, 'F')
+            doc.setFillColor(...theme.secondary);
+            doc.circle(pageWidth - 25, 10, 30, 'F');
+            doc.circle(25, 35, 22, 'F');
 
-            // Logo et titre
-            doc.setTextColor(255, 255, 255)
-            doc.setFontSize(28)
-            doc.setFont('helvetica', 'bold')
-            doc.text('AlkherPay', 20, 25)
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(24);
+            doc.setFont('helvetica', 'bold');
+            doc.text('AlkherPay', margin, 20);
 
-            doc.setFontSize(9)
-            doc.setFont('helvetica', 'normal')
-            doc.text('Plateforme de paiement sécurisée', 20, 33)
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'normal');
+            doc.text('Plateforme de paiement sécurisée', margin, 27);
 
-            doc.setFontSize(10)
-            doc.setFont('helvetica', 'bold')
-            doc.text(typeTitles[item.item_type] || 'REÇU', pageWidth - 20, 22, { align: 'right' })
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'bold');
+            doc.text(typeTitles[item.item_type] || 'REÇU', pageWidth - margin, 18, { align: 'right' });
 
-            doc.setFontSize(8)
-            doc.setFont('helvetica', 'normal')
-            doc.text(`N° ${item.reference}`, pageWidth - 20, 30, { align: 'right' })
-            doc.text(`Émis le ${new Date().toLocaleString('fr-FR')}`, pageWidth - 20, 36, { align: 'right' })
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`N° ${item.reference}`, pageWidth - margin, 24, { align: 'right' });
+            doc.text(`Émis le ${new Date().toLocaleString('fr-FR')}`, pageWidth - margin, 29, { align: 'right' });
 
             // ============================================
-            // BADGE STATUT
+            // 2. BADGE STATUT (y: 46 mm)
             // ============================================
             const statusColors = {
-                completed: [22, 163, 74],
-                paid: [22, 163, 74],
-                approved: [22, 163, 74],
-                active: [22, 163, 74],
-                pending: [234, 179, 8],
-                processing: [59, 130, 246],
-                failed: [220, 38, 38],
-                rejected: [220, 38, 38],
-                cancelled: [107, 114, 128],
-                disbursed: [59, 130, 246],
-                repaid: [22, 163, 74]
-            }
-            const statusColor = statusColors[item.status] || [107, 114, 128]
+                completed: [22, 163, 74], paid: [22, 163, 74], approved: [22, 163, 74],
+                active: [22, 163, 74], pending: [234, 179, 8], processing: [59, 130, 246],
+                failed: [220, 38, 38], rejected: [220, 38, 38], cancelled: [107, 114, 128],
+                disbursed: [59, 130, 246], repaid: [22, 163, 74]
+            };
+            const statusColor = statusColors[item.status] || [107, 114, 128];
 
-            doc.setFillColor(...statusColor)
-            doc.roundedRect(pageWidth - 70, 58, 50, 12, 6, 6, 'F')
+            doc.setFillColor(...statusColor);
+            doc.roundedRect(pageWidth - 60, 44, 45, 8, 4, 4, 'F');
 
-            doc.setTextColor(255, 255, 255)
-            doc.setFontSize(8)
-            doc.setFont('helvetica', 'bold')
-            doc.text((item.status_label || 'COMPLÉTÉ').toUpperCase(), pageWidth - 45, 65.5, { align: 'center' })
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'bold');
+            doc.text((item.status_label || 'COMPLÉTÉ').toUpperCase(), pageWidth - 37.5, 49.5, { align: 'center' });
 
             // ============================================
-            // MONTANT PRINCIPAL (Carte centrale)
+            // 3. MONTANT PRINCIPAL (y: 58 → 82 mm)
             // ============================================
-            doc.setFillColor(...theme.light)
-            doc.roundedRect(15, 78, pageWidth - 30, 35, 4, 4, 'F')
+            doc.setFillColor(...theme.light);
+            doc.roundedRect(margin, 58, contentWidth, 24, 3, 3, 'F');
 
-            doc.setDrawColor(...theme.primary)
-            doc.setLineWidth(0.5)
-            doc.roundedRect(15, 78, pageWidth - 30, 35, 4, 4, 'S')
+            doc.setDrawColor(...theme.primary);
+            doc.setLineWidth(0.5);
+            doc.roundedRect(margin, 58, contentWidth, 24, 3, 3, 'S');
 
-            doc.setTextColor(100, 100, 100)
-            doc.setFontSize(9)
-            doc.setFont('helvetica', 'normal')
-            doc.text('MONTANT DE LA TRANSACTION', 22, 87)
+            doc.setTextColor(100, 100, 100);
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'normal');
+            doc.text('MONTANT DE LA TRANSACTION', margin + 5, 65);
 
-            doc.setTextColor(...theme.primary)
-            doc.setFontSize(24)
-            doc.setFont('helvetica', 'bold')
-            doc.text(formatAmount(item.amount), 22, 103)
+            doc.setTextColor(...theme.primary);
+            doc.setFontSize(20);
+            doc.setFont('helvetica', 'bold');
+            doc.text(formatAmount(item.amount), margin + 5, 77);
 
             // ============================================
-            // SECTION DÉTAILS
+            // 4. SECTION INFORMATIONS
             // ============================================
-            let y = 125
+            let y = 90;
 
-            // Titre section
-            doc.setFillColor(...theme.primary)
-            doc.rect(15, y - 5, 3, 8, 'F')
-            doc.setTextColor(...theme.primary)
-            doc.setFontSize(11)
-            doc.setFont('helvetica', 'bold')
-            doc.text('INFORMATIONS DE LA TRANSACTION', 22, y)
-            y += 10
+            doc.setFillColor(...theme.primary);
+            doc.rect(margin, y - 4, 2, 6, 'F');
+            doc.setTextColor(...theme.primary);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.text('INFORMATIONS GÉNÉRALES', margin + 5, y);
+            y += 8;
 
-            // Helper pour les lignes
             const addRow = (label, value) => {
-                doc.setFillColor(250, 250, 250)
-                doc.roundedRect(15, y - 4, pageWidth - 30, 8, 1, 1, 'F')
+                doc.setFillColor(250, 250, 250);
+                doc.roundedRect(margin, y - 3.5, contentWidth, 7, 1, 1, 'F');
 
-                doc.setTextColor(120, 120, 120)
-                doc.setFontSize(9)
-                doc.setFont('helvetica', 'normal')
-                doc.text(label, 20, y)
+                doc.setTextColor(120, 120, 120);
+                doc.setFontSize(8);
+                doc.setFont('helvetica', 'normal');
+                doc.text(label, margin + 4, y);
 
-                doc.setTextColor(30, 30, 30)
-                doc.setFontSize(9)
-                doc.setFont('helvetica', 'bold')
-                const valueStr = String(value || '-').substring(0, 45)
-                doc.text(valueStr, pageWidth - 20, y, { align: 'right' })
-                y += 10
-            }
+                doc.setTextColor(30, 30, 30);
+                doc.setFontSize(8);
+                doc.setFont('helvetica', 'bold');
+                const valueStr = String(value || '-').substring(0, 60);
+                doc.text(valueStr, pageWidth - margin - 4, y, { align: 'right' });
+                y += 9;
+            };
 
-            addRow('Référence', item.reference)
-            addRow('Date & Heure', formatDateTime(item.created_at))
-            addRow('Type', item.type_label?.toUpperCase())
-            addRow('Statut', item.status_label?.toUpperCase())
+            addRow('Référence', item.reference);
+            addRow('Date & Heure', formatDateTime(item.created_at));
+            addRow('Type', item.type_label?.toUpperCase());
+            addRow('Statut', item.status_label?.toUpperCase());
 
             // ============================================
-            // DÉTAILS SPÉCIFIQUES PAR TYPE
+            // 5. DÉTAILS SPÉCIFIQUES
             // ============================================
-            y += 5
+            y += 3;
 
             if (item.item_type === 'card') {
-                doc.setFillColor(...theme.primary)
-                doc.rect(15, y - 5, 3, 8, 'F')
-                doc.setTextColor(...theme.primary)
-                doc.setFontSize(11)
-                doc.setFont('helvetica', 'bold')
-                doc.text('DÉTAILS DE LA CARTE', 22, y)
-                y += 10
+                doc.setFillColor(...theme.primary);
+                doc.rect(margin, y - 4, 2, 6, 'F');
+                doc.setTextColor(...theme.primary);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'bold');
+                doc.text('DÉTAILS DE LA CARTE', margin + 5, y);
+                y += 8;
 
-                addRow('Carte', `**** **** **** ${item.card_last4 || 'N/A'}`)
-                if (item.merchant_name) addRow('Marchand', item.merchant_name)
-                if (item.merchant_id) addRow('ID Marchand', `#${item.merchant_id}`)
-                if (item.card_holder_name) addRow('Titulaire', item.card_holder_name)
+                addRow('Carte', `**** **** **** ${item.card_last4 || 'N/A'}`);
+                if (item.merchant_name) addRow('Marchand', item.merchant_name);
+                if (item.merchant_id) addRow('ID Marchand', `#${item.merchant_id}`);
+                if (item.card_holder_name) addRow('Titulaire', item.card_holder_name);
             }
 
             if (item.item_type === 'tax') {
-                doc.setFillColor(...theme.primary)
-                doc.rect(15, y - 5, 3, 8, 'F')
-                doc.setTextColor(...theme.primary)
-                doc.setFontSize(11)
-                doc.setFont('helvetica', 'bold')
-                doc.text('DÉTAILS DE LA TAXE', 22, y)
-                y += 10
+                doc.setFillColor(...theme.primary);
+                doc.rect(margin, y - 4, 2, 6, 'F');
+                doc.setTextColor(...theme.primary);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'bold');
+                doc.text('DÉTAILS DE LA TAXE', margin + 5, y);
+                y += 8;
 
-                if (item.tax_type) addRow('Type de taxe', item.tax_type)
-                if (item.tax_period) addRow('Période', item.tax_period)
-                if (item.commune_name) addRow('Commune', item.commune_name)
-                if (item.taxpayer_name) addRow('Contribuable', item.taxpayer_name)
-                if (item.taxpayer_phone) addRow('Téléphone', item.taxpayer_phone)
+                if (item.tax_type) addRow('Type de taxe', item.tax_type);
+                if (item.tax_period) addRow('Période', item.tax_period);
+                if (item.commune_name) addRow('Commune', item.commune_name);
+                if (item.taxpayer_name) addRow('Contribuable', item.taxpayer_name);
+                if (item.taxpayer_phone) addRow('Téléphone', item.taxpayer_phone);
             }
 
             if (item.item_type === 'loan') {
-                doc.setFillColor(...theme.primary)
-                doc.rect(15, y - 5, 3, 8, 'F')
-                doc.setTextColor(...theme.primary)
-                doc.setFontSize(11)
-                doc.setFont('helvetica', 'bold')
-                doc.text('DÉTAILS DU PRÊT', 22, y)
-                y += 10
+                doc.setFillColor(...theme.primary);
+                doc.rect(margin, y - 4, 2, 6, 'F');
+                doc.setTextColor(...theme.primary);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'bold');
+                doc.text('DÉTAILS DU PRÊT', margin + 5, y);
+                y += 8;
 
-                if (item.loan_type) addRow('Type de prêt', item.loan_type)
-                if (item.interest_rate) addRow('Taux d\'intérêt', `${item.interest_rate}%`)
-                if (item.duration_months) addRow('Durée', `${item.duration_months} mois`)
-                if (item.monthly_payment) addRow('Mensualité', formatAmount(item.monthly_payment))
-                if (item.amount_paid) addRow('Montant payé', formatAmount(item.amount_paid))
-                if (item.remaining_amount) addRow('Reste à payer', formatAmount(item.remaining_amount))
+                if (item.loan_type) addRow('Type de prêt', item.loan_type);
+                if (item.interest_rate) addRow('Taux d\'intérêt', `${item.interest_rate}%`);
+                if (item.duration_months) addRow('Durée', `${item.duration_months} mois`);
+                if (item.monthly_payment) addRow('Mensualité', formatAmount(item.monthly_payment));
+                if (item.amount_paid) addRow('Montant payé', formatAmount(item.amount_paid));
+                if (item.remaining_amount) addRow('Reste à payer', formatAmount(item.remaining_amount));
             }
 
             if (item.item_type === 'bill') {
-                doc.setFillColor(...theme.primary)
-                doc.rect(15, y - 5, 3, 8, 'F')
-                doc.setTextColor(...theme.primary)
-                doc.setFontSize(11)
-                doc.setFont('helvetica', 'bold')
-                doc.text('DÉTAILS DE LA FACTURE', 22, y)
-                y += 10
+                doc.setFillColor(...theme.primary);
+                doc.rect(margin, y - 4, 2, 6, 'F');
+                doc.setTextColor(...theme.primary);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'bold');
+                doc.text('DÉTAILS DE LA FACTURE', margin + 5, y);
+                y += 8;
 
-                if (item.company_name) addRow('Fournisseur', item.company_name)
-                if (item.bill_type) addRow('Type de facture', item.bill_type)
-                if (item.customer_number) addRow('N° client', item.customer_number)
+                if (item.company_name) addRow('Fournisseur', item.company_name);
+                if (item.bill_type) addRow('Type de facture', item.bill_type);
+                if (item.customer_number) addRow('N° client', item.customer_number);
             }
 
             if (item.item_type === 'investment') {
-                doc.setFillColor(...theme.primary)
-                doc.rect(15, y - 5, 3, 8, 'F')
-                doc.setTextColor(...theme.primary)
-                doc.setFontSize(11)
-                doc.setFont('helvetica', 'bold')
-                doc.text('DÉTAILS DE L\'INVESTISSEMENT', 22, y)
-                y += 10
+                doc.setFillColor(...theme.primary);
+                doc.rect(margin, y - 4, 2, 6, 'F');
+                doc.setTextColor(...theme.primary);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'bold');
+                doc.text('DÉTAILS DE L\'INVESTISSEMENT', margin + 5, y);
+                y += 8;
 
-                if (item.company_name) addRow('Entreprise', item.company_name)
-                if (item.shares) addRow('Nombre d\'actions', item.shares)
-                if (item.share_price) addRow('Prix unitaire', formatAmount(item.share_price))
+                if (item.company_name) addRow('Entreprise', item.company_name);
+                if (item.shares) addRow('Nombre d\'actions', item.shares);
+                if (item.share_price) addRow('Prix unitaire', formatAmount(item.share_price));
             }
 
             if (item.item_type === 'savings' || item.item_type === 'savings_request') {
-                doc.setFillColor(...theme.primary)
-                doc.rect(15, y - 5, 3, 8, 'F')
-                doc.setTextColor(...theme.primary)
-                doc.setFontSize(11)
-                doc.setFont('helvetica', 'bold')
-                doc.text('DÉTAILS DE L\'ÉPARGNE', 22, y)
-                y += 10
+                doc.setFillColor(...theme.primary);
+                doc.rect(margin, y - 4, 2, 6, 'F');
+                doc.setTextColor(...theme.primary);
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'bold');
+                doc.text('DÉTAILS DE L\'ÉPARGNE', margin + 5, y);
+                y += 8;
 
-                if (item.savings_name) addRow('Nom de l\'épargne', item.savings_name)
-                if (item.balance_after) addRow('Solde après', formatAmount(item.balance_after))
-                if (item.admin_comment) addRow('Commentaire', item.admin_comment)
+                if (item.savings_name) addRow('Nom de l\'épargne', item.savings_name);
+                if (item.balance_after) addRow('Solde après', formatAmount(item.balance_after));
+                if (item.admin_comment) addRow('Commentaire', item.admin_comment);
             }
 
             // ============================================
-            // SECTION MONTANTS
+            // 6. RÉCAPITULATIF FINANCIER
             // ============================================
-            y += 5
-            doc.setFillColor(...theme.primary)
-            doc.rect(15, y - 5, 3, 8, 'F')
-            doc.setTextColor(...theme.primary)
-            doc.setFontSize(11)
-            doc.setFont('helvetica', 'bold')
-            doc.text('RÉCAPITULATIF FINANCIER', 22, y)
-            y += 12
+            y += 3;
 
-            addRow('Montant', formatAmount(item.amount))
-            if (item.fee > 0) addRow('Frais', formatAmount(item.fee))
+            doc.setFillColor(...theme.primary);
+            doc.rect(margin, y - 4, 2, 6, 'F');
+            doc.setTextColor(...theme.primary);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.text('RÉCAPITULATIF FINANCIER', margin + 5, y);
+            y += 10;
 
-            // Total mis en évidence
-            doc.setFillColor(...theme.primary)
-            doc.roundedRect(15, y - 3, pageWidth - 30, 15, 3, 3, 'F')
+            addRow('Montant', formatAmount(item.amount));
+            if (item.fee > 0) addRow('Frais', formatAmount(item.fee));
 
-            doc.setTextColor(255, 255, 255)
-            doc.setFontSize(11)
-            doc.setFont('helvetica', 'bold')
-            doc.text('MONTANT TOTAL', 22, y + 6)
+            doc.setFillColor(...theme.primary);
+            doc.roundedRect(margin, y - 3, contentWidth, 12, 2, 2, 'F');
 
-            doc.setFontSize(16)
-            doc.text(formatAmount(item.net_amount || item.amount), pageWidth - 20, y + 7, { align: 'right' })
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.text('MONTANT TOTAL', margin + 4, y + 5);
+
+            doc.setFontSize(14);
+            doc.text(formatAmount(item.net_amount || item.amount), pageWidth - margin - 4, y + 5.5, { align: 'right' });
 
             // ============================================
-            // PIED DE PAGE MODERNE
+            // 7. PIED DE PAGE AVEC QR CODE RÉEL
             // ============================================
-            const footerY = pageHeight - 45
+            const footerY = 255;
 
-            // Ligne décorative
-            doc.setDrawColor(...theme.primary)
-            doc.setLineWidth(0.5)
-            doc.line(15, footerY, pageWidth - 15, footerY)
+            doc.setDrawColor(...theme.primary);
+            doc.setLineWidth(0.5);
+            doc.line(margin, footerY, pageWidth - margin, footerY);
 
-            // QR Code simulé (cadre)
-            doc.setFillColor(250, 250, 250)
-            doc.roundedRect(pageWidth - 35, footerY + 3, 20, 20, 2, 2, 'F')
-            doc.setTextColor(150, 150, 150)
-            doc.setFontSize(6)
-            doc.text('QR CODE', pageWidth - 25, footerY + 14, { align: 'center' })
+            // ✅ Générer le QR
+            const verificationUrl = `https://alkherpay.td/verify/${item.reference || 'N/A'}`;
+            const qrContent = [
+                'AlkherPay',
+                `Ref: ${item.reference || 'N/A'}`,
+                `Montant: ${formatAmount(item.amount)}`,
+                `Date: ${formatDateShort(item.created_at)}`,
+                `Statut: ${item.status_label || 'Complété'}`,
+                `Vérifier: ${verificationUrl}`
+            ].join('\n');
 
-            // Texte pied de page
-            doc.setTextColor(100, 100, 100)
-            doc.setFontSize(8)
-            doc.setFont('helvetica', 'bold')
-            doc.text('AlkherPay - GOUROUSDJA', 20, footerY + 8)
+            const qrBase64 = await generateQRBase64(qrContent, 250);
 
-            doc.setFont('helvetica', 'normal')
-            doc.setFontSize(7)
-            doc.text('Service client: 62 78 73 07', 20, footerY + 14)
-            doc.text('Email: support@alkherpay.td', 20, footerY + 19)
-            doc.text('www.alkherpay.td', 20, footerY + 24)
+            if (qrBase64) {
+                doc.addImage(
+                    qrBase64,
+                    'PNG',
+                    pageWidth - 38,
+                    footerY + 3,
+                    24,
+                    24,
+                    undefined,
+                    'FAST'
+                );
 
-            // Mention légale
-            doc.setFontSize(6)
-            doc.setTextColor(150, 150, 150)
+                doc.setTextColor(120, 120, 120);
+                doc.setFontSize(5);
+                doc.setFont('helvetica', 'normal');
+                doc.text('Scannez pour vérifier', pageWidth - 26, footerY + 30, { align: 'center' });
+            } else {
+                doc.setFillColor(250, 250, 250);
+                doc.roundedRect(pageWidth - 38, footerY + 3, 24, 24, 2, 2, 'F');
+                doc.setTextColor(150, 150, 150);
+                doc.setFontSize(6);
+                doc.text('QR CODE', pageWidth - 26, footerY + 16, { align: 'center' });
+            }
+
+            // Infos entreprise (gauche)
+            doc.setTextColor(100, 100, 100);
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'bold');
+            doc.text('AlkherPay - GOUROUSDJA', margin, footerY + 8);
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7);
+            doc.text('Service client: 62 78 73 07', margin, footerY + 13);
+            doc.text('Email: support@alkherpay.td', margin, footerY + 17);
+            doc.text('www.alkherpay.td', margin, footerY + 21);
+
+            doc.setFontSize(6);
+            doc.setTextColor(150, 150, 150);
             doc.text(
                 'Ce document est généré électroniquement et fait foi de paiement.',
                 centerX,
-                pageHeight - 8,
+                pageHeight - 5,
                 { align: 'center' }
-            )
+            );
 
-            // Sauvegarde
-            doc.save(`recu_${item.reference || 'transaction'}.pdf`)
-            toast.success('Reçu téléchargé')
+            doc.save(`recu_${item.reference || 'transaction'}.pdf`);
+            toast.success('Reçu téléchargé');
 
         } catch (error) {
-            console.error('❌ Erreur reçu:', error)
-            toast.error('Erreur génération reçu')
+            console.error('❌ Erreur reçu:', error);
+            toast.error('Erreur génération reçu');
         }
     }
 
     // ============================================
-    // 📊 PDF HISTORIQUE COMPLET MODERNE
+    // 📊 PDF HISTORIQUE COMPLET AVEC QR
     // ============================================
     const generatePDF = async () => {
         setExporting(true)
         try {
-            const doc = new jsPDF('landscape')
-            const pageWidth = doc.internal.pageSize.getWidth()
-            const pageHeight = doc.internal.pageSize.getHeight()
+            const doc = new jsPDF({
+                orientation: 'landscape',
+                unit: 'mm',
+                format: 'a4'
+            })
+            const pageWidth = doc.internal.pageSize.getWidth()   // 297 mm
+            const pageHeight = doc.internal.pageSize.getHeight() // 210 mm
             const centerX = pageWidth / 2
+            const margin = 15
+            const contentWidth = pageWidth - (margin * 2)
             const filtered = getFilteredItems()
 
+            // ✅ Pré-générer le QR pour le rapport
+            const qrContent = [
+                'AlkherPay - Historique',
+                `Utilisateur: ${user?.fullname || 'N/A'}`,
+                `Téléphone: ${user?.phone || 'N/A'}`,
+                `Transactions: ${filtered.length}`,
+                `Montant: ${formatAmountNumber(filtered.reduce((s, t) => s + (t.amount || 0), 0))}`,
+                `Généré le: ${new Date().toLocaleDateString('fr-FR')}`
+            ].join('\n');
+
+            const qrBase64 = await generateQRBase64(qrContent, 150);
+
             // ============================================
-            // EN-TÊTE MODERNE
+            // EN-TÊTE
             // ============================================
             doc.setFillColor(30, 58, 95)
-            doc.rect(0, 0, pageWidth, 40, 'F')
+            doc.rect(0, 0, pageWidth, 35, 'F')
 
-            // Motifs décoratifs
             doc.setFillColor(59, 130, 246)
-            doc.circle(pageWidth - 30, 10, 50, 'F')
+            doc.circle(pageWidth - 30, 10, 40, 'F')
             doc.setFillColor(124, 58, 237)
-            doc.circle(30, 45, 30, 'F')
+            doc.circle(30, 40, 25, 'F')
 
             doc.setTextColor(255, 255, 255)
-            doc.setFontSize(24)
+            doc.setFontSize(22)
             doc.setFont('helvetica', 'bold')
-            doc.text('AlkherPay', 20, 20)
-
-            doc.setFontSize(9)
-            doc.setFont('helvetica', 'normal')
-            doc.text('Plateforme de paiement sécurisée', 20, 28)
-
-            doc.setFontSize(14)
-            doc.setFont('helvetica', 'bold')
-            doc.text('HISTORIQUE DES TRANSACTIONS', pageWidth - 20, 20, { align: 'right' })
+            doc.text('AlkherPay', margin, 18)
 
             doc.setFontSize(8)
             doc.setFont('helvetica', 'normal')
-            doc.text(`Généré le ${new Date().toLocaleString('fr-FR')}`, pageWidth - 20, 28, { align: 'right' })
+            doc.text('Plateforme de paiement sécurisée', margin, 25)
+
+            doc.setFontSize(12)
+            doc.setFont('helvetica', 'bold')
+            doc.text('HISTORIQUE DES TRANSACTIONS', pageWidth - margin, 18, { align: 'right' })
+
+            doc.setFontSize(7)
+            doc.setFont('helvetica', 'normal')
+            doc.text(`Généré le ${new Date().toLocaleString('fr-FR')}`, pageWidth - margin, 25, { align: 'right' })
 
             // ============================================
             // INFOS UTILISATEUR
             // ============================================
-            let y = 52
+            let y = 45
 
             doc.setFillColor(245, 247, 250)
-            doc.roundedRect(15, y - 5, pageWidth - 30, 20, 3, 3, 'F')
+            doc.roundedRect(margin, y - 5, contentWidth, 18, 3, 3, 'F')
 
             doc.setTextColor(30, 58, 95)
-            doc.setFontSize(9)
+            doc.setFontSize(8)
             doc.setFont('helvetica', 'bold')
-            doc.text('UTILISATEUR', 20, y + 3)
+            doc.text('UTILISATEUR', margin + 5, y + 3)
             doc.text('PÉRIODE', pageWidth / 2, y + 3)
 
             doc.setTextColor(60, 60, 60)
             doc.setFont('helvetica', 'normal')
-            doc.setFontSize(10)
-            doc.text(user?.fullname || 'N/A', 20, y + 11)
+            doc.setFontSize(9)
+            doc.text(user?.fullname || 'N/A', margin + 5, y + 11)
             doc.text(user?.phone || 'N/A', pageWidth / 2, y + 11)
 
             if (dateRange.start || dateRange.end) {
                 let periodText = ''
                 if (dateRange.start) periodText += `Du ${new Date(dateRange.start).toLocaleDateString('fr-FR')} `
                 if (dateRange.end) periodText += `au ${new Date(dateRange.end).toLocaleDateString('fr-FR')}`
-                doc.setFontSize(9)
-                doc.text(periodText, pageWidth / 2, y + 18)
+                doc.setFontSize(8)
+                doc.text(periodText, pageWidth / 2, y + 17)
             } else {
-                doc.setFontSize(9)
-                doc.text('Toutes les transactions', pageWidth / 2, y + 18)
+                doc.setFontSize(8)
+                doc.text('Toutes les transactions', pageWidth / 2, y + 17)
             }
 
             y += 25
@@ -801,30 +864,30 @@ function History({ user }) {
                 { label: 'Cartes', value: filtered.filter(t => t.item_type === 'card').length, color: [124, 58, 237] }
             ]
 
-            const cardWidth = (pageWidth - 40) / 4
-            const cardHeight = 22
+            const cardWidth = (contentWidth - 15) / 4
+            const cardHeight = 20
             const cardGap = 5
 
             statsData.forEach((stat, index) => {
-                const x = 15 + (cardWidth + cardGap) * index
+                const x = margin + (cardWidth + cardGap) * index
 
                 doc.setFillColor(...stat.color)
                 doc.roundedRect(x, y, cardWidth - 2, cardHeight, 3, 3, 'F')
 
                 doc.setTextColor(255, 255, 255)
-                doc.setFontSize(8)
+                doc.setFontSize(7)
                 doc.setFont('helvetica', 'normal')
-                doc.text(stat.label, x + 5, y + 8)
+                doc.text(stat.label, x + 4, y + 7)
 
-                doc.setFontSize(12)
+                doc.setFontSize(11)
                 doc.setFont('helvetica', 'bold')
-                doc.text(String(stat.value), x + 5, y + 17)
+                doc.text(String(stat.value), x + 4, y + 15)
             })
 
             y += cardHeight + 8
 
             // ============================================
-            // TABLEAU MODERNE
+            // TABLEAU
             // ============================================
             const typeLabels = {
                 transaction: 'TRANSFERT', investment: 'INVESTISSEMENT',
@@ -857,103 +920,75 @@ function History({ user }) {
                 headStyles: {
                     fillColor: [30, 58, 95],
                     textColor: [255, 255, 255],
-                    fontSize: 8,
+                    fontSize: 7,
                     fontStyle: 'bold',
                     halign: 'center',
-                    cellPadding: 3
+                    cellPadding: 2
                 },
                 bodyStyles: {
-                    fontSize: 7,
-                    cellPadding: 2,
+                    fontSize: 6,
+                    cellPadding: 1.5,
                     textColor: [50, 50, 50]
                 },
                 alternateRowStyles: { fillColor: [249, 250, 251] },
                 columnStyles: {
-                    0: { cellWidth: 40, halign: 'center', fontStyle: 'bold' },
-                    1: { cellWidth: 25, halign: 'center' },
-                    2: { cellWidth: 30, halign: 'center' },
-                    3: { cellWidth: 55, halign: 'left' },
-                    4: { cellWidth: 30, halign: 'right' },
-                    5: { cellWidth: 25, halign: 'right' },
-                    6: { cellWidth: 30, halign: 'right', fontStyle: 'bold' },
-                    7: { cellWidth: 25, halign: 'center' }
+                    0: { cellWidth: 38, halign: 'center', fontStyle: 'bold' },
+                    1: { cellWidth: 22, halign: 'center' },
+                    2: { cellWidth: 25, halign: 'center' },
+                    3: { cellWidth: 50, halign: 'left' },
+                    4: { cellWidth: 28, halign: 'right' },
+                    5: { cellWidth: 22, halign: 'right' },
+                    6: { cellWidth: 28, halign: 'right', fontStyle: 'bold' },
+                    7: { cellWidth: 20, halign: 'center' }
                 },
-                margin: { left: 15, right: 15 },
-                didDrawPage: (data) => {
+                margin: { left: margin, right: margin },
+                didDrawPage: () => {
                     const pageCount = doc.internal.getNumberOfPages()
                     const currentPage = doc.internal.getCurrentPageInfo().pageNumber
 
-                    // En-tête sur pages suivantes
                     if (currentPage > 1) {
                         doc.setFillColor(30, 58, 95)
-                        doc.rect(0, 0, pageWidth, 15, 'F')
+                        doc.rect(0, 0, pageWidth, 12, 'F')
                         doc.setTextColor(255, 255, 255)
-                        doc.setFontSize(10)
+                        doc.setFontSize(9)
                         doc.setFont('helvetica', 'bold')
-                        doc.text('AlkherPay - Historique (suite)', 20, 10)
+                        doc.text('AlkherPay - Historique (suite)', margin, 8)
                     }
 
-                    // Pied de page
+                    // ✅ Pied de page avec QR (sur chaque page)
                     doc.setFillColor(245, 247, 250)
-                    doc.rect(0, pageHeight - 12, pageWidth, 12, 'F')
+                    doc.rect(0, pageHeight - 14, pageWidth, 14, 'F')
+
+                    // QR code dans le pied de page
+                    if (qrBase64) {
+                        doc.addImage(
+                            qrBase64,
+                            'PNG',
+                            pageWidth - 18,
+                            pageHeight - 13,
+                            11,
+                            11,
+                            undefined,
+                            'FAST'
+                        );
+                    }
 
                     doc.setTextColor(100, 100, 100)
-                    doc.setFontSize(7)
+                    doc.setFontSize(6)
                     doc.setFont('helvetica', 'normal')
                     doc.text(
                         `AlkherPay - Page ${currentPage} / ${pageCount}`,
-                        20,
+                        margin,
                         pageHeight - 5
                     )
                     doc.text(
                         'Service client: 62 78 73 07 | support@alkherpay.td',
-                        pageWidth - 20,
+                        pageWidth - margin - 25,
                         pageHeight - 5,
                         { align: 'right' }
                     )
                 }
             })
-
-            // ============================================
-            // RÉCAPITULATIF FINAL
-            // ============================================
-            const finalY = doc.lastAutoTable.finalY + 10
-
-            if (finalY < pageHeight - 50) {
-                doc.setFillColor(245, 247, 250)
-                doc.roundedRect(15, finalY, pageWidth - 30, 40, 3, 3, 'F')
-
-                doc.setTextColor(30, 58, 95)
-                doc.setFontSize(11)
-                doc.setFont('helvetica', 'bold')
-                doc.text('RÉCAPITULATIF PAR CATÉGORIE', 20, finalY + 8)
-
-                doc.setFontSize(8)
-                doc.setFont('helvetica', 'normal')
-                doc.setTextColor(60, 60, 60)
-
-                const recap = [
-                    { label: 'Cartes', value: filtered.filter(t => t.item_type === 'card').reduce((s, t) => s + (t.amount || 0), 0) },
-                    { label: 'Taxes', value: filtered.filter(t => t.item_type === 'tax').reduce((s, t) => s + (t.amount || 0), 0) },
-                    { label: 'Prêts', value: filtered.filter(t => t.item_type === 'loan').reduce((s, t) => s + (t.amount || 0), 0) },
-                    { label: 'Factures', value: filtered.filter(t => t.item_type === 'bill').reduce((s, t) => s + (t.amount || 0), 0) },
-                    { label: 'Investissements', value: filtered.filter(t => t.item_type === 'investment').reduce((s, t) => s + (t.amount || 0), 0) },
-                    { label: 'Épargnes', value: filtered.filter(t => t.item_type === 'savings').reduce((s, t) => s + (t.amount || 0), 0) }
-                ]
-
-                recap.forEach((item, index) => {
-                    const x = 20 + (index % 3) * 90
-                    const rowY = finalY + 18 + Math.floor(index / 3) * 10
-
-                    doc.setTextColor(100, 100, 100)
-                    doc.text(`${item.label}:`, x, rowY)
-
-                    doc.setTextColor(30, 58, 95)
-                    doc.setFont('helvetica', 'bold')
-                    doc.text(formatAmountNumber(item.value), x + 35, rowY)
-                    doc.setFont('helvetica', 'normal')
-                })
-            }
 
             doc.save(`historique_${new Date().toISOString().split('T')[0]}.pdf`)
             toast.success('PDF téléchargé')
@@ -1021,6 +1056,7 @@ function History({ user }) {
                 <title>AlkherPay - Historique</title>
                 <meta charset="UTF-8">
                 <style>
+                    @page { size: A4; margin: 15mm; }
                     * { margin: 0; padding: 0; box-sizing: border-box; }
                     body { font-family: 'Segoe UI', Arial, sans-serif; padding: 20px; background: #f5f5f5; }
                     .header { background: linear-gradient(135deg, #1e3a5f, #0a192f); color: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; }
@@ -1031,7 +1067,6 @@ function History({ user }) {
                     table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; }
                     th, td { padding: 10px; text-align: left; font-size: 11px; border-bottom: 1px solid #eee; }
                     th { background: #1e3a5f; color: white; font-weight: 600; }
-                    tr:hover { background: #f9f9f9; }
                     .badge { padding: 3px 8px; border-radius: 10px; font-size: 9px; font-weight: 600; }
                     .badge-card { background: #ede9fe; color: #5b21b6; }
                     .badge-tax { background: #dbeafe; color: #1e40af; }

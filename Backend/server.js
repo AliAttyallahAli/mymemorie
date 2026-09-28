@@ -63,7 +63,7 @@ app.use(morgan('combined'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Port
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 
 // Clé secrète JWT
 const JWT_SECRET = process.env.JWT_SECRET || 'alkherpay_super_secret_key_2024';
@@ -29903,6 +29903,791 @@ app.get('/api/tokens/my-tokens', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('❌ Erreur:', error);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+async function createUserPreferencesTable() {
+    try {
+        await run(`
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                language TEXT DEFAULT 'fr',
+                theme TEXT DEFAULT 'dark',
+                notifications_email INTEGER DEFAULT 1,
+                notifications_sms INTEGER DEFAULT 1,
+                notifications_push INTEGER DEFAULT 1,
+                notifications_transaction INTEGER DEFAULT 1,
+                notifications_promo INTEGER DEFAULT 1,
+                biometric INTEGER DEFAULT 0,
+                quick_actions INTEGER DEFAULT 1,
+                default_transfer_message TEXT DEFAULT '',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+
+        console.log('✅ Table user_preferences prête');
+    } catch (error) {
+        console.error('❌ Erreur createUserPreferencesTable:', error);
+    }
+}
+async function createTransactionPinsTable() {
+    try {
+        await run(`
+            CREATE TABLE IF NOT EXISTS transaction_pins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                pin_hash TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+
+        console.log('✅ Table transaction_pins prête');
+    } catch (error) {
+        console.error('❌ Erreur createTransactionPinsTable:', error);
+    }
+}
+
+async function createPinResetRequestsTable() {
+    try {
+        await run(`
+            CREATE TABLE IF NOT EXISTS pin_reset_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                reason TEXT,
+                status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+                admin_id INTEGER,
+                admin_note TEXT,
+                processed_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+        `);
+
+        await run('CREATE INDEX IF NOT EXISTS idx_pin_resets_user ON pin_reset_requests(user_id)').catch(() => {});
+        await run('CREATE INDEX IF NOT EXISTS idx_pin_resets_status ON pin_reset_requests(status)').catch(() => {});
+
+        console.log('✅ Table pin_reset_requests prête');
+    } catch (error) {
+        console.error('❌ Erreur createPinResetRequestsTable:', error);
+    }
+}
+// ============================================================
+// ROUTES PROFIL UTILISATEUR
+// ============================================================
+
+/**
+ * GET /api/user/me
+ * Récupérer le profil de l'utilisateur connecté
+ */
+app.get('/api/user/me', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const user = await get(`
+            SELECT id, phone, fullname, email, province, city, address,
+                   role, is_active, is_verified, created_at
+            FROM users WHERE id = ?
+        `, [userId]);
+
+        if (!user) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+
+        res.json(user);
+    } catch (error) {
+        console.error('❌ Erreur /api/user/me:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PUT /api/user/profile
+ * Mettre à jour le profil
+ */
+app.put('/api/user/profile', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { fullname, email, province, city, address } = req.body;
+
+    try {
+        await run(`
+            UPDATE users 
+            SET fullname = COALESCE(?, fullname),
+                email = COALESCE(?, email),
+                province = COALESCE(?, province),
+                city = COALESCE(?, city),
+                address = COALESCE(?, address),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [fullname, email, province, city, address, userId]);
+
+        console.log('✅ Profil mis à jour:', userId);
+        res.json({ success: true, message: 'Profil mis à jour' });
+
+    } catch (error) {
+        console.error('❌ Erreur update profile:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/user/change-password
+ */
+app.post('/api/user/change-password', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { oldPassword, newPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+        return res.status(400).json({ error: 'Champs requis' });
+    }
+
+    if (newPassword.length < 4) {
+        return res.status(400).json({ error: 'Minimum 4 caractères' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const user = await get('SELECT password_hash FROM users WHERE id = ?', [userId]);
+
+        if (!user) {
+            return res.status(404).json({ error: 'Utilisateur non trouvé' });
+        }
+
+        const validPassword = await bcrypt.compare(oldPassword, user.password_hash);
+        if (!validPassword) {
+            return res.status(401).json({ error: 'Mot de passe actuel incorrect' });
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        await run(`
+            UPDATE users 
+            SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [hashedPassword, userId]);
+
+        console.log('✅ Mot de passe changé:', userId);
+        res.json({ success: true, message: 'Mot de passe modifié' });
+
+    } catch (error) {
+        console.error('❌ Erreur change-password:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROUTES PRÉFÉRENCES
+// ============================================================
+
+/**
+ * GET /api/user/preferences
+ */
+app.get('/api/user/preferences', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        let prefs = await get('SELECT * FROM user_preferences WHERE user_id = ?', [userId]);
+
+        if (!prefs) {
+            // Créer les préférences par défaut
+            await run(`
+                INSERT INTO user_preferences (user_id) VALUES (?)
+            `, [userId]);
+
+            prefs = await get('SELECT * FROM user_preferences WHERE user_id = ?', [userId]);
+        }
+
+        // Convertir les 0/1 en booléens
+        const formatted = {
+            language: prefs.language || 'fr',
+            theme: prefs.theme || 'dark',
+            quickActions: prefs.quick_actions === 1,
+            biometric: prefs.biometric === 1,
+            defaultTransferMessage: prefs.default_transfer_message || '',
+            notifications: {
+                email: prefs.notifications_email === 1,
+                sms: prefs.notifications_sms === 1,
+                push: prefs.notifications_push === 1,
+                transaction: prefs.notifications_transaction === 1,
+                promo: prefs.notifications_promo === 1
+            }
+        };
+
+        res.json(formatted);
+
+    } catch (error) {
+        console.error('❌ Erreur preferences:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/user/preferences
+ */
+app.post('/api/user/preferences', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const {
+        language,
+        theme,
+        quickActions,
+        biometric,
+        defaultTransferMessage,
+        notifications
+    } = req.body;
+
+    try {
+        // Vérifier si les préférences existent
+        const existing = await get('SELECT id FROM user_preferences WHERE user_id = ?', [userId]);
+
+        if (existing) {
+            await run(`
+                UPDATE user_preferences
+                SET language = COALESCE(?, language),
+                    theme = COALESCE(?, theme),
+                    quick_actions = COALESCE(?, quick_actions),
+                    biometric = COALESCE(?, biometric),
+                    default_transfer_message = COALESCE(?, default_transfer_message),
+                    notifications_email = COALESCE(?, notifications_email),
+                    notifications_sms = COALESCE(?, notifications_sms),
+                    notifications_push = COALESCE(?, notifications_push),
+                    notifications_transaction = COALESCE(?, notifications_transaction),
+                    notifications_promo = COALESCE(?, notifications_promo),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            `, [
+                language,
+                theme,
+                quickActions !== undefined ? (quickActions ? 1 : 0) : null,
+                biometric !== undefined ? (biometric ? 1 : 0) : null,
+                defaultTransferMessage,
+                notifications?.email !== undefined ? (notifications.email ? 1 : 0) : null,
+                notifications?.sms !== undefined ? (notifications.sms ? 1 : 0) : null,
+                notifications?.push !== undefined ? (notifications.push ? 1 : 0) : null,
+                notifications?.transaction !== undefined ? (notifications.transaction ? 1 : 0) : null,
+                notifications?.promo !== undefined ? (notifications.promo ? 1 : 0) : null,
+                userId
+            ]);
+        } else {
+            await run(`
+                INSERT INTO user_preferences (
+                    user_id, language, theme, quick_actions, biometric,
+                    default_transfer_message,
+                    notifications_email, notifications_sms, notifications_push,
+                    notifications_transaction, notifications_promo
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                userId,
+                language || 'fr',
+                theme || 'dark',
+                quickActions ? 1 : 0,
+                biometric ? 1 : 0,
+                defaultTransferMessage || '',
+                notifications?.email ? 1 : 0,
+                notifications?.sms ? 1 : 0,
+                notifications?.push ? 1 : 0,
+                notifications?.transaction ? 1 : 0,
+                notifications?.promo ? 1 : 0
+            ]);
+        }
+
+        console.log('✅ Préférences enregistrées:', userId);
+        res.json({ success: true, message: 'Préférences enregistrées' });
+
+    } catch (error) {
+        console.error('❌ Erreur save preferences:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROUTES PIN DE TRANSACTION
+// ============================================================
+
+/**
+ * GET /api/user/pin-status
+ */
+app.get('/api/user/pin-status', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const pin = await get('SELECT id FROM transaction_pins WHERE user_id = ?', [userId]);
+
+        res.json({
+            success: true,
+            isPinSet: !!pin
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur pin-status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/user/set-transaction-pin
+ */
+app.post('/api/user/set-transaction-pin', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { pin } = req.body;
+
+    if (!pin || !/^\d{4}$/.test(pin)) {
+        return res.status(400).json({ error: 'Le PIN doit contenir 4 chiffres' });
+    }
+
+    // Interdire les PIN faibles
+    const weakPins = ['0000', '1111', '2222', '3333', '4444', '5555', '6666', '7777', '8888', '9999', '1234', '4321'];
+    if (weakPins.includes(pin)) {
+        return res.status(400).json({ error: 'PIN trop simple. Choisissez un autre code.' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+
+        // Vérifier si un PIN existe déjà
+        const existing = await get('SELECT id FROM transaction_pins WHERE user_id = ?', [userId]);
+
+        if (existing) {
+            return res.status(400).json({ error: 'Un PIN existe déjà. Utilisez "Modifier"' });
+        }
+
+        const pinHash = await bcrypt.hash(pin, 10);
+
+        await run(`
+            INSERT INTO transaction_pins (user_id, pin_hash)
+            VALUES (?, ?)
+        `, [userId, pinHash]);
+
+        console.log('✅ PIN créé pour user:', userId);
+        res.json({ success: true, message: 'PIN créé' });
+
+    } catch (error) {
+        console.error('❌ Erreur set-pin:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/user/change-transaction-pin
+ */
+app.post('/api/user/change-transaction-pin', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { currentPin, newPin } = req.body;
+
+    if (!currentPin || !newPin) {
+        return res.status(400).json({ error: 'PIN actuel et nouveau requis' });
+    }
+
+    if (!/^\d{4}$/.test(newPin)) {
+        return res.status(400).json({ error: 'Le nouveau PIN doit contenir 4 chiffres' });
+    }
+
+    try {
+        const bcrypt = require('bcryptjs');
+        const record = await get('SELECT * FROM transaction_pins WHERE user_id = ?', [userId]);
+
+        if (!record) {
+            return res.status(404).json({ error: 'Aucun PIN défini' });
+        }
+
+        const validPin = await bcrypt.compare(currentPin, record.pin_hash);
+        if (!validPin) {
+            return res.status(401).json({ error: 'PIN actuel incorrect' });
+        }
+
+        const newHash = await bcrypt.hash(newPin, 10);
+
+        await run(`
+            UPDATE transaction_pins
+            SET pin_hash = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        `, [newHash, userId]);
+
+        console.log('✅ PIN modifié pour user:', userId);
+        res.json({ success: true, message: 'PIN modifié' });
+
+    } catch (error) {
+        console.error('❌ Erreur change-pin:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/user/request-pin-reset
+ */
+app.post('/api/user/request-pin-reset', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    const { reason = '' } = req.body;
+
+    try {
+        // Vérifier s'il y a déjà une demande en attente
+        const existing = await get(`
+            SELECT id FROM pin_reset_requests
+            WHERE user_id = ? AND status = 'pending'
+        `, [userId]);
+
+        if (existing) {
+            return res.status(400).json({ error: 'Vous avez déjà une demande en attente' });
+        }
+
+        await run(`
+            INSERT INTO pin_reset_requests (user_id, reason, status)
+            VALUES (?, ?, 'pending')
+        `, [userId, reason]);
+
+        // Notifier l'admin
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            SELECT id, '🔐 Demande reset PIN', ?, 'info', CURRENT_TIMESTAMP
+            FROM users WHERE role = 'admin'
+        `, [`L'utilisateur ${userId} demande une réinitialisation de PIN`]).catch(() => {});
+
+        console.log('✅ Demande reset PIN créée pour user:', userId);
+        res.json({ success: true, message: 'Demande envoyée' });
+
+    } catch (error) {
+        console.error('❌ Erreur request-pin-reset:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROUTES 2FA
+// ============================================================
+
+/**
+ * GET /api/user/2fa/status
+ */
+app.get('/api/user/2fa/status', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+
+    try {
+        const user = await get('SELECT two_factor_enabled FROM users WHERE id = ?', [userId]);
+
+        res.json({
+            success: true,
+            enabled: user?.two_factor_enabled === 1
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur 2fa status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROUTES PROVINCES
+// ============================================================
+
+/**
+ * GET /api/provinces
+ * Liste des provinces du Tchad
+ */
+app.get('/api/provinces', authenticateToken, async (req, res) => {
+    try {
+        // Si tu as une table provinces
+        const provinces = await query('SELECT * FROM provinces ORDER BY name ASC')
+            .catch(() => null);
+
+        if (provinces && provinces.length > 0) {
+            return res.json(provinces);
+        }
+
+        // Sinon, retourner la liste statique du Tchad
+        const defaultProvinces = [
+            { id: 1, name: 'N\'Djamena' },
+            { id: 2, name: 'Logone Occidental' },
+            { id: 3, name: 'Logone Oriental' },
+            { id: 4, name: 'Moyen-Chari' },
+            { id: 5, name: 'Mayo-Kebbi Est' },
+            { id: 6, name: 'Mayo-Kebbi Ouest' },
+            { id: 7, name: 'Ouaddaï' },
+            { id: 8, name: 'Batha' },
+            { id: 9, name: 'Borkou' },
+            { id: 10, name: 'Ennedi Est' },
+            { id: 11, name: 'Ennedi Ouest' },
+            { id: 12, name: 'Guéra' },
+            { id: 13, name: 'Hadjer-Lamis' },
+            { id: 14, name: 'Kanem' },
+            { id: 15, name: 'Lac' },
+            { id: 16, name: 'Mandoul' },
+            { id: 17, name: 'Mayo-Kebbi' },
+            { id: 18, name: 'Salamat' },
+            { id: 19, name: 'Sila' },
+            { id: 20, name: 'Tandjilé' },
+            { id: 21, name: 'Tibesti' },
+            { id: 22, name: 'Wadi Fira' },
+            { id: 23, name: 'Barh El Gazel' }
+        ];
+
+        res.json(defaultProvinces);
+
+    } catch (error) {
+        console.error('❌ Erreur provinces:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROUTES ADMIN - PARAMÈTRES APPLICATION
+// ============================================================
+
+/**
+ * GET /api/admin/settings
+ */
+app.get('/api/admin/settings', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        // Chercher dans une table app_settings ou retourner les défauts
+        const settings = await get('SELECT * FROM app_settings LIMIT 1').catch(() => null);
+
+        if (settings) {
+            return res.json({
+                minTransaction: settings.min_transaction || 25,
+                maxTransaction: settings.max_transaction || 10000000,
+                transferFee: settings.transfer_fee || 2,
+                depositFee: settings.deposit_fee || 0,
+                withdrawalFee: settings.withdrawal_fee || 2,
+                referralBonus: settings.referral_bonus || 500,
+                maintenanceMode: settings.maintenance_mode === 1,
+                allowInternationalTransfer: settings.allow_international === 1
+            });
+        }
+
+        // Valeurs par défaut
+        res.json({
+            minTransaction: 25,
+            maxTransaction: 10000000,
+            transferFee: 2,
+            depositFee: 0,
+            withdrawalFee: 2,
+            referralBonus: 500,
+            maintenanceMode: false,
+            allowInternationalTransfer: false
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur admin settings:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PUT /api/admin/settings
+ */
+app.put('/api/admin/settings', authenticateToken, requireAdmin, async (req, res) => {
+    const {
+        minTransaction,
+        maxTransaction,
+        transferFee,
+        depositFee,
+        withdrawalFee,
+        referralBonus,
+        maintenanceMode,
+        allowInternationalTransfer
+    } = req.body;
+
+    try {
+        // Créer la table si elle n'existe pas
+        await run(`
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                min_transaction INTEGER DEFAULT 25,
+                max_transaction INTEGER DEFAULT 10000000,
+                transfer_fee REAL DEFAULT 2,
+                deposit_fee REAL DEFAULT 0,
+                withdrawal_fee REAL DEFAULT 2,
+                referral_bonus INTEGER DEFAULT 500,
+                maintenance_mode INTEGER DEFAULT 0,
+                allow_international INTEGER DEFAULT 0,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        const existing = await get('SELECT id FROM app_settings LIMIT 1');
+
+        if (existing) {
+            await run(`
+                UPDATE app_settings SET
+                    min_transaction = COALESCE(?, min_transaction),
+                    max_transaction = COALESCE(?, max_transaction),
+                    transfer_fee = COALESCE(?, transfer_fee),
+                    deposit_fee = COALESCE(?, deposit_fee),
+                    withdrawal_fee = COALESCE(?, withdrawal_fee),
+                    referral_bonus = COALESCE(?, referral_bonus),
+                    maintenance_mode = COALESCE(?, maintenance_mode),
+                    allow_international = COALESCE(?, allow_international),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [
+                minTransaction,
+                maxTransaction,
+                transferFee,
+                depositFee,
+                withdrawalFee,
+                referralBonus,
+                maintenanceMode !== undefined ? (maintenanceMode ? 1 : 0) : null,
+                allowInternationalTransfer !== undefined ? (allowInternationalTransfer ? 1 : 0) : null,
+                existing.id
+            ]);
+        } else {
+            await run(`
+                INSERT INTO app_settings (
+                    min_transaction, max_transaction, transfer_fee,
+                    deposit_fee, withdrawal_fee, referral_bonus,
+                    maintenance_mode, allow_international
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                minTransaction || 25,
+                maxTransaction || 10000000,
+                transferFee || 2,
+                depositFee || 0,
+                withdrawalFee || 2,
+                referralBonus || 500,
+                maintenanceMode ? 1 : 0,
+                allowInternationalTransfer ? 1 : 0
+            ]);
+        }
+
+        console.log('✅ Paramètres app mis à jour');
+        res.json({ success: true, message: 'Paramètres mis à jour' });
+
+    } catch (error) {
+        console.error('❌ Erreur update settings:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+// ============================================================
+// ROUTES ADMIN - DEMANDES RESET PIN
+// ============================================================
+
+/**
+ * GET /api/admin/pin-resets
+ */
+app.get('/api/admin/pin-resets', authenticateToken, requireAdmin, async (req, res) => {
+    const { status = 'pending' } = req.query;
+
+    try {
+        let sql = `
+            SELECT 
+                pr.*,
+                u.fullname as user_name,
+                u.phone as user_phone
+            FROM pin_reset_requests pr
+            LEFT JOIN users u ON pr.user_id = u.id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (status !== 'all') {
+            sql += ' AND pr.status = ?';
+            params.push(status);
+        }
+
+        sql += ' ORDER BY pr.created_at DESC';
+
+        const requests = await query(sql, params).catch(() => []);
+
+        res.json({
+            success: true,
+            requests: requests || [],
+            count: requests?.length || 0
+        });
+
+    } catch (error) {
+        console.error('❌ Erreur admin pin-resets:', error);
+        res.status(500).json({ error: error.message, requests: [] });
+    }
+});
+
+/**
+ * POST /api/admin/pin-resets/:id/approve
+ */
+app.post('/api/admin/pin-resets/:id/approve', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const adminId = req.user.userId;
+
+    try {
+        const request = await get('SELECT * FROM pin_reset_requests WHERE id = ?', [id]);
+
+        if (!request) {
+            return res.status(404).json({ error: 'Demande non trouvée' });
+        }
+
+        await run('BEGIN TRANSACTION');
+
+        try {
+            // Marquer comme approuvée
+            await run(`
+                UPDATE pin_reset_requests
+                SET status = 'approved',
+                    admin_id = ?,
+                    processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `, [adminId, id]);
+
+            // Supprimer le PIN existant
+            await run('DELETE FROM transaction_pins WHERE user_id = ?', [request.user_id]);
+
+            // Notifier l'utilisateur
+            await run(`
+                INSERT INTO notifications (user_id, title, message, type, created_at)
+                VALUES (?, '✅ PIN réinitialisé', 'Vous pouvez définir un nouveau PIN.', 'success', CURRENT_TIMESTAMP)
+            `, [request.user_id]).catch(() => {});
+
+            await run('COMMIT');
+
+            console.log('✅ Reset PIN approuvé:', id);
+            res.json({ success: true, message: 'Demande approuvée' });
+
+        } catch (dbError) {
+            await run('ROLLBACK');
+            throw dbError;
+        }
+
+    } catch (error) {
+        console.error('❌ Erreur approve reset:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/admin/pin-resets/:id/reject
+ */
+app.post('/api/admin/pin-resets/:id/reject', authenticateToken, requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { reason = 'Non conforme' } = req.body;
+    const adminId = req.user.userId;
+
+    try {
+        const request = await get('SELECT * FROM pin_reset_requests WHERE id = ?', [id]);
+
+        if (!request) {
+            return res.status(404).json({ error: 'Demande non trouvée' });
+        }
+
+        await run(`
+            UPDATE pin_reset_requests
+            SET status = 'rejected',
+                admin_id = ?,
+                admin_note = ?,
+                processed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `, [adminId, reason, id]);
+
+        await run(`
+            INSERT INTO notifications (user_id, title, message, type, created_at)
+            VALUES (?, '❌ Reset PIN rejeté', ?, 'error', CURRENT_TIMESTAMP)
+        `, [request.user_id, `Raison: ${reason}`]).catch(() => {});
+
+        console.log('✅ Reset PIN rejeté:', id);
+        res.json({ success: true, message: 'Demande rejetée' });
+
+    } catch (error) {
+        console.error('❌ Erreur reject reset:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
