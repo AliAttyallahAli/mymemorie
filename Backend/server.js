@@ -63,7 +63,7 @@ app.use(morgan('combined'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Port
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 
 // Clé secrète JWT
 const JWT_SECRET = process.env.JWT_SECRET || 'alkherpay_super_secret_key_2024';
