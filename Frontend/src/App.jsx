@@ -87,7 +87,7 @@ const NotificationDetail = lazy(() => import('./pages/NotificationDetail'))
 // ============================================
 // CONFIG SOCKET
 // ============================================
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const SOCKET_URL = import.meta.env.VITE_API_URL ||'https://alkherpay.onrender.com'
 let socket = null
 
 // ============================================
