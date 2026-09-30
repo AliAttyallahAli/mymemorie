@@ -72,7 +72,7 @@ const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'alkherpay_refresh_
 
 app.use(cors({
     origin: [
-        'https://mymemorie.vercel.app',          // Ton URL Vercel exacte
+        'https://alkherpay.vercel.app',          // Ton URL Vercel exacte
         'https://mymemorie-git-gourousdja.vercel.app', // Preview Git
         /\.vercel\.app$/,                         // Toutes les previews Vercel
         'http://localhost:5173',                  // Dev local
