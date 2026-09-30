@@ -42,7 +42,7 @@ function Blog({ user }) {
         params.search = searchTerm
       }
       
-      const response = await axios.get('/api/blog/posts', { params })
+      const response = await axios.get(`${API_URL}/api/blog/posts', { params })
       setPosts(response.data.posts || [])
       setTotalPages(Math.ceil(response.data.total / postsPerPage))
       setTotalPosts(response.data.total)
@@ -56,7 +56,7 @@ function Blog({ user }) {
 
   const fetchCategories = async () => {
     try {
-      const response = await axios.get('/api/blog/categories')
+      const response = await axios.get(`${API_URL}/api/blog/categories')
       setCategories(response.data || [])
     } catch (error) {
       console.error('Erreur chargement catégories:', error)

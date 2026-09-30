@@ -21,12 +21,12 @@ function AdminPinManagement() {
       const token = localStorage.getItem('accessToken')
       
       if (activeTab === 'users') {
-        const response = await axios.get('/api/admin/users-without-pin', {
+        const response = await axios.get(`${API_URL}/api/admin/users-without-pin', {
           headers: { Authorization: `Bearer ${token}` }
         })
         setUsers(response.data.users || [])
       } else {
-        const response = await axios.get('/api/admin/pin-reset-requests', {
+        const response = await axios.get(`${API_URL}/api/admin/pin-reset-requests', {
           headers: { Authorization: `Bearer ${token}` }
         })
         setResetRequests(response.data.requests || [])

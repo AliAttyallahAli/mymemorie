@@ -423,7 +423,7 @@ const Chat = ({ user, socket }) => {
             // Vérifier si l'utilisateur existe
             try {
                 const token = localStorage.getItem('accessToken');
-                const response = await axios.post('/api/chat/check-user', {
+                const response = await axios.post(`${API_URL}/api/chat/check-user', {
                     phone: dialpadNumber
                 }, {
                     headers: { Authorization: `Bearer ${token}` }
@@ -455,7 +455,7 @@ const Chat = ({ user, socket }) => {
     const fetchCallHistory = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/chat/call-history', {
+            const response = await axios.get(`${API_URL}/api/chat/call-history', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setCallHistory(response.data.data || []);
@@ -471,7 +471,7 @@ const Chat = ({ user, socket }) => {
     const fetchConversations = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/chat/conversations', {
+            const response = await axios.get(`${API_URL}/api/chat/conversations', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setConversations(response.data.data || []);
@@ -485,7 +485,7 @@ const Chat = ({ user, socket }) => {
     const fetchRecentContacts = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/chat/recent-contacts', {
+            const response = await axios.get(`${API_URL}/api/chat/recent-contacts', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setRecentContacts(response.data.data || []);
@@ -531,7 +531,7 @@ const Chat = ({ user, socket }) => {
         setSending(true);
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.post('/api/chat/send', {
+            const response = await axios.post(`${API_URL}/api/chat/send', {
                 receiver_id: selectedContact.id,
                 message: newMessage.trim()
             }, {
@@ -581,14 +581,14 @@ const Chat = ({ user, socket }) => {
         setSending(true);
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.post('/api/chat/check-user', {
+            const response = await axios.post(`${API_URL}/api/chat/check-user', {
                 phone: phone
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
             if (response.data.exists) {
-                const sendResponse = await axios.post('/api/chat/send-by-phone', {
+                const sendResponse = await axios.post(`${API_URL}/api/chat/send-by-phone', {
                     phone: phone,
                     message: message
                 }, {

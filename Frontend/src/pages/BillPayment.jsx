@@ -58,7 +58,7 @@ const BillPayment = ({ user, socket }) => {
     setLoadingBalance(true);
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/wallet/balance', {
+      const response = await axios.get(`${API_URL}/api/wallet/balance', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setUserBalance(response.data.balance || 0);
@@ -72,7 +72,7 @@ const BillPayment = ({ user, socket }) => {
   const fetchCompanies = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/service-companies', {
+      const response = await axios.get(`${API_URL}/api/service-companies', {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       });
       
@@ -94,7 +94,7 @@ const BillPayment = ({ user, socket }) => {
     if (!user) return;
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/bill-payments/history', {
+      const response = await axios.get(`${API_URL}/api/bill-payments/history', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setPaymentHistory(response.data?.payments || []);
@@ -116,7 +116,7 @@ const BillPayment = ({ user, socket }) => {
     setLoadingMeter(true);
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.post('/api/bill-payments/search-meter', {
+      const response = await axios.post(`${API_URL}/api/bill-payments/search-meter', {
         meter_number: searchMeter,
         company_id: selectedCompany.id
       }, { headers: { Authorization: `Bearer ${token}` } });
@@ -190,7 +190,7 @@ const BillPayment = ({ user, socket }) => {
     
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.post('/api/bill-payment', {
+      const response = await axios.post(`${API_URL}/api/bill-payment', {
         company_id: selectedCompany.id,
         customer_name: formData.customerName,
         customer_phone: formData.customerPhone,

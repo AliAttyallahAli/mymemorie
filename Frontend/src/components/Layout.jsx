@@ -45,7 +45,7 @@ function Layout({ user, children, socket }) {
             if (user?.role === 'agent') {
                 try {
                     const token = localStorage.getItem('accessToken')
-                    const response = await axios.get('/api/company/check', {
+                    const response = await axios.get(`${API_URL}/api/company/check', {
                         headers: { Authorization: `Bearer ${token}` }
                     }).catch(() => ({ data: { isCompanyAgent: false } }))
                     setIsCompanyAgent(response.data?.isCompanyAgent || false)
@@ -63,7 +63,7 @@ function Layout({ user, children, socket }) {
             if (!user) return
             try {
                 const token = localStorage.getItem('accessToken')
-                const res = await axios.get('/api/cards/my-card', {
+                const res = await axios.get(`${API_URL}/api/cards/my-card', {
                     headers: { Authorization: `Bearer ${token}` }
                 }).catch(() => ({ data: { card: null } }))
                 setHasCard(res.data?.card?.status === 'active')
@@ -80,7 +80,7 @@ function Layout({ user, children, socket }) {
             if (!user) return
             try {
                 const token = localStorage.getItem('accessToken')
-                const response = await axios.get('/api/chat/unread-count', {
+                const response = await axios.get(`${API_URL}/api/chat/unread-count', {
                     headers: { Authorization: `Bearer ${token}` }
                 }).catch(() => ({ data: { count: 0 } }))
                 setUnreadMessages(response.data?.count || 0)
@@ -248,7 +248,7 @@ function Layout({ user, children, socket }) {
         setLoadingBalance(true)
         try {
             const token = localStorage.getItem('accessToken')
-            const response = await axios.get('/api/wallet/balance', {
+            const response = await axios.get(`${API_URL}/api/wallet/balance', {
                 headers: { Authorization: `Bearer ${token}` }
             })
             setBalance(response.data.balance)
@@ -262,7 +262,7 @@ function Layout({ user, children, socket }) {
     const handleLogout = async () => {
         try {
             const token = localStorage.getItem('accessToken')
-            await axios.post('/api/auth/logout', {}, {
+            await axios.post(`${API_URL}/api/auth/logout', {}, {
                 headers: { Authorization: `Bearer ${token}` }
             })
         } catch (error) {

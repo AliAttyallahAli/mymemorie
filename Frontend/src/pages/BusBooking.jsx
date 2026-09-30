@@ -52,7 +52,7 @@ const BusBooking = ({ user, socket }) => {
     setLoading(true);
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/trips', {
+      const response = await axios.get(`${API_URL}/api/trips', {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -74,7 +74,7 @@ const BusBooking = ({ user, socket }) => {
   const fetchUserBookings = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/user/bookings', {
+      const response = await axios.get(`${API_URL}/api/user/bookings', {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -90,7 +90,7 @@ const BusBooking = ({ user, socket }) => {
   const fetchAgencies = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/travel-agencies', {
+      const response = await axios.get(`${API_URL}/api/travel-agencies', {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -106,7 +106,7 @@ const BusBooking = ({ user, socket }) => {
   const fetchUserBalance = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/wallet/balance', {
+      const response = await axios.get(`${API_URL}/api/wallet/balance', {
         headers: { Authorization: `Bearer ${token}` }
       });
       setUserBalance(response.data.balance || 0);
@@ -189,7 +189,7 @@ const BusBooking = ({ user, socket }) => {
     setLoading(true);
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.post('/api/bookings', {
+      const response = await axios.post(`${API_URL}/api/bookings', {
         trip_id: selectedTrip.id,
         passenger_name: bookingForm.passenger_name,
         passenger_phone: bookingForm.passenger_phone,

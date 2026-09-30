@@ -45,7 +45,7 @@ function Agents({ user }) {
       }
       
       // Pas de token nécessaire pour cette requête publique
-      const response = await axios.get('/api/agents', { params })
+      const response = await axios.get(`${API_URL}/api/agents', { params })
       
       if (response.data && response.data.agents) {
         setAgents(response.data.agents)

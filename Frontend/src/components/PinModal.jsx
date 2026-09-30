@@ -60,7 +60,7 @@ function PinModal({ isOpen, onClose, onSuccess, type = 'set', amount = null, onC
     setLoading(true)
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.post('/api/user/set-transaction-pin', 
+      const response = await axios.post(`${API_URL}/api/user/set-transaction-pin', 
         { pin: pin },
         { headers: { Authorization: `Bearer ${token}` } }
       )
@@ -88,7 +88,7 @@ function PinModal({ isOpen, onClose, onSuccess, type = 'set', amount = null, onC
     setLoading(true)
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.post('/api/user/verify-transaction-pin', 
+      const response = await axios.post(`${API_URL}/api/user/verify-transaction-pin', 
         { pin: pin },
         { headers: { Authorization: `Bearer ${token}` } }
       )

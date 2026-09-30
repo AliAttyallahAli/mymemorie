@@ -24,7 +24,7 @@ function BlogPost({ user }) {
       setPost(response.data)
       
       // Charger les articles similaires
-      const relatedRes = await axios.get('/api/blog/posts', {
+      const relatedRes = await axios.get(`${API_URL}/api/blog/posts', {
         params: { category: response.data.category, limit: 3 }
       })
       setRelatedPosts(relatedRes.data.posts.filter(p => p.slug !== slug))

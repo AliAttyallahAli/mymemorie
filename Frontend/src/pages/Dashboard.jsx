@@ -39,8 +39,8 @@ function Dashboard({ user, socket }) {
     try {
       const token = localStorage.getItem('accessToken')
       const [balanceRes, historyRes] = await Promise.all([
-        axios.get('/api/wallet/balance', { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get('/api/wallet/history?limit=5', { headers: { Authorization: `Bearer ${token}` } })
+        axios.get(`${API_URL}/api/wallet/balance', { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get(`${API_URL}/api/wallet/history?limit=5', { headers: { Authorization: `Bearer ${token}` } })
       ])
       setBalance(balanceRes.data.balance)
       setRecentTransactions(historyRes.data.transactions || [])
@@ -56,7 +56,7 @@ function Dashboard({ user, socket }) {
   const checkCardStatus = async () => {
     try {
       const token = localStorage.getItem('accessToken')
-      const res = await axios.get('/api/cards/my-card', {
+      const res = await axios.get(`${API_URL}/api/cards/my-card', {
         headers: { Authorization: `Bearer ${token}` }
       })
       setHasCard(res.data.card && res.data.card.status === 'active')

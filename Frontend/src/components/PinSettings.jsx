@@ -19,7 +19,7 @@ function PinSettings({ user }) {
   const checkPinStatus = async () => {
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/user/pin-status', {
+      const response = await axios.get(`${API_URL}/api/user/pin-status', {
         headers: { Authorization: `Bearer ${token}` }
       })
       setHasPin(response.data.hasPin)
@@ -34,7 +34,7 @@ function PinSettings({ user }) {
     setLoading(true)
     try {
       const token = localStorage.getItem('accessToken')
-      await axios.post('/api/user/request-pin-reset', {}, {
+      await axios.post(`${API_URL}/api/user/request-pin-reset', {}, {
         headers: { Authorization: `Bearer ${token}` }
       })
       setRequestSent(true)

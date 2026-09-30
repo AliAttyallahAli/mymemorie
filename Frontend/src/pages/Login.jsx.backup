@@ -4,6 +4,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { FaPhone, FaLock, FaKey, FaMoneyBillWave, FaEye, FaEyeSlash, FaGift, FaUserPlus, FaCheckCircle, FaTimes } from 'react-icons/fa'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+
 function Login({ setUser }) {
   const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')

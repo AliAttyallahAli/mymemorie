@@ -49,7 +49,7 @@ const KYCLevel2 = ({ user, socket }) => {
     const checkKYCStatus = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/kyc/status', {
+            const response = await axios.get(`${API_URL}/api/kyc/status', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setKycStatus(response.data);
@@ -62,7 +62,7 @@ const KYCLevel2 = ({ user, socket }) => {
     const fetchUserData = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/user/me', {
+            const response = await axios.get(`${API_URL}/api/user/me', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setUserData(response.data);
@@ -127,7 +127,7 @@ const KYCLevel2 = ({ user, socket }) => {
             if (files.businessLicense) formDataToSend.append('businessLicense', files.businessLicense);
             if (files.taxIdentification) formDataToSend.append('taxIdentification', files.taxIdentification);
 
-            const response = await axios.post('/api/kyc/submit-level-2', formDataToSend, {
+            const response = await axios.post(`${API_URL}/api/kyc/submit-level-2', formDataToSend, {
                 headers: {
                     Authorization: `Bearer ${token}`,
                     'Content-Type': 'multipart/form-data'

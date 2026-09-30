@@ -46,7 +46,7 @@ function Register() {
   const fetchProvinces = async () => {
     setLoadingProvinces(true)
     try {
-      const response = await axios.get('/api/provinces')
+      const response = await axios.get(`${API_URL}/api/provinces')
       if (Array.isArray(response.data)) {
         setProvinces(response.data)
       } else if (response.data && Array.isArray(response.data.provinces)) {
@@ -158,7 +158,7 @@ function Register() {
         referral_code: formData.referral_code || null
       }
       
-      const response = await axios.post('/api/auth/register', submitData)
+      const response = await axios.post(`${API_URL}/api/auth/register', submitData)
       
       setPrivateKey(response.data.private_key)
       

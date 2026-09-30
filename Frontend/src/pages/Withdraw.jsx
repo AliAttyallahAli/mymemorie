@@ -81,7 +81,7 @@ function Withdraw({ user, socket }) {
   const checkUserPin = async () => {
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/user/pin-status', {
+      const response = await axios.get(`${API_URL}/api/user/pin-status', {
         headers: { Authorization: `Bearer ${token}` }
       })
       setHasPin(response.data.hasPin || false)
@@ -97,7 +97,7 @@ function Withdraw({ user, socket }) {
     setLoadingBalance(true)
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/wallet/balance', {
+      const response = await axios.get(`${API_URL}/api/wallet/balance', {
         headers: { Authorization: `Bearer ${token}` }
       })
       setBalance(response.data.balance)
@@ -113,7 +113,7 @@ function Withdraw({ user, socket }) {
     setLoadingAgents(true)
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/agents', {
+      const response = await axios.get(`${API_URL}/api/agents', {
         headers: { Authorization: `Bearer ${token}` }
       })
       const agentsData = response.data.agents || response.data || []
@@ -202,7 +202,7 @@ function Withdraw({ user, socket }) {
     
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.post('/api/withdraw', {
+      const response = await axios.post(`${API_URL}/api/withdraw', {
         amount: pendingWithdraw.amount,
         agent_id: pendingWithdraw.agent_id,
         agent_phone: pendingWithdraw.agent_phone,

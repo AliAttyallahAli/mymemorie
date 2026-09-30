@@ -50,7 +50,7 @@ const AdminLoans = ({ user, socket }) => {
     const fetchLoans = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/admin/loans', {
+            const response = await axios.get(`${API_URL}/api/admin/loans', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setLoans(response.data.data || []);
@@ -63,7 +63,7 @@ const AdminLoans = ({ user, socket }) => {
     const fetchStats = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/admin/loans/stats', {
+            const response = await axios.get(`${API_URL}/api/admin/loans/stats', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setStats(response.data.stats || {});

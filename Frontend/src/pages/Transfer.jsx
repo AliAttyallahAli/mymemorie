@@ -53,7 +53,7 @@ function Transfer({ user, socket }) {
   const checkUserPin = async () => {
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/user/pin-status', {
+      const response = await axios.get(`${API_URL}/api/user/pin-status', {
         headers: { Authorization: `Bearer ${token}` }
       })
       setHasPin(response.data.hasPin || false)
@@ -136,7 +136,7 @@ function Transfer({ user, socket }) {
   const fetchRecentContacts = async () => {
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/wallet/history?limit=10', {
+      const response = await axios.get(`${API_URL}/api/wallet/history?limit=10', {
         headers: { Authorization: `Bearer ${token}` }
       })
       
@@ -159,7 +159,7 @@ function Transfer({ user, socket }) {
   const fetchKycLimits = async () => {
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/kyc/limits', {
+      const response = await axios.get(`${API_URL}/api/kyc/limits', {
         headers: { Authorization: `Bearer ${token}` }
       })
       setKycLimit(response.data)

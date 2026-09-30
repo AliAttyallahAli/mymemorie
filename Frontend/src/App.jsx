@@ -126,7 +126,7 @@ function App() {
                 const userData = JSON.parse(savedUser)
 
                 try {
-                    const response = await axios.get('/api/auth/verify', {
+                    const response = await axios.get(`${API_URL}/api/auth/verify', {
                         headers: { Authorization: `Bearer ${token}` }
                     })
 

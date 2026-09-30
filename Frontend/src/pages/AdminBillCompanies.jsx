@@ -34,7 +34,7 @@ const AdminBillCompanies = ({ user }) => {
   const fetchCompanies = async () => {
     setLoading(true);
     try {
-      const response = await axios.get('/api/service-companies');
+      const response = await axios.get(`${API_URL}/api/service-companies');
       setCompanies(response.data || []);
     } catch (error) {
       console.error('Erreur chargement:', error);
@@ -61,7 +61,7 @@ const AdminBillCompanies = ({ user }) => {
         });
         toast.success('Entreprise modifiée avec succès');
       } else {
-        const response = await axios.post('/api/admin/service-companies', formData, {
+        const response = await axios.post(`${API_URL}/api/admin/service-companies', formData, {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (response.data.success) {

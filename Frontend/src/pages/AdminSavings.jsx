@@ -37,7 +37,7 @@ const AdminSavings = ({ user, socket }) => {
         setLoading(true);
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/admin/savings', {
+            const response = await axios.get(`${API_URL}/api/admin/savings', {
                 params: { status: filterStatus, type: filterType, search: searchTerm },
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -53,7 +53,7 @@ const AdminSavings = ({ user, socket }) => {
     const fetchWithdrawalRequests = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/admin/savings/withdrawal-requests', {
+            const response = await axios.get(`${API_URL}/api/admin/savings/withdrawal-requests', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setWithdrawalRequests(response.data.data || []);
@@ -65,7 +65,7 @@ const AdminSavings = ({ user, socket }) => {
     const fetchStats = async () => {
         try {
             const token = localStorage.getItem('accessToken');
-            const response = await axios.get('/api/admin/savings/stats', {
+            const response = await axios.get(`${API_URL}/api/admin/savings/stats', {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setStats(response.data.stats || {});

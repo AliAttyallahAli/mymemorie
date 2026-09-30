@@ -34,7 +34,7 @@ function Contact({ user }) {
     
     try {
       const token = localStorage.getItem('accessToken')
-      await axios.post('/api/contact', formData, {
+      await axios.post(`${API_URL}/api/contact', formData, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       })
       toast.success('Message envoyé avec succès ! Nous vous répondrons dans les plus brefs délais.')

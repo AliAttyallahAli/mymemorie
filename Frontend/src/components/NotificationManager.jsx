@@ -73,7 +73,7 @@ function NotificationManager({ user, socket }) {
     setLoading(true)
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/notifications', {
+      const response = await axios.get(`${API_URL}/api/notifications', {
         headers: { Authorization: `Bearer ${token}` }
       })
       
@@ -128,7 +128,7 @@ function NotificationManager({ user, socket }) {
   const markAllAsRead = async () => {
     try {
       const token = localStorage.getItem('accessToken')
-      await axios.put('/api/notifications/read-all', {}, {
+      await axios.put(`${API_URL}/api/notifications/read-all', {}, {
         headers: { Authorization: `Bearer ${token}` }
       })
       setNotifications(prev => prev.map(n => ({ ...n, is_read: true })))

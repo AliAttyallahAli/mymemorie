@@ -48,7 +48,7 @@ function BecomeAgent({ user }) {
 
   const fetchProvinces = async () => {
     try {
-      const response = await axios.get('/api/provinces')
+      const response = await axios.get(`${API_URL}/api/provinces')
       if (Array.isArray(response.data)) {
         setProvinces(response.data)
       }
@@ -115,7 +115,7 @@ function BecomeAgent({ user }) {
       }
       
       const token = localStorage.getItem('accessToken')
-      await axios.post('/api/become-agent', submitData, {
+      await axios.post(`${API_URL}/api/become-agent', submitData, {
         headers: {
           'Content-Type': 'multipart/form-data',
           Authorization: token ? `Bearer ${token}` : undefined

@@ -148,8 +148,8 @@ function AdminPanel({ user }) {
     try {
       const token = localStorage.getItem('accessToken')
       const [usersRes, agentsRes] = await Promise.all([
-        axios.get('/api/admin/users', { headers: { Authorization: `Bearer ${token}` } }),
-        axios.get('/api/admin/users?role=agent', { headers: { Authorization: `Bearer ${token}` } })
+        axios.get(`${API_URL}/api/admin/users', { headers: { Authorization: `Bearer ${token}` } }),
+        axios.get(`${API_URL}/api/admin/users?role=agent', { headers: { Authorization: `Bearer ${token}` } })
       ])
       setUsers(usersRes.data.users || [])
       setAgents(agentsRes.data.users || [])
@@ -173,7 +173,7 @@ function AdminPanel({ user }) {
     setBlogLoading(true)
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.get('/api/blog/posts?status=all', {
+      const response = await axios.get(`${API_URL}/api/blog/posts?status=all', {
         headers: { Authorization: `Bearer ${token}` }
       })
       const posts = Array.isArray(response.data.posts) ? response.data.posts : []
@@ -206,7 +206,7 @@ function AdminPanel({ user }) {
 
   const fetchProvinces = async () => {
     try {
-      const response = await axios.get('/api/provinces')
+      const response = await axios.get(`${API_URL}/api/provinces')
       if (Array.isArray(response.data)) {
         setProvinces(response.data)
       } else {
@@ -259,7 +259,7 @@ function AdminPanel({ user }) {
     
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.post('/api/admin/users', {
+      const response = await axios.post(`${API_URL}/api/admin/users', {
         phone: userForm.phone,
         fullname: userForm.fullname,
         password: userForm.password,
@@ -462,7 +462,7 @@ function AdminPanel({ user }) {
     
     try {
       const token = localStorage.getItem('accessToken')
-      const response = await axios.post('/api/admin/agents', 
+      const response = await axios.post(`${API_URL}/api/admin/agents', 
         {
           phone: agentForm.phone,
           fullname: agentForm.fullname,
@@ -937,7 +937,7 @@ function AdminPanel({ user }) {
               const formData = new FormData(e.target)
               try {
                 const token = localStorage.getItem('accessToken')
-                await axios.post('/api/admin/announce', {
+                await axios.post(`${API_URL}/api/admin/announce', {
                   title: formData.get('title'),
                   content: formData.get('content'),
                   facebook_link: formData.get('facebook'),

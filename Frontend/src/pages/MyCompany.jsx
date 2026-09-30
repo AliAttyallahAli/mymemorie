@@ -81,7 +81,7 @@ const MyCompany = ({ user, socket }) => {
   const fetchMyCompany = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/investment/my-company', {
+      const response = await axios.get(`${API_URL}/api/investment/my-company', {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -139,7 +139,7 @@ const MyCompany = ({ user, socket }) => {
   const fetchInvestors = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/investment/investors', {
+      const response = await axios.get(`${API_URL}/api/investment/investors', {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -156,7 +156,7 @@ const MyCompany = ({ user, socket }) => {
   const fetchHistory = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/investment/history', {
+      const response = await axios.get(`${API_URL}/api/investment/history', {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -173,7 +173,7 @@ const MyCompany = ({ user, socket }) => {
   const fetchStatistics = async () => {
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.get('/api/investment/company-stats', {
+      const response = await axios.get(`${API_URL}/api/investment/company-stats', {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -216,7 +216,7 @@ const MyCompany = ({ user, socket }) => {
     
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.put('/api/investment/company', editForm, {
+      const response = await axios.put(`${API_URL}/api/investment/company', editForm, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -243,7 +243,7 @@ const MyCompany = ({ user, socket }) => {
 
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.delete('/api/investment/company', {
+      const response = await axios.delete(`${API_URL}/api/investment/company', {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -268,7 +268,7 @@ const MyCompany = ({ user, socket }) => {
 
     try {
       const token = localStorage.getItem('accessToken');
-      const response = await axios.post('/api/investment/notify-investors', notificationForm, {
+      const response = await axios.post(`${API_URL}/api/investment/notify-investors', notificationForm, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
