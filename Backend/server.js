@@ -15,6 +15,7 @@ const multer = require('multer');
 const db = require('./database/db');
 
 
+
 // Chargement des variables d'environnement
 dotenv.config();
 
@@ -63,13 +64,24 @@ app.use(morgan('combined'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Port
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 
 // Clé secrète JWT
 const JWT_SECRET = process.env.JWT_SECRET || 'alkherpay_super_secret_key_2024';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'alkherpay_refresh_secret_2024';
 
-
+app.use(cors({
+    origin: [
+        'https://mymemorie.vercel.app',          // Ton URL Vercel exacte
+        'https://mymemorie-git-gourousdja.vercel.app', // Preview Git
+        /\.vercel\.app$/,                         // Toutes les previews Vercel
+        'http://localhost:5173',                  // Dev local
+        'http://192.168.1.199:5173'               // Réseau local
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 // ============================================
 // UTILITAIRES
 // ============================================

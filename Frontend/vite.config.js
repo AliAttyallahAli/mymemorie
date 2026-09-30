@@ -5,96 +5,65 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [
-    react({
-      // Configuration pour styled-jsx si vous l'utilisez
-      babel: {
-        plugins: [
-          // Décommentez la ligne suivante si vous utilisez styled-jsx
-          // ['styled-jsx/babel', { optimizeForSpeed: true }]
-        ]
-      }
-    }),
-    tailwindcss(),
-  ],
-  resolve: {
-    alias: {
-      '@': path.resolve(import.meta.dirname, './src'),
-      '@components': path.resolve(import.meta.dirname, './src/components'),
-      '@pages': path.resolve(import.meta.dirname, './src/pages'),
-      '@utils': path.resolve(import.meta.dirname, './src/utils'),
-      '@hooks': path.resolve(import.meta.dirname, './src/hooks'),
-      '@context': path.resolve(import.meta.dirname, './src/context'),
-      '@services': path.resolve(import.meta.dirname, './src/services'),
-    },
-  },
-  server: {
-    port: 5173,
-    host: true, // Permet l'accès depuis le réseau local
-    proxy: {
-      '/api': {
-        target: 'localhost:5000' ||'https://alkherpay.onrender.com/',
-        changeOrigin: true,
-        secure: false,
-        rewrite: (path) => path,
-        configure: (proxy, options) => {
-          proxy.on('error', (err, req, res) => {
-            console.log('⚠️ Proxy error:', err);
-          });
-          proxy.on('proxyReq', (proxyReq, req, res) => {
-            console.log('🔄 Proxying:', req.method, req.url, '->', proxyReq.path);
-          });
-          proxy.on('proxyRes', (proxyRes, req, res) => {
-            console.log('✅ Proxy response:', proxyRes.statusCode, req.url);
-          });
+    plugins: [
+        react(),
+        tailwindcss(),
+    ],
+    resolve: {
+        alias: {
+            '@': path.resolve(import.meta.dirname, './src'),
+            '@components': path.resolve(import.meta.dirname, './src/components'),
+            '@pages': path.resolve(import.meta.dirname, './src/pages'),
+            '@utils': path.resolve(import.meta.dirname, './src/utils'),
+            '@hooks': path.resolve(import.meta.dirname, './src/hooks'),
+            '@context': path.resolve(import.meta.dirname, './src/context'),
+            '@services': path.resolve(import.meta.dirname, './src/services'),
         },
-      },
-      '/socket.io': {
-        target:'localhost:5000' ||'https://alkherpay.onrender.com/',
-        changeOrigin: true,
-        ws: true,
-        configure: (proxy, options) => {
-          proxy.on('error', (err, req, res) => {
-            console.log('⚠️ WebSocket proxy error:', err);
-          });
+    },
+    server: {
+        port: 5173,
+        host: true,
+        proxy: {
+            '/api': {
+                target: 'http://localhost:5000',  // ✅ Corrigé (http:// + pas de ||)
+                changeOrigin: true,
+                secure: false,
+            },
+            '/socket.io': {
+                target: 'http://localhost:5000',
+                changeOrigin: true,
+                ws: true,
+            },
         },
-      },
     },
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: true,
-    rollupOptions: {
-      output: {
-        // Version corrigée : Utiliser une fonction au lieu d'un objet
-        manualChunks: (id) => {
-          // Regrouper les vendors
-          if (id.includes('node_modules')) {
-            // React et ReactDOM
-            if (id.includes('react') && (id.includes('react-dom') || id.includes('react-router-dom'))) {
-              return 'react-vendor'
-            }
-            // React Icons
-            if (id.includes('react-icons')) {
-              return 'icons-vendor'
-            }
-            // Chart.js
-            if (id.includes('chart.js') || id.includes('react-chartjs-2')) {
-              return 'chart-vendor'
-            }
-            // Autres vendors
-            return 'vendor'
-          }
+    build: {
+        outDir: 'dist',
+        sourcemap: true,
+        rollupOptions: {
+            output: {
+                manualChunks: (id) => {
+                    if (id.includes('node_modules')) {
+                        if (id.includes('react') && (id.includes('react-dom') || id.includes('react-router-dom'))) {
+                            return 'react-vendor'
+                        }
+                        if (id.includes('react-icons')) {
+                            return 'icons-vendor'
+                        }
+                        if (id.includes('chart.js') || id.includes('react-chartjs-2')) {
+                            return 'chart-vendor'
+                        }
+                        return 'vendor'
+                    }
+                },
+            },
         },
-      },
     },
-  },
-  optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router-dom', 'axios', 'socket.io-client', 'react-hot-toast'],
-  },
-  css: {
-    modules: {
-      localsConvention: 'camelCase',
+    optimizeDeps: {
+        include: ['react', 'react-dom', 'react-router-dom', 'axios', 'socket.io-client', 'react-hot-toast'],
     },
-  },
+    css: {
+        modules: {
+            localsConvention: 'camelCase',
+        },
+    },
 })
